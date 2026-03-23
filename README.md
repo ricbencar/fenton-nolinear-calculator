@@ -297,9 +297,7 @@ $$
 Because the bed is impermeable, it is a streamline. In the moving frame, the free surface is also a streamline by the kinematic boundary condition. Thus one may choose constants such that
 
 $$
-\psi = -Q \quad \text{on } y=-d,
-$$
-$$
+\psi = -Q \quad \text{on } y=-d, \\
 \psi = 0 \quad \text{on } y=\eta(x),
 $$
 
@@ -449,9 +447,7 @@ $$
 where $\mathbf{z}$ is the vector of all unknowns. Newton’s method updates
 
 $$
-\mathbf{J}(\mathbf{z}^{(m)})\,\Delta \mathbf{z}^{(m)} = -\mathbf{F}(\mathbf{z}^{(m)}),
-$$
-$$
+\mathbf{J}(\mathbf{z}^{(m)})\,\Delta \mathbf{z}^{(m)} = -\mathbf{F}(\mathbf{z}^{(m)}), \\
 \mathbf{z}^{(m+1)} = \mathbf{z}^{(m)} + \Delta \mathbf{z}^{(m)},
 $$
 
@@ -1240,7 +1236,7 @@ The script is designed so it can be called directly, for example:
 
 ```bash
 python function.py 3 9 5 1
-````
+```
 
 which corresponds to
 
@@ -1319,12 +1315,8 @@ $$
 with thresholds like
 
 $$
-\mu < 0.05 \quad \text{(shallow)},
-$$
-$$
-0.05 \le \mu < 0.5 \quad \text{(intermediate)},
-$$
-$$
+\mu < 0.05 \quad \text{(shallow)}, \\
+0.05 \le \mu < 0.5 \quad \text{(intermediate)}, \\
 \mu \ge 0.5 \quad \text{(deep)}.
 $$
 
@@ -1345,18 +1337,10 @@ where $L_{base}$ may be linear or another baseline, and $\mathbf{x}$ is a featur
 The script logic uses physically meaningful engineered features such as:
 
 $$
-\text{WaveSteepness} = \frac{H}{L_{lin}},
-$$
-$$
-\text{RelativeDepth} = \frac{d}{L_{lin}},
-$$
-$$
-\text{DopplerFactor} = \frac{U_cT}{L_{lin}},
-$$
-$$
-\text{UrsellNumber} = \frac{HL_{lin}^2}{d^3},
-$$
-$$
+\text{WaveSteepness} = \frac{H}{L_{lin}}, \\
+\text{RelativeDepth} = \frac{d}{L_{lin}}, \\
+\text{DopplerFactor} = \frac{U_cT}{L_{lin}}, \\
+\text{UrsellNumber} = \frac{HL_{lin}^2}{d^3}, \\
 \text{CurrentFroude} = \frac{U_c}{\sqrt{gd}}.
 $$
 
