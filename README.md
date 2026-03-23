@@ -2306,7 +2306,7 @@ That order mirrors the hierarchy from physics to deployment.
 
 - **$B$** — **constant background term** in the stream-function representation
   $\psi(x,y) = By + \sum_{n=1}^{N}\cdots$
-  It represents the linear-in-$y$ part of the stream function.
+  It represents the linear-in-y part of the stream function.
 
 - **$B_j$** — **implementation-level Fourier / harmonic coefficients** of the nonlinear solver state vector. In the README these are the exact-solver coefficients stored in the unknown vector and used in collocation residual assembly.
 
