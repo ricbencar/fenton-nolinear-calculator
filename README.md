@@ -186,15 +186,13 @@ In terms of the stream function, the bed is a streamline. This is one reason the
 A particle on the free surface remains on the free surface. In Eulerian form,
 
 $$
-\frac{\partial \eta}{\partial t} + u\frac{\partial \eta}{\partial x} = v
-\qquad \text{at } y = \eta(x,t).
+\frac{\partial \eta}{\partial t} + u\frac{\partial \eta}{\partial x} = v \qquad \text{at } y = \eta(x,t).
 $$
 
 In the frame moving with speed $c$, where the flow becomes steady, the horizontal velocity is replaced by its relative value $(u-c)$, and the kinematic condition becomes
 
 $$
-(u-c)\eta_x = v
-\qquad \text{on } y = \eta(x).
+(u-c)\eta_x = v \qquad \text{on } y = \eta(x).
 $$
 
 This expresses the fact that the free surface is itself a streamline in the moving frame.
@@ -297,8 +295,10 @@ $$
 Because the bed is impermeable, it is a streamline. In the moving frame, the free surface is also a streamline by the kinematic boundary condition. Thus one may choose constants such that
 
 $$
+\begin{gathered}
 \psi = -Q \quad \text{on } y=-d, \\
 \psi = 0 \quad \text{on } y=\eta(x),
+\end{gathered}
 $$
 
 or an equivalent pair depending on normalization. Here $Q$ is related to the volume flux in the moving frame.
@@ -325,13 +325,10 @@ The exact coefficient names and scaling can differ between texts and codes, but 
 The associated velocities become
 
 $$
-u(x,y) = \frac{\partial \psi}{\partial y}
-= B + \sum_{n=1}^{N} b_n \frac{nk\cosh[nk(y+d)]}{\cosh(nkd)} \cos(nkx),
-$$
-
-$$
-v(x,y) = -\frac{\partial \psi}{\partial x}
-= \sum_{n=1}^{N} b_n \frac{nk\sinh[nk(y+d)]}{\cosh(nkd)} \sin(nkx).
+\begin{gathered}
+u(x,y) = \frac{\partial \psi}{\partial y} = B + \sum_{n=1}^{N} b_n \frac{nk\cosh[nk(y+d)]}{\cosh(nkd)} \cos(nkx), \\
+v(x,y) = -\frac{\partial \psi}{\partial x} = \sum_{n=1}^{N} b_n \frac{nk\sinh[nk(y+d)]}{\cosh(nkd)} \sin(nkx).
+\end{gathered}
 $$
 
 These formulas are the backbone of the free-surface evaluation and of the velocity diagnostics produced in the implementation.
@@ -447,8 +444,10 @@ $$
 where $\mathbf{z}$ is the vector of all unknowns. Newton’s method updates
 
 $$
+\begin{gathered}
 \mathbf{J}(\mathbf{z}^{(m)})\,\Delta \mathbf{z}^{(m)} = -\mathbf{F}(\mathbf{z}^{(m)}), \\
 \mathbf{z}^{(m+1)} = \mathbf{z}^{(m)} + \Delta \mathbf{z}^{(m)},
+\end{gathered}
 $$
 
 with Jacobian matrix
@@ -707,9 +706,7 @@ with:
 #### Travelling / mean-level coordinates
 
 $$
-\xi = x - ct,
-\qquad
-y' = y-d.
+\xi = x - ct, \qquad y' = y-d.
 $$
 
 Thus:
@@ -722,11 +719,7 @@ Thus:
 The nonlinear system is written in
 
 $$
-X = k\xi,
-\qquad
-Y = ky',
-\qquad
-k = \frac{2\pi}{\lambda}.
+X = k\xi, \qquad Y = ky', \qquad k = \frac{2\pi}{\lambda}.
 $$
 
 Hence one wavelength corresponds to
@@ -748,17 +741,13 @@ This coordinate choice is the reason the code repeatedly uses the quantity $kd$ 
 In the travelling frame the wave is steady. If the laboratory-frame velocities are $(u,v)$, then the travelling-frame velocities are
 
 $$
-U = u-c,
-\qquad
-V = v.
+U = u-c, \qquad V = v.
 $$
 
 In the stream-function formulation used by the code, the nondimensional travelling-frame velocities satisfy
 
 $$
-\hat U = \frac{\partial \psi}{\partial Y},
-\qquad
-\hat V = -\frac{\partial \psi}{\partial X},
+\hat U = \frac{\partial \psi}{\partial Y}, \qquad \hat V = -\frac{\partial \psi}{\partial X},
 $$
 
 which is the standard Fenton stream-function formulation. Because the flow is incompressible and irrotational, the stream function is harmonic:
@@ -770,17 +759,13 @@ $$
 A velocity potential $\phi$ also exists, with
 
 $$
-\hat U = \phi_X,
-\qquad
-\hat V = \phi_Y,
+\hat U = \phi_X, \qquad \hat V = \phi_Y,
 $$
 
 and the Cauchy-Riemann relations become
 
 $$
-\phi_X = \psi_Y,
-\qquad
-\phi_Y = -\psi_X.
+\phi_X = \psi_Y, \qquad \phi_Y = -\psi_X.
 $$
 
 ### 16.4 Boundary conditions used in the nonlinear system
@@ -827,14 +812,7 @@ $$
 The finite-depth stream-function representation can be written in a standard bed-based form as
 
 $$
-\psi(\xi,y)
-=
--\bar U\,y
-+
-\sum_{j=1}^{N}
-B_j
-\frac{\sinh(jky)}{\cosh(jkd)}
-\cos(jk\xi),
+\psi(\xi,y) = -\bar U\,y + \sum_{j=1}^{N} B_j \frac{\sinh(jky)}{\cosh(jkd)} \cos(jk\xi),
 $$
 
 where:
@@ -853,11 +831,7 @@ $$
 the hyperbolic basis is rewritten using
 
 $$
-\frac{\sinh(jky)}{\cosh(jkd)}
-=
-\frac{\sinh\!\big(j(Y+kd)\big)}{\cosh(jkd)}
-=
-\sinh(jY)+\cosh(jY)\tanh(jkd).
+\frac{\sinh(jky)}{\cosh(jkd)} = \frac{\sinh\!\big(j(Y+kd)\big)}{\cosh(jkd)} = \sinh(jY)+\cosh(jY)\tanh(jkd).
 $$
 
 Define the finite-depth basis function
@@ -899,35 +873,17 @@ $$
 The code uses a legacy 1-based unknown vector $\mathbf z$ that can be interpreted schematically as
 
 $$
-\mathbf z
-=
-[\text{global scalars} \mid \text{surface ordinates} \mid \text{Fourier coefficients}].
+\mathbf z = [\text{global scalars} \mid \text{surface ordinates} \mid \text{Fourier coefficients}].
 $$
 
 A convenient interpretation of the leading scalar unknowns is:
 
 $$
-z_1 \leftrightarrow kd,
-\qquad
-z_2 \leftrightarrow kH,
-\qquad
-z_3 \leftrightarrow {\frac{kc}{ω}},
-$$
-
-$$
-z_4 \leftrightarrow c\sqrt{\frac{k}{g}},
-\qquad
-z_5 \leftrightarrow \bar u_1\sqrt{\frac{k}{g}},
-\qquad
-z_6 \leftrightarrow \bar u_2\sqrt{\frac{k}{g}},
-$$
-
-$$
-z_7 \leftrightarrow \bar U\sqrt{\frac{k}{g}},
-\qquad
-z_8 \leftrightarrow \bar U\,kd-q,
-\qquad
-z_9 \leftrightarrow R.
+\begin{gathered}
+z_1 \leftrightarrow kd, \qquad z_2 \leftrightarrow kH, \qquad z_3 \leftrightarrow {\frac{kc}{\omega}}, \\
+z_4 \leftrightarrow c\sqrt{\frac{k}{g}}, \qquad z_5 \leftrightarrow \bar u_1\sqrt{\frac{k}{g}}, \qquad z_6 \leftrightarrow \bar u_2\sqrt{\frac{k}{g}}, \\
+z_7 \leftrightarrow \bar U\sqrt{\frac{k}{g}}, \qquad z_8 \leftrightarrow \bar U\,kd-q, \qquad z_9 \leftrightarrow R.
+\end{gathered}
 $$
 
 Then:
@@ -963,9 +919,7 @@ This distinction matters because a period-specified problem with current is not 
 The code exploits crest-trough symmetry and solves only over half a wavelength, with collocation points
 
 $$
-X_m = \frac{m\pi}{N},
-\qquad
-m=0,1,\dots,N.
+X_m = \frac{m\pi}{N}, \qquad m=0,1,\dots,N.
 $$
 
 At each collocation point the residual vector contains two principal classes of equations.
@@ -981,9 +935,7 @@ In the internal shifted-coordinate implementation this is assembled using the eq
 #### Bernoulli residual
 
 $$
-R^{(B)}_m
-=
-\frac{1}{2}\left[(u_m-c)^2+v_m^2\right]+\eta_m-R=0
+R^{(B)}_m = \frac{1}{2}\left[(u_m-c)^2+v_m^2\right]+\eta_m-R=0
 $$
 
 in solver nondimensional form. Because the code explicitly carries the travelling-frame mean speed, the relative horizontal velocity is represented through
@@ -1029,9 +981,7 @@ $$
 If period is specified, then
 
 $$
-c = \frac{\lambda}{T},
-\qquad
-L=cT,
+c = \frac{\lambda}{T}, \qquad L=cT,
 $$
 
 but now $L$ is part of the solved state rather than an imposed Airy value.
@@ -1045,23 +995,13 @@ One additional scalar equation connects the selected current criterion to the un
 Differentiating the residual equations produces Jacobian contributions such as
 
 $$
-\frac{\partial R^{(\psi)}_m}{\partial B_n},
-\qquad
-\frac{\partial R^{(\psi)}_m}{\partial \eta_j},
-\qquad
-\frac{\partial R^{(\psi)}_m}{\partial k},
+\frac{\partial R^{(\psi)}_m}{\partial B_n}, \qquad \frac{\partial R^{(\psi)}_m}{\partial \eta_j}, \qquad \frac{\partial R^{(\psi)}_m}{\partial k},
 $$
 
 and
 
 $$
-\frac{\partial R^{(B)}_m}{\partial B_n},
-\qquad
-\frac{\partial R^{(B)}_m}{\partial \eta_j},
-\qquad
-\frac{\partial R^{(B)}_m}{\partial R},
-\qquad
-\frac{\partial R^{(B)}_m}{\partial c}.
+\frac{\partial R^{(B)}_m}{\partial B_n}, \qquad \frac{\partial R^{(B)}_m}{\partial \eta_j}, \qquad \frac{\partial R^{(B)}_m}{\partial R}, \qquad \frac{\partial R^{(B)}_m}{\partial c}.
 $$
 
 Because
@@ -1073,11 +1013,7 @@ $$
 one obtains terms like
 
 $$
-\frac{\partial R^{(B)}_m}{\partial z_j}
-= (u_m-c)\frac{\partial u_m}{\partial z_j}
-+ v_m\frac{\partial v_m}{\partial z_j}
-+ g\frac{\partial \eta_m}{\partial z_j}
-- \frac{\partial R}{\partial z_j}.
+\frac{\partial R^{(B)}_m}{\partial z_j} = (u_m-c)\frac{\partial u_m}{\partial z_j} + v_m\frac{\partial v_m}{\partial z_j} + g\frac{\partial \eta_m}{\partial z_j} - \frac{\partial R}{\partial z_j}.
 $$
 
 This dense coupling is one reason the algebra becomes stiff and ill-conditioned near steep or long waves.
@@ -1087,17 +1023,11 @@ This dense coupling is one reason the algebra becomes stiff and ill-conditioned 
 The nonlinear system is solved by Newton iteration:
 
 $$
-\mathbf F(\mathbf z)=0,
-$$
-
-$$
-\mathbf J(\mathbf z^{(m)})\,\Delta\mathbf z^{(m)}
-=
--\mathbf F(\mathbf z^{(m)}),
-$$
-
-$$
+\begin{gathered}
+\mathbf F(\mathbf z)=0, \\
+\mathbf J(\mathbf z^{(m)})\,\Delta\mathbf z^{(m)} = -\mathbf F(\mathbf z^{(m)}), \\
 \mathbf z^{(m+1)}=\mathbf z^{(m)}+\Delta\mathbf z^{(m)}.
+\end{gathered}
 $$
 
 The code uses an SVD-based dense solve to stabilize the Newton correction. In abstract form,
@@ -1109,9 +1039,7 @@ $$
 so that a pseudoinverse-like step may be written as
 
 $$
-\Delta\mathbf z
-=
--\mathbf V\mathbf\Sigma^{-1}\mathbf U^T \mathbf F,
+\Delta\mathbf z = -\mathbf V\mathbf\Sigma^{-1}\mathbf U^T \mathbf F,
 $$
 
 with small singular values truncated or regularized. This is especially important near limiting waves, long shallow-water states, or strongly adverse currents.
@@ -1125,11 +1053,7 @@ The code can solve a sequence of increasing wave heights and extrapolate the unk
 The program reports a quantity labelled mean square bed velocity, denoted `ub2`. In physical terms it is the phase average of the near-bed **orbital** horizontal velocity relative to the Eulerian mean current:
 
 $$
-u_{b2}
-=
-\left\langle
-\left(u_{\text{bed}}(t)-\bar u_1\right)^2
-\right\rangle.
+u_{b2} = \left\langle \left(u_{\text{bed}}(t)-\bar u_1\right)^2 \right\rangle.
 $$
 
 For a steady travelling wave, averaging over one period is equivalent to phase-averaging over one wavelength.
@@ -1236,7 +1160,7 @@ The script is designed so it can be called directly, for example:
 
 ```bash
 python function.py 3 9 5 1
-```
+````
 
 which corresponds to
 
@@ -1315,9 +1239,11 @@ $$
 with thresholds like
 
 $$
+\begin{gathered}
 \mu < 0.05 \quad \text{(shallow)}, \\
 0.05 \le \mu < 0.5 \quad \text{(intermediate)}, \\
 \mu \ge 0.5 \quad \text{(deep)}.
+\end{gathered}
 $$
 
 Separate Padé forms can then be fitted in each regime.
@@ -1327,7 +1253,7 @@ Separate Padé forms can then be fitted in each regime.
 A common operational strategy is
 
 $$
-L = L_{base} \cdot C_{Padé}(\mathbf{x}),
+L = L_{base} \cdot C_{\text{Padé}}(\mathbf{x}),
 $$
 
 where $L_{base}$ may be linear or another baseline, and $\mathbf{x}$ is a feature vector built from nondimensional inputs.
@@ -1337,11 +1263,13 @@ where $L_{base}$ may be linear or another baseline, and $\mathbf{x}$ is a featur
 The script logic uses physically meaningful engineered features such as:
 
 $$
+\begin{gathered}
 \text{WaveSteepness} = \frac{H}{L_{lin}}, \\
 \text{RelativeDepth} = \frac{d}{L_{lin}}, \\
 \text{DopplerFactor} = \frac{U_cT}{L_{lin}}, \\
 \text{UrsellNumber} = \frac{HL_{lin}^2}{d^3}, \\
 \text{CurrentFroude} = \frac{U_c}{\sqrt{gd}}.
+\end{gathered}
 $$
 
 The feature-selection stage ranks these by correlation or predictive relevance and fits compact rational models accordingly.
@@ -1453,9 +1381,7 @@ In practical terms, the baseline is the linear wavelength $L_{\text{lin}}$, whil
 The baseline wavelength is obtained from the finite-depth Airy dispersion relation
 
 $$
-\omega^2 = gk \tanh(kd),
-\qquad
-\omega = \frac{2\pi}{T}.
+\omega^2 = gk \tanh(kd), \qquad \omega = \frac{2\pi}{T}.
 $$
 
 Once $k$ is obtained iteratively, the baseline wavelength is
@@ -1467,10 +1393,7 @@ $$
 Equivalently, the baseline can be written as the implicit wavelength equation
 
 $$
-L_{\text{lin}}
-=
-\frac{g T^2}{2\pi}
-\tanh\!\left(\frac{2\pi d}{L_{\text{lin}}}\right).
+L_{\text{lin}} = \frac{g T^2}{2\pi} \tanh\!\left(\frac{2\pi d}{L_{\text{lin}}}\right).
 $$
 
 This means the symbolic-regression model does **not** attempt to rediscover dispersion from nothing. Instead, it learns the nonlinear and current-related correction relative to a hydrodynamically meaningful starting point.
@@ -1494,13 +1417,7 @@ The search therefore explores a large symbolic-expression space while still allo
 A representative fitness metric is based on mean absolute percentage error:
 
 $$
-\mathrm{MAPE}
-=
-\frac{100}{N}
-\sum_{n=1}^{N}
-\left|
-\frac{y_n - \hat{y}_n}{y_n}
-\right|.
+\mathrm{MAPE} = \frac{100}{N} \sum_{n=1}^{N} \left| \frac{y_n - \hat{y}_n}{y_n} \right|.
 $$
 
 Other metrics may include RMSE, percentile error, worst-case error, or composite ranking scores. This is important because symbolic-regression formulas can appear good on average while failing in the tails of the parameter domain.
@@ -1522,41 +1439,23 @@ The trade-off is that uniformly small error over a broad nonlinear domain is dif
 The symbolic-regression workflow uses a set of engineered nondimensional features constructed from the physical variables and the baseline wavelength. A representative set is:
 
 $$
-x_0 = \ln\!\left(\frac{d}{L}\right),
-\qquad
-x_1 = \ln\!\left(\frac{H}{L}\right),
-\qquad
-x_2 = \ln\!\left(\frac{H}{d}\right),
-$$
-
-$$
-x_3 = \ln(Ur),
-\qquad
-Ur = \frac{H L^2}{d^3},
-$$
-
-$$
-x_4 = \frac{U_c}{\sqrt{g d}},
-\qquad
-x_5 = \frac{U_c T}{L},
-\qquad
-x_6 = \frac{U_c}{C_0},
+\begin{gathered}
+x_0 = \ln\!\left(\frac{d}{L}\right), \qquad x_1 = \ln\!\left(\frac{H}{L}\right), \qquad x_2 = \ln\!\left(\frac{H}{d}\right), \\
+x_3 = \ln(Ur), \qquad Ur = \frac{H L^2}{d^3}, \\
+x_4 = \frac{U_c}{\sqrt{g d}}, \qquad x_5 = \frac{U_c T}{L}, \qquad x_6 = \frac{U_c}{C_0},
+\end{gathered}
 $$
 
 with
 
 $$
-C_0 = \frac{g T}{2\pi},
-\qquad
-L_0 = \frac{g T^2}{2\pi},
+C_0 = \frac{g T}{2\pi}, \qquad L_0 = \frac{g T^2}{2\pi},
 $$
 
 and also
 
 $$
-x_7 = \ln\!\left(\frac{H}{L_0}\right),
-\qquad
-x_8 = \ln\!\left(T \sqrt{\frac{g}{d}}\right).
+x_7 = \ln\!\left(\frac{H}{L_0}\right), \qquad x_8 = \ln\!\left(T \sqrt{\frac{g}{d}}\right).
 $$
 
 The exact active subset depends on the evolved symbolic expression, but these variables capture relative depth, steepness, Ursell nonlinearity, current Froude-like intensity, and Doppler-type effects.
@@ -1570,25 +1469,7 @@ This project contains **two project-specific explicit approximate wavelength for
 A particularly important result obtained in this project is the following explicit genetic evolutionary wavelength formula:
 
 $$
-L_{\text{genetic}}
-=
-L_{\text{lin}}
-\left[
-\exp\!\left(\frac{345\,U_c\,T}{509\,L_{\text{lin}}}\right)
-+
-\frac{1052\pi U_c}{1052\pi U_c + 435 g T}
--
-\frac{
-5 \tanh\!\left(
-\frac{U_c T}{L_{\text{lin}}}
-\ln\!\left(T \sqrt{\frac{g}{d}}\right)
-+
-\frac{2117}{961}
-\right)
-}{
-67 \ln\!\left(\frac{H}{d}\right)
-}
-\right].
+L_{\text{genetic}} = L_{\text{lin}} \left[ \exp\!\left(\frac{345\,U_c\,T}{509\,L_{\text{lin}}}\right) + \frac{1052\pi U_c}{1052\pi U_c + 435 g T} - \frac{ 5 \tanh\!\left( \frac{U_c T}{L_{\text{lin}}} \ln\!\left(T \sqrt{\frac{g}{d}}\right) + \frac{2117}{961} \right) }{ 67 \ln\!\left(\frac{H}{d}\right) } \right].
 $$
 
 Here:
@@ -1606,44 +1487,22 @@ Here:
 A second project-specific explicit approximate formula used in this project is the effective transformed-variable formulation:
 
 $$
-T_{\text{eff}}
-=
-T
--
-\frac{93}{943}
-\left(
-U_c^2 - \frac{H}{1819 \cdot 708}
-\right)
-+
-\frac{500}{739}U_c,
-$$
-
-$$
-d_{\text{eff}}
-=
-d
-+
-\frac{H^{3/4}}{d^{1/4}}
-+
-\frac{986}{873}U_c\tanh(H).
+\begin{gathered}
+T_{\text{eff}} = T - \frac{93}{943} \left( U_c^2 - \frac{H}{1819 \cdot 708} \right) + \frac{500}{739}U_c, \\
+d_{\text{eff}} = d + \frac{H^{3/4}}{d^{1/4}} + \frac{986}{873}U_c\tanh(H).
+\end{gathered}
 $$
 
 and the wavelength is then obtained from a linear finite-depth dispersion solve using these transformed variables:
 
 $$
-L_{\text{effective}}
-=
-\mathcal{L}_{\text{lin}}\!\left(T_{\text{eff}}, d_{\text{eff}}\right),
+L_{\text{effective}} = \mathcal{L}_{\text{lin}}\!\left(T_{\text{eff}}, d_{\text{eff}}\right),
 $$
 
 where $\mathcal{L}_{\text{lin}}$ denotes the usual linear finite-depth wavelength operator defined implicitly by
 
 $$
-\left(\frac{2\pi}{T_{\text{eff}}}\right)^2
-=
-gk \tanh\!\left(k d_{\text{eff}}\right),
-\qquad
-L_{\text{effective}} = \frac{2\pi}{k}.
+\left(\frac{2\pi}{T_{\text{eff}}}\right)^2 = gk \tanh\!\left(k d_{\text{eff}}\right), \qquad L_{\text{effective}} = \frac{2\pi}{k}.
 $$
 
 ### 22.9 Structural form of the two discovered formulas
@@ -1661,33 +1520,11 @@ $$
 with
 
 $$
-M = t_1 + t_2 + t_3,
-$$
-
-$$
-t_1
-=
-\exp\!\left(\frac{345\,U_c\,T}{509\,L_{\text{lin}}}\right),
-\qquad
-t_2
-=
-\frac{1052\pi U_c}{1052\pi U_c + 435 g T},
-$$
-
-$$
-t_3
-=
--
-\frac{
-5 \tanh\!\left(
-\frac{U_c T}{L_{\text{lin}}}
-\ln\!\left(T \sqrt{\frac{g}{d}}\right)
-+
-\frac{2117}{961}
-\right)
-}{
-67 \ln\!\left(\frac{H}{d}\right)
-}.
+\begin{gathered}
+M = t_1 + t_2 + t_3, \\
+t_1 = \exp\!\left(\frac{345\,U_c\,T}{509\,L_{\text{lin}}}\right), \qquad t_2 = \frac{1052\pi U_c}{1052\pi U_c + 435 g T}, \\
+t_3 = - \frac{ 5 \tanh\!\left( \frac{U_c T}{L_{\text{lin}}} \ln\!\left(T \sqrt{\frac{g}{d}}\right) + \frac{2117}{961} \right) }{ 67 \ln\!\left(\frac{H}{d}\right) }.
+\end{gathered}
 $$
 
 #### B. Effective transformed-variable form
@@ -1695,42 +1532,22 @@ $$
 The effective formula modifies the inputs to dispersion rather than the wavelength directly:
 
 $$
-T_{\text{eff}} = T + \Delta_T,
-\qquad
-d_{\text{eff}} = d + \Delta_d,
+T_{\text{eff}} = T + \Delta_T, \qquad d_{\text{eff}} = d + \Delta_d,
 $$
 
 with
 
 $$
-\Delta_T
-=
-\left(
-U_c^2 - \frac{H}{1819 \cdot 708}
-\right)
-\left(-\frac{93}{943}\right)
-+
-\frac{500}{739}U_c,
-$$
-
-$$
-\Delta_d
-=
-\sqrt{\frac{H}{\sqrt{d/H}}}
-+
-\frac{986}{873}U_c\tanh(H)
-=
-\frac{H^{3/4}}{d^{1/4}}
-+
-\frac{986}{873}U_c\tanh(H).
+\begin{gathered}
+\Delta_T = \left( U_c^2 - \frac{H}{1819 \cdot 708} \right) \left(-\frac{93}{943}\right) + \frac{500}{739}U_c, \\
+\Delta_d = \sqrt{\frac{H}{\sqrt{d/H}}} + \frac{986}{873}U_c\tanh(H) = \frac{H^{3/4}}{d^{1/4}} + \frac{986}{873}U_c\tanh(H).
+\end{gathered}
 $$
 
 The resulting wavelength is
 
 $$
-L_{\text{effective}}
-=
-\mathcal{L}_{\text{lin}}\!\left(T_{\text{eff}}, d_{\text{eff}}\right).
+L_{\text{effective}} = \mathcal{L}_{\text{lin}}\!\left(T_{\text{eff}}, d_{\text{eff}}\right).
 $$
 
 In short, the genetic formula corrects wavelength directly, whereas the effective formula corrects the variables entering the linear dispersion relation.
@@ -1751,9 +1568,7 @@ In the genetic formula, the dominant quantities are the baseline wavelength $L_{
 In the effective formula, wave height and depth enter through
 
 $$
-\sqrt{\frac{H}{\sqrt{d/H}}}
-=
-\frac{H^{3/4}}{d^{1/4}},
+\sqrt{\frac{H}{\sqrt{d/H}}} = \frac{H^{3/4}}{d^{1/4}},
 $$
 
 while current modifies both transformed variables through the terms proportional to $U_c$, $U_c^2$, and $U_c\tanh(H)$.
@@ -1801,9 +1616,7 @@ must also remain positive.
 The effective formula contains nested square roots, so its raw mathematical form requires
 
 $$
-H > 0,
-\qquad
-d > 0,
+H > 0, \qquad d > 0,
 $$
 
 and the transformed period must remain non-zero:
@@ -1899,7 +1712,7 @@ $$
 The derivative is
 
 $$
-F'(k) = -2U_c\left(\frac{2\pi}{T} - kU_c\right) - g\tanh(kd) - gkd\operatorname{sech}^2(kd).
+F'(k) = -2U_c\left(\frac{2\pi}{T} - kU_c\right) - g\tanh(kd) - gkd\frac{1}{\cosh^2(kd)}.
 $$
 
 Then
@@ -1927,7 +1740,7 @@ Thus this VBA script it is the spreadsheet exact equivalent of the reference non
 This module evaluates the emitted rational approximations. A representative form is
 
 $$
-L = L_{base},\frac{p_0 + p_1x_1 + p_2x_2 + \cdots}{1 + q_1x_1 + q_2x_2 + \cdots},
+L = L_{base}\,\frac{p_0 + p_1x_1 + p_2x_2 + \cdots}{1 + q_1x_1 + q_2x_2 + \cdots},
 $$
 
 with regime-dependent coefficient sets.
@@ -2627,7 +2440,7 @@ That order mirrors the hierarchy from physics to deployment.
 
 - **$k_{n+1}$** — **updated wavenumber iterate** after one Newton step.
 
-- **$\operatorname{sech}(kd)$** — **hyperbolic secant** appearing in the derivative of the Doppler-shifted dispersion residual.
+- **$\frac{1}{\cosh(kd)}$** — **hyperbolic secant** appearing in the derivative of the Doppler-shifted dispersion residual.
 
 ---
 
