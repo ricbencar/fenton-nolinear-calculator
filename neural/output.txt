@@ -1,0 +1,218 @@
+python neural.py
+--- Loading Data ---
+[INFO] Inferred MAX_TRAIN_SAMPLES from list.txt: 43646
+--- Physics Baseline (linear dispersion + current) ---
+
+--- Strategy: A_logratio_loggroups ---
+Feature relevance |spearman|: WaveSteepness (H/L_lin)=0.788, RelativeDepth (d/L_lin)=0.055, DopplerF
+actor (Uc*T/L_lin)=0.021, UrsellNumber (H*L_lin^2/d^3)=0.336, CurrentFroude (Uc/sqrt(g d))=0.042
+Selected 3 features: ['WaveSteepness (H/L_lin)', 'UrsellNumber (H*L_lin^2/d^3)', 'DopplerFactor (Uc*
+T/L_lin)']
+  Size=25 (hidden=250): Val MAPE=2.181%  (p95=6.84%, max=88.29%)
+  Size=50 (hidden=500): Val MAPE=1.719%  (p95=5.64%, max=82.37%)
+  Size=100 (hidden=1000): Val MAPE=1.256%  (p95=4.08%, max=78.77%)
+  Size=150 (hidden=1500): Val MAPE=1.103%  (p95=3.65%, max=75.41%)
+  Size=200 (hidden=2000): Val MAPE=1.055%  (p95=3.44%, max=79.70%)
+  Size=250 (hidden=2500): Val MAPE=0.980%  (p95=3.06%, max=77.46%)
+
+--- Strategy: B_ratiominus1_rawgroups ---
+Feature relevance |spearman|: WaveSteepness (H/L_lin)=0.788, RelativeDepth (d/L_lin)=0.055, DopplerF
+actor (Uc*T/L_lin)=0.021, UrsellNumber (H*L_lin^2/d^3)=0.336, CurrentFroude (Uc/sqrt(g d))=0.042
+Selected 3 features: ['WaveSteepness (H/L_lin)', 'UrsellNumber (H*L_lin^2/d^3)', 'DopplerFactor (Uc*
+T/L_lin)']
+  Size=25 (hidden=250): Val MAPE=1.834%  (p95=6.44%, max=115.08%)
+  Size=50 (hidden=500): Val MAPE=1.565%  (p95=5.41%, max=111.46%)
+  Size=100 (hidden=1000): Val MAPE=1.374%  (p95=4.93%, max=114.85%)
+  Size=150 (hidden=1500): Val MAPE=1.233%  (p95=3.88%, max=150.15%)
+  Size=200 (hidden=2000): Val MAPE=1.289%  (p95=3.98%, max=422.03%)
+  Size=250 (hidden=2500): Val MAPE=1.146%  (p95=3.68%, max=144.59%)
+
+--- Strategy: C_logratio_rawgroups ---
+Feature relevance |spearman|: WaveSteepness (H/L_lin)=0.788, RelativeDepth (d/L_lin)=0.055, DopplerF
+actor (Uc*T/L_lin)=0.021, UrsellNumber (H*L_lin^2/d^3)=0.336, CurrentFroude (Uc/sqrt(g d))=0.042
+Selected 3 features: ['WaveSteepness (H/L_lin)', 'UrsellNumber (H*L_lin^2/d^3)', 'DopplerFactor (Uc*
+T/L_lin)']
+  Size=25 (hidden=250): Val MAPE=1.831%  (p95=6.38%, max=166.06%)
+  Size=50 (hidden=500): Val MAPE=1.648%  (p95=5.92%, max=199.37%)
+  Size=100 (hidden=1000): Val MAPE=1.465%  (p95=5.48%, max=181.26%)
+  Size=150 (hidden=1500): Val MAPE=1.322%  (p95=4.29%, max=249.85%)
+  Size=200 (hidden=2000): Val MAPE=1.547%  (p95=4.31%, max=784.05%)
+  Size=250 (hidden=2500): Val MAPE=1.385%  (p95=4.05%, max=746.41%)
+
+--- Strategy: D_ratiominus1_loggroups ---
+Feature relevance |spearman|: WaveSteepness (H/L_lin)=0.788, RelativeDepth (d/L_lin)=0.055, DopplerF
+actor (Uc*T/L_lin)=0.021, UrsellNumber (H*L_lin^2/d^3)=0.336, CurrentFroude (Uc/sqrt(g d))=0.042
+Selected 3 features: ['WaveSteepness (H/L_lin)', 'UrsellNumber (H*L_lin^2/d^3)', 'DopplerFactor (Uc*
+T/L_lin)']
+  Size=25 (hidden=250): Val MAPE=2.056%  (p95=6.43%, max=100.87%)
+  Size=50 (hidden=500): Val MAPE=1.675%  (p95=5.43%, max=89.75%)
+  Size=100 (hidden=1000): Val MAPE=1.361%  (p95=4.23%, max=81.78%)
+  Size=150 (hidden=1500): Val MAPE=1.289%  (p95=4.08%, max=85.80%)
+  Size=200 (hidden=2000): Val MAPE=1.264%  (p95=3.98%, max=92.09%)
+  Size=250 (hidden=2500): Val MAPE=1.179%  (p95=3.69%, max=88.41%)
+
+--- Strategy: E_asinhLratio_loggroups ---
+Feature relevance |spearman|: WaveSteepness (H/L_lin)=0.788, RelativeDepth (d/L_lin)=0.055, DopplerF
+actor (Uc*T/L_lin)=0.021, UrsellNumber (H*L_lin^2/d^3)=0.336, CurrentFroude (Uc/sqrt(g d))=0.042
+Selected 3 features: ['WaveSteepness (H/L_lin)', 'UrsellNumber (H*L_lin^2/d^3)', 'DopplerFactor (Uc*
+T/L_lin)']
+  Size=25 (hidden=250): Val MAPE=1.854%  (p95=6.01%, max=102.48%)
+  Size=50 (hidden=500): Val MAPE=1.483%  (p95=4.86%, max=93.10%)
+  Size=100 (hidden=1000): Val MAPE=1.169%  (p95=3.69%, max=84.45%)
+  Size=150 (hidden=1500): Val MAPE=1.089%  (p95=3.63%, max=90.77%)
+  Size=200 (hidden=2000): Val MAPE=1.056%  (p95=3.37%, max=96.19%)
+  Size=250 (hidden=2500): Val MAPE=0.983%  (p95=3.09%, max=90.37%)
+
+--- Strategy: F_asinhLratio_logasinh ---
+Feature relevance |spearman|: WaveSteepness (H/L_lin)=0.788, RelativeDepth (d/L_lin)=0.055, DopplerF
+actor (Uc*T/L_lin)=0.021, UrsellNumber (H*L_lin^2/d^3)=0.336, CurrentFroude (Uc/sqrt(g d))=0.042
+Selected 3 features: ['WaveSteepness (H/L_lin)', 'UrsellNumber (H*L_lin^2/d^3)', 'DopplerFactor (Uc*
+T/L_lin)']
+  Size=25 (hidden=250): Val MAPE=1.860%  (p95=6.04%, max=102.17%)
+  Size=50 (hidden=500): Val MAPE=1.499%  (p95=4.91%, max=92.98%)
+  Size=100 (hidden=1000): Val MAPE=1.175%  (p95=3.76%, max=83.87%)
+  Size=150 (hidden=1500): Val MAPE=1.096%  (p95=3.63%, max=82.11%)
+  Size=200 (hidden=2000): Val MAPE=1.054%  (p95=3.39%, max=91.13%)
+  Size=250 (hidden=2500): Val MAPE=0.980%  (p95=3.04%, max=85.60%)
+
+--- Strategy: G_signedlogLratio_signedlog ---
+Feature relevance |spearman|: WaveSteepness (H/L_lin)=0.788, RelativeDepth (d/L_lin)=0.055, DopplerF
+actor (Uc*T/L_lin)=0.021, UrsellNumber (H*L_lin^2/d^3)=0.336, CurrentFroude (Uc/sqrt(g d))=0.042
+Selected 3 features: ['WaveSteepness (H/L_lin)', 'UrsellNumber (H*L_lin^2/d^3)', 'DopplerFactor (Uc*
+T/L_lin)']
+  Size=25 (hidden=250): Val MAPE=1.679%  (p95=5.63%, max=107.83%)
+  Size=50 (hidden=500): Val MAPE=1.345%  (p95=4.60%, max=102.03%)
+  Size=100 (hidden=1000): Val MAPE=1.080%  (p95=3.49%, max=86.50%)
+  Size=150 (hidden=1500): Val MAPE=1.012%  (p95=3.25%, max=86.74%)
+  Size=200 (hidden=2000): Val MAPE=0.967%  (p95=3.14%, max=95.13%)
+  Size=250 (hidden=2500): Val MAPE=0.896%  (p95=2.74%, max=86.08%)
+
+--- Strategy: H_signedlogLratio_rawsignedlog ---
+Feature relevance |spearman|: WaveSteepness (H/L_lin)=0.788, RelativeDepth (d/L_lin)=0.055, DopplerF
+actor (Uc*T/L_lin)=0.021, UrsellNumber (H*L_lin^2/d^3)=0.336, CurrentFroude (Uc/sqrt(g d))=0.042
+Selected 3 features: ['WaveSteepness (H/L_lin)', 'UrsellNumber (H*L_lin^2/d^3)', 'DopplerFactor (Uc*
+T/L_lin)']
+  Size=25 (hidden=250): Val MAPE=1.442%  (p95=5.35%, max=127.64%)
+  Size=50 (hidden=500): Val MAPE=1.277%  (p95=4.50%, max=175.79%)
+  Size=100 (hidden=1000): Val MAPE=1.151%  (p95=3.95%, max=120.35%)
+  Size=150 (hidden=1500): Val MAPE=1.086%  (p95=3.62%, max=120.30%)
+  Size=200 (hidden=2000): Val MAPE=1.071%  (p95=3.49%, max=224.46%)
+  Size=250 (hidden=2500): Val MAPE=1.010%  (p95=3.14%, max=122.91%)
+
+--- Strategy: I_kratio_rawgroups ---
+Feature relevance |spearman|: WaveSteepness (H/L_lin)=0.788, RelativeDepth (d/L_lin)=0.055, DopplerF
+actor (Uc*T/L_lin)=0.021, UrsellNumber (H*L_lin^2/d^3)=0.336, CurrentFroude (Uc/sqrt(g d))=0.042
+Selected 3 features: ['WaveSteepness (H/L_lin)', 'UrsellNumber (H*L_lin^2/d^3)', 'DopplerFactor (Uc*
+T/L_lin)']
+  Size=25 (hidden=250): Val MAPE=7980391483.177%  (p95=9.01%, max=69668817625938.73%)
+  Size=50 (hidden=500): Val MAPE=34947879616.301%  (p95=8.55%, max=87733819410153.83%)
+  Size=100 (hidden=1000): Val MAPE=8509159090.221%  (p95=7.71%, max=74284958837529.22%)
+  Size=150 (hidden=1500): Val MAPE=37017180739.076%  (p95=6.21%, max=159355642610775.75%)
+  Size=200 (hidden=2000): Val MAPE=44633633652.590%  (p95=5.90%, max=91782045468083.53%)
+  Size=250 (hidden=2500): Val MAPE=62867609010.971%  (p95=6.13%, max=89878615898432.86%)
+
+--- Strategy: J_kratio_loggroups ---
+Feature relevance |spearman|: WaveSteepness (H/L_lin)=0.788, RelativeDepth (d/L_lin)=0.055, DopplerF
+actor (Uc*T/L_lin)=0.021, UrsellNumber (H*L_lin^2/d^3)=0.336, CurrentFroude (Uc/sqrt(g d))=0.042
+Selected 3 features: ['WaveSteepness (H/L_lin)', 'UrsellNumber (H*L_lin^2/d^3)', 'DopplerFactor (Uc*
+T/L_lin)']
+  Size=25 (hidden=250): Val MAPE=3.235%  (p95=9.98%, max=80.34%)
+  Size=50 (hidden=500): Val MAPE=2.580%  (p95=8.18%, max=75.80%)
+  Size=100 (hidden=1000): Val MAPE=1.728%  (p95=5.66%, max=76.07%)
+  Size=150 (hidden=1500): Val MAPE=1.391%  (p95=4.47%, max=71.27%)
+  Size=200 (hidden=2000): Val MAPE=1.269%  (p95=3.95%, max=77.50%)
+  Size=250 (hidden=2500): Val MAPE=1.195%  (p95=3.70%, max=100.13%)
+
+--- Strategy: K_asinhKratio_logasinh ---
+Feature relevance |spearman|: WaveSteepness (H/L_lin)=0.788, RelativeDepth (d/L_lin)=0.055, DopplerF
+actor (Uc*T/L_lin)=0.021, UrsellNumber (H*L_lin^2/d^3)=0.336, CurrentFroude (Uc/sqrt(g d))=0.042
+Selected 3 features: ['WaveSteepness (H/L_lin)', 'UrsellNumber (H*L_lin^2/d^3)', 'DopplerFactor (Uc*
+T/L_lin)']
+  Size=25 (hidden=250): Val MAPE=2.435%  (p95=7.75%, max=83.68%)
+  Size=50 (hidden=500): Val MAPE=1.989%  (p95=6.65%, max=79.52%)
+  Size=100 (hidden=1000): Val MAPE=1.379%  (p95=4.58%, max=77.65%)
+  Size=150 (hidden=1500): Val MAPE=1.154%  (p95=3.78%, max=72.51%)
+  Size=200 (hidden=2000): Val MAPE=1.079%  (p95=3.41%, max=76.16%)
+  Size=250 (hidden=2500): Val MAPE=1.007%  (p95=3.14%, max=73.27%)
+
+--- Strategy: L_signedlogKratio_signedlog ---
+Feature relevance |spearman|: WaveSteepness (H/L_lin)=0.788, RelativeDepth (d/L_lin)=0.055, DopplerF
+actor (Uc*T/L_lin)=0.021, UrsellNumber (H*L_lin^2/d^3)=0.336, CurrentFroude (Uc/sqrt(g d))=0.042
+Selected 3 features: ['WaveSteepness (H/L_lin)', 'UrsellNumber (H*L_lin^2/d^3)', 'DopplerFactor (Uc*
+T/L_lin)']
+  Size=25 (hidden=250): Val MAPE=2.130%  (p95=6.96%, max=90.02%)
+  Size=50 (hidden=500): Val MAPE=1.811%  (p95=6.16%, max=87.26%)
+  Size=100 (hidden=1000): Val MAPE=1.300%  (p95=4.25%, max=79.06%)
+  Size=150 (hidden=1500): Val MAPE=1.105%  (p95=3.53%, max=74.16%)
+  Size=200 (hidden=2000): Val MAPE=1.036%  (p95=3.31%, max=78.68%)
+  Size=250 (hidden=2500): Val MAPE=0.957%  (p95=2.99%, max=73.32%)
+
+--- Strategy: M_logratio_log_tail ---
+Feature relevance |spearman|: WaveSteepness (H/L_lin)=0.788, RelativeDepth (d/L_lin)=0.055, DopplerF
+actor (Uc*T/L_lin)=0.021, UrsellNumber (H*L_lin^2/d^3)=0.336, CurrentFroude (Uc/sqrt(g d))=0.042
+Selected 3 features: ['WaveSteepness (H/L_lin)', 'UrsellNumber (H*L_lin^2/d^3)', 'DopplerFactor (Uc*
+T/L_lin)']
+  Size=25 (hidden=250): Val MAPE=1.520%  (p95=5.39%, max=128.66%)
+  Size=50 (hidden=500): Val MAPE=1.366%  (p95=4.65%, max=113.53%)
+  Size=100 (hidden=1000): Val MAPE=1.126%  (p95=3.67%, max=104.59%)
+  Size=150 (hidden=1500): Val MAPE=1.007%  (p95=3.32%, max=97.91%)
+  Size=200 (hidden=2000): Val MAPE=0.965%  (p95=3.20%, max=104.77%)
+  Size=250 (hidden=2500): Val MAPE=0.904%  (p95=2.82%, max=91.10%)
+
+--- Strategy: N_kratio_log_p95 ---
+Feature relevance |spearman|: WaveSteepness (H/L_lin)=0.788, RelativeDepth (d/L_lin)=0.055, DopplerF
+actor (Uc*T/L_lin)=0.021, UrsellNumber (H*L_lin^2/d^3)=0.336, CurrentFroude (Uc/sqrt(g d))=0.042
+Selected 3 features: ['WaveSteepness (H/L_lin)', 'UrsellNumber (H*L_lin^2/d^3)', 'DopplerFactor (Uc*
+T/L_lin)']
+  Size=25 (hidden=250): Val MAPE=3.374%  (p95=9.82%, max=170.18%)
+  Size=50 (hidden=500): Val MAPE=2.230%  (p95=6.82%, max=72.28%)
+  Size=100 (hidden=1000): Val MAPE=2.097%  (p95=6.35%, max=79.64%)
+  Size=150 (hidden=1500): Val MAPE=1.990%  (p95=5.73%, max=76.34%)
+  Size=200 (hidden=2000): Val MAPE=1.989%  (p95=5.54%, max=139.12%)
+  Size=250 (hidden=2500): Val MAPE=1.812%  (p95=5.16%, max=92.14%)
+
+==========================================
+ BEST MODEL (by validation MAPE)
+==========================================
+Strategy : G_signedlogLratio_signedlog
+Size     : 250 (hidden=2500)
+Features : ['WaveSteepness (H/L_lin)', 'UrsellNumber (H*L_lin^2/d^3)', 'DopplerFactor (Uc*T/L_lin)']
+
+Val MAPE : 0.896%
+==========================================
+
+--- Final training on ALL data ---
+==========================================
+ FINAL STATISTICS (all data)
+==========================================
+Global MSE      : 6.233897
+Global MAPE     : 0.806%
+95% APE         : 2.61%
+Max APE         : 116.69%
+==========================================
+
+--- Worst 20 cases ---
+  H  T    d   Uc   L_lin  L_true  L_pred  APE_pct
+2.5 11   46 -3.5 95.4506  20.029 43.4003  116.688
+  5 11   36 -3.5 93.0334 35.4076 58.5544  65.3721
+2.5  8   11 -2.5 42.9082 17.7495 29.1874  64.4404
+  5  4   91    3 45.8259 46.0332 74.7917  62.4735
+  5  4 98.5    3 45.8259 237.642 92.0046  61.2844
+2.5 12   11 -3.5 65.3709 18.5299  29.826  60.9613
+2.5  8   16 -2.5 48.5304 20.6564 33.2088  60.7676
+2.5 11 33.5 -3.5 91.9032 24.0059 10.3223  57.0008
+2.5 10 53.5 -3.5 68.0736 25.3776 39.6665  56.3049
+2.5 11   26 -3.5 86.3075 23.3782 35.8517  53.3551
+  5  4 88.5    3 45.8259 46.4684 71.1337  53.0797
+7.5  5 88.5  3.5 69.6141 219.632 104.248  52.5352
+2.5 10   56 -3.5 68.0816 70.6684 35.9598  49.1148
+  5  4   86    3 45.8259 46.5741 68.3848    46.83
+2.5 10 48.5 -3.5 68.0409 33.5156 48.7489  45.4511
+  5  4   71    3 45.8259 122.062 66.7296  45.3313
+7.5  5   86  3.5 69.6141 71.2141 102.498  43.9294
+2.5 10   51 -3.5  68.061 30.6377 43.9554  43.4685
+7.5  5 98.5  3.5 69.6141 74.3115 106.031  42.6845
+2.5 11 48.5 -3.5 95.7313  97.127  57.026  41.2872
+[SUCCESS] Wrote function.py
+[SUCCESS] Wrote neural.bas
+[SUCCESS] Saved diagnostics.pdf and plot_all.png

@@ -1,0 +1,42 @@
+python pade.py
+--- Loading Data ---
+--- Generating Features ---
+--- Training Models ---
+   > Training shallow Model (N=358) [Degree=3, Lam=1e-15]
+     -> No fitted samples exceeded 10% final prediction error.
+   > Training inter Model (N=36631) [Degree=3, Lam=1e-15]
+     -> Iteration 1: removed 651 samples with final prediction error > 10% (kept 35980/36631).
+     -> Iteration 2: removed 12 samples with final prediction error > 10% (kept 35968/36631).
+     -> Iteration 3: removed 8 samples with final prediction error > 10% (kept 35960/36631).
+     -> Iteration 4: removed 2 samples with final prediction error > 10% (kept 35958/36631).
+     -> Iteration 5: removed 29 samples with final prediction error > 10% (kept 35929/36631).
+     -> Iteration 6: removed 1 samples with final prediction error > 10% (kept 35928/36631).
+     -> Filtering converged after 6 refit(s); kept 35928/36631 samples within 10%.
+   > Training deep Model (N=6657) [Degree=5, Lam=1e-15]
+     -> Iteration 1: removed 208 samples with final prediction error > 10% (kept 6449/6657).
+     -> Iteration 2: removed 13 samples with final prediction error > 10% (kept 6436/6657).
+     -> Iteration 3: removed 7 samples with final prediction error > 10% (kept 6429/6657).
+     -> Filtering converged after 3 refit(s); kept 6429/6657 samples within 10%.
+Saved fitted-only parameter list to 'fited.txt' (42715/43646 rows; columns: H, T, d, Uc, L).
+Excluded 931 rows from fitted outputs because they exceeded the 10% final prediction error limit or
+were removed during refit.
+
+[SUCCESS] Independent function saved to 'function.py'
+[SUCCESS] VBA module saved to 'pade.bas'
+
+==========================================
+ FINAL STATISTICS (FITTED ONLY)
+==========================================
+Global MSE:  1.313797
+Global MAPE: 0.38%
+Global MaxErr: 9.70%
+------------------------------------------
+Shallow         (N=532 ): MSE=2.842509, MAPE=0.51%, MaxErr=9.45%
+Intermediate    (N=36179): MSE=1.354872, MAPE=0.35%, MaxErr=9.70%
+Deep            (N=6004): MSE=0.930830, MAPE=0.51%, MaxErr=8.43%
+==========================================
+
+[Generating Visualization...]
+Global Visualization saved as 'plot_all.png'
+Saved: plot_shallow.png
+Saved: plot_intermediate.png

@@ -1,0 +1,34 @@
+================================================================================
+             WAVE-CURRENT INTERACTION: CALCULATION MANUAL
+================================================================================
+CASE INPUTS: H=3.0m, T=9.0s, d=5.0m, U=1.0m/s
+--------------------------------------------------------------------------------
+PART A: PHYSICS PRE-CALCULATIONS
+   Status Check:        PHYSICS OK
+1. L(linear) [Depth d]: 60.4027 m
+   (Solved iteratively from dispersion relation)
+2. C0 [Deep Water]:     14.0470 m/s
+
+PART B: DIMENSIONLESS PARAMETERS
+1. Doppler Param (x5):  0.14900
+2. Velocity Ratio (x6): 0.07119
+3. Rel. Height Log (x2):-0.51083
+4. Dim. Period Log (x8):2.53404
+
+PART C: FORMULA TERMS
+   Term 1 (Doppler Exp):  1.10627
+   Term 2 (Vel Ratio):    0.07926
+   Term 3 (Z Correction): 0.14442
+
+PART D: FINAL RESULTS
+   Step 1 Pivot:          1.18553
+   Final Multiplier:      1.32995
+   Final Wavelength:      80.333 m
+--------------------------------------------------------------------------------
+GLOSSARY:
+   L(lin): Linear Airy wavelength at depth d.
+   C0:     Deep water phase speed.
+   Pivot:  Intermediate variable (Doppler + Velocity effects).
+   Z:      Correction term for wave steepness and depth.
+   M:      Final Multiplier (L_final / L_lin).
+================================================================================
