@@ -1,9 +1,0 @@
-Test wave
-0.6		H/d
-Period	Measure of length: "Wavelength" or "Period"
-12.6042742750227 	Value of that length: L/d or T(g/d)^1/2 respectively
-1		Current criterion (1 or 2)
-0.142808698122903		Current magnitude, (dimensionless) ubar/(gd)^1/2
-50		Number of Fourier components or Order of Stokes/cnoidal theory
-5		Number of height steps to reach H/d
-FINISH
