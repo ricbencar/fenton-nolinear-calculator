@@ -2351,52 +2351,10 @@ static DWORD WINAPI CalcThread(LPVOID lpParam) {
 }
 
 static void resize_gui_to_fit_output(HWND hwnd) {
-    if (!g_hOutput || !IsWindow(g_hOutput) || !g_hMonoFont) return;
-
-    // Measure monospace glyph width in pixels for the active output font.
-    int char_w = 10;
-    {
-        HDC hdc = GetDC(g_hOutput);
-        if (hdc) {
-            HFONT old = (HFONT)SelectObject(hdc, g_hMonoFont);
-            SIZE sz{};
-            if (GetTextExtentPoint32W(hdc, L"0", 1, &sz) && sz.cx > 0) {
-                char_w = (int)sz.cx;
-            }
-            SelectObject(hdc, old);
-            ReleaseDC(g_hOutput, hdc);
-        }
-    }
-
-    // Remove internal edit margins so sizing is deterministic.
-    SendMessageW(g_hOutput, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(0, 0));
-
-    // Account for the vertical scrollbar inside the EDIT control.
-    const int vscroll_w = GetSystemMetrics(SM_CXVSCROLL);
-    const int extra_px = 8; // cushion for borders/rounding
-
-    const int desired_output_w = OUTPUT_COLS * char_w + vscroll_w + extra_px;
-
-    // Layout constants used in WM_CREATE.
-    const int output_x = 300;
-    const int top_margin = 20;
-    const int right_margin = 20;
-    const int bottom_margin = 20;
-
-    // Keep the current output height.
-    RECT out_rc{};
-    GetWindowRect(g_hOutput, &out_rc);
-    const int out_h = (int)(out_rc.bottom - out_rc.top);
-
-    // Resize output control.
-    SetWindowPos(g_hOutput, nullptr,
-        output_x, top_margin,
-        desired_output_w, out_h,
-        SWP_NOZORDER);
-
-    // Resize the main window so the *client* width contains the output exactly.
-    const int desired_client_w = output_x + desired_output_w + right_margin;
-    const int desired_client_h = top_margin + out_h + bottom_margin;
+    const int sw = GetSystemMetrics(SM_CXSCREEN);
+    const int sh = GetSystemMetrics(SM_CYSCREEN);
+    const int desired_client_w = std::min(1600, sw - 80);
+    const int desired_client_h = std::min(950, sh - 120);
 
     RECT rc{ 0, 0, desired_client_w, desired_client_h };
     const DWORD style = (DWORD)GetWindowLongPtrW(hwnd, GWL_STYLE);
@@ -2406,6 +2364,15 @@ static void resize_gui_to_fit_output(HWND hwnd) {
     const int win_h = rc.bottom - rc.top;
 
     SetWindowPos(hwnd, nullptr, 0, 0, win_w, win_h, SWP_NOMOVE | SWP_NOZORDER);
+
+    if (g_hOutput && IsWindow(g_hOutput)) {
+        SendMessageW(g_hOutput, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(0, 0));
+        SetWindowPos(g_hOutput, nullptr,
+            300, 20,
+            std::max(100, desired_client_w - 320),
+            std::max(100, desired_client_h - 40),
+            SWP_NOZORDER);
+    }
 }
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -2417,7 +2384,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
 
-        g_hMonoFont = CreateFontW(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        g_hMonoFont = CreateFontW(22, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             DEFAULT_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
 
@@ -2440,7 +2407,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         make_label(L"Water Depth (m):", y); g_hEditD = make_edit(L"5.0", IDC_EDIT_D, y); y += 35;
         make_label(L"Current (m/s):", y);   g_hEditUc = make_edit(L"1.0", IDC_EDIT_UC, y); y += 45;
 
-        g_hBtnCalc = CreateWindowW(L"BUTTON", L"CALCULATE HYDRODYNAMICS",
+        g_hBtnCalc = CreateWindowW(L"BUTTON", L"CALCULATE",
             WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
             20, y, 260, 40, hwnd, (HMENU)IDC_BTN_CALC, nullptr, nullptr);
         SendMessageW(g_hBtnCalc, WM_SETFONT, (WPARAM)g_hUIFont, TRUE);
@@ -2493,7 +2460,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
         if (g_hBtnCalc && IsWindow(g_hBtnCalc)) {
             EnableWindow(g_hBtnCalc, TRUE);
-            SetWindowTextW(g_hBtnCalc, L"CALCULATE HYDRODYNAMICS");
+            SetWindowTextW(g_hBtnCalc, L"CALCULATE");
         }
         return 0;
     }
@@ -2517,10 +2484,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow) {
 
     if (!RegisterClassExW(&wc)) return 0;
 
+    const DWORD main_style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    const DWORD main_exstyle = 0;
+    const int sw = GetSystemMetrics(SM_CXSCREEN);
+    const int sh = GetSystemMetrics(SM_CYSCREEN);
+    const int desired_client_w = std::min(1600, sw - 80);
+    const int desired_client_h = std::min(950, sh - 120);
+    RECT rc{ 0, 0, desired_client_w, desired_client_h };
+    AdjustWindowRectEx(&rc, main_style, FALSE, main_exstyle);
+
     HWND hwnd = CreateWindowExW(
-        0, L"FentonClassStable", L"Fenton Wave Solver",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 1140, 620,
+        main_exstyle, L"FentonClassStable", L"Fenton Wave Solver",
+        main_style,
+        CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,
         nullptr, nullptr, hInst, nullptr
     );
 
