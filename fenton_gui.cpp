@@ -170,16 +170,17 @@
  *
  *  A. PREREQUISITES
  *  ----------------
- *  - Windows (Win32 API GUI build). MinGW-w64 (g++) or MSVC with C++17 support.
+ *  - Windows (Win32 API GUI build). MinGW-w64 (g++) or MSVC with C++20 support.
  *  - Basic familiarity with the command line (Terminal/CMD).
  *
  *  B. BUILDING FROM SOURCE
  *  ------------------------------------
- *  1. Ensure a C++17-capable toolchain is installed and on PATH (g++ recommended).
+ *  1. Ensure a C++20-capable toolchain is installed and on PATH (g++ recommended).
  *
  *  2. Compile (release-like build, GUI subsystem):
- *     > g++ fenton_gui.cpp -o fenton_gui.exe -O3 -std=gnu++17 -march=native ^
- *       -lgdi32 -luser32 -lkernel32 -lcomctl32 -static -mwindows -pthread
+ *     > g++ fenton_gui.cpp -o fenton_gui.exe -O3 -std=c++20 -march=native ^
+ *       -lgdi32 -luser32 -lkernel32 -lcomctl32 ^
+ *       -static-libgcc -static-libstdc++ -mwindows -pthread
  *
  *     Build note (Python-parity / "no current" stability):
  *     This solver is path-sensitive: small floating-point differences can change trust-region
@@ -2127,7 +2128,7 @@ static std::string generate_output(double H_in, double T_in, double d_in, double
     rows.push_back(Row{ false, "", { Cell::strv("Radiation stress (Sₓₓ)"), Cell::numv(solver0.Sxx / 1000.0), wc_num(solverC.Sxx / 1000.0), Cell::strv("kN/m") } });
     rows.push_back(Row{ false, "", { Cell::strv("Impulse (I)"), Cell::numv(solver0.Impulse / 1000.0), wc_num(solverC.Impulse / 1000.0), Cell::strv("10³ kg/(m·s)") } });
     rows.push_back(Row{ false, "", { Cell::strv("Wave power (F)"), Cell::numv(solver0.Power / 1000.0), wc_num(solverC.Power / 1000.0), Cell::strv("kW/m") } });
-    rows.push_back(Row{ false, "", { Cell::strv(u8"Group velocity (C𝗀 = F/E)ㅤ"), Cell::numv(solver0.Cg), wc_num(solverC.Cg), Cell::strv("m/s") } });
+    rows.push_back(Row{ false, "", { Cell::strv("Group velocity (C𝗀 = F/E)ㅤ"), Cell::numv(solver0.Cg), wc_num(solverC.Cg), Cell::strv("m/s") } });
 
     rows.push_back(Row{ true, "KINEMATICS (EXTREMES / BED ORBITAL MOTION)", {} });
     rows.push_back(Row{ false, "", { Cell::strv("Max surface horiz. vel |u|"), Cell::numv(solver0.u_surf), wc_num(solverC.u_surf), Cell::strv("m/s") } });
@@ -2191,7 +2192,7 @@ static std::string generate_output(double H_in, double T_in, double d_in, double
         rr.push_back(Row{ false, "", { Cell::numv(16), Cell::strv("Potential energy"),                Cell::strv(f5(kJ(slv.PotentialEnergy))),Cell::strv("V/ρgd²"),                          Cell::strv(f5(slv.PE_depth)) } });
         rr.push_back(Row{ false, "", { Cell::numv(17), Cell::strv("Mean square of bed velocity"),     Cell::strv(f5(slv.MeanSquareBedVelocity)),Cell::strv("ub²/gd"),                          Cell::strv(f5(slv.MeanSquareBedVelocity / (g_ * d_))) } });
         rr.push_back(Row{ false, "", { Cell::numv(18), Cell::strv("Radiation stress"),                Cell::strv(f5(kN(slv.Sxx))),           Cell::strv("S_xx/ρgd²"),                       Cell::strv(f5(slv.Sxx_depth)) } });
-        rr.push_back(Row{ false, "", { Cell::numv(19), Cell::strv("Wave power"),                      Cell::strv(f5(kW(slv.Power))),         Cell::strv(u8"F/(ρg³ᐟ²d⁵ᐟ²)ㅤㅤ"),               Cell::strv(f5(slv.F_depth)) } });
+        rr.push_back(Row{ false, "", { Cell::numv(19), Cell::strv("Wave power"),                      Cell::strv(f5(kW(slv.Power))),         Cell::strv("F/(ρg³ᐟ²d⁵ᐟ²)ㅤㅤ"),               Cell::strv(f5(slv.F_depth)) } });
 
         print_table(out, title, h, cw, al, rr);
     };
@@ -2229,7 +2230,7 @@ static std::string generate_output(double H_in, double T_in, double d_in, double
     add_term("T", "Kinetic energy density.", "kJ/m² ; T/(ρgd²)");
     add_term("V", "Potential energy density.", "kJ/m² ; V/(ρgd²)");
     add_term("E", "Total energy density E = T + V.", "kJ/m²");
-    add_term("F", "Wave power (energy flux).", u8"kW/m ; F/(ρg³ᐟ²d⁵ᐟ²)ㅤ");
+    add_term("F", "Wave power (energy flux).", "kW/m ; F/(ρg³ᐟ²d⁵ᐟ²)ㅤ");
     add_term("Cg", "Group velocity, defined here as Cg = F/E.", "m/s");
     add_term("Sₓₓ", "Radiation stress component in wave direction.", "kN/m ; Sₓₓ/(ρgd²)");
     add_term("ub²", "Mean square *orbital* bed velocity: ub² = <(ub(t) − ū₁)²>. Non-negative by definition; computed by phase averaging.", "m²/s² ; /gd");
@@ -2407,7 +2408,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         make_label(L"Water Depth (m):", y); g_hEditD = make_edit(L"5.0", IDC_EDIT_D, y); y += 35;
         make_label(L"Current (m/s):", y);   g_hEditUc = make_edit(L"1.0", IDC_EDIT_UC, y); y += 45;
 
-        g_hBtnCalc = CreateWindowW(L"BUTTON", L"CALCULATE",
+        g_hBtnCalc = CreateWindowW(L"BUTTON", L"CALCULATE HYDRODYNAMICS",
             WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
             20, y, 260, 40, hwnd, (HMENU)IDC_BTN_CALC, nullptr, nullptr);
         SendMessageW(g_hBtnCalc, WM_SETFONT, (WPARAM)g_hUIFont, TRUE);
@@ -2460,7 +2461,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
         if (g_hBtnCalc && IsWindow(g_hBtnCalc)) {
             EnableWindow(g_hBtnCalc, TRUE);
-            SetWindowTextW(g_hBtnCalc, L"CALCULATE");
+            SetWindowTextW(g_hBtnCalc, L"CALCULATE HYDRODYNAMICS");
         }
         return 0;
     }

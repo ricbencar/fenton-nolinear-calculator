@@ -2004,8 +2004,7 @@ Expected outputs:
 Compile, for example:
 
 ```bash
-g++ -std=c++20 fourier.cpp -o fourier.exe -O2 -static ^
--static-libgcc -static-libstdc++
+g++ fenton_gui.cpp -o fenton_gui.exe -O3 -std=c++20 -march=native -lgdi32 -luser32 -lkernel32 -lcomctl32 -static-libgcc -static-libstdc++ -mwindows -pthread
 ```
 
 Run:
