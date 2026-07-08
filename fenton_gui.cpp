@@ -2408,7 +2408,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         make_label(L"Water Depth (m):", y); g_hEditD = make_edit(L"5.0", IDC_EDIT_D, y); y += 35;
         make_label(L"Current (m/s):", y);   g_hEditUc = make_edit(L"1.0", IDC_EDIT_UC, y); y += 45;
 
-        g_hBtnCalc = CreateWindowW(L"BUTTON", L"CALCULATE HYDRODYNAMICS",
+        g_hBtnCalc = CreateWindowW(L"BUTTON", L"CALCULATE",
             WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
             20, y, 260, 40, hwnd, (HMENU)IDC_BTN_CALC, nullptr, nullptr);
         SendMessageW(g_hBtnCalc, WM_SETFONT, (WPARAM)g_hUIFont, TRUE);
@@ -2461,7 +2461,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
         if (g_hBtnCalc && IsWindow(g_hBtnCalc)) {
             EnableWindow(g_hBtnCalc, TRUE);
-            SetWindowTextW(g_hBtnCalc, L"CALCULATE HYDRODYNAMICS");
+            SetWindowTextW(g_hBtnCalc, L"CALCULATE");
         }
         return 0;
     }
