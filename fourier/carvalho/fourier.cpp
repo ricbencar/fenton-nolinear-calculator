@@ -1,363 +1,154 @@
 /*
 ================================================================================
-fourier.cpp  —  Single-file implementation of J.D. Fenton-style steady-wave
-Fourier/Newton “Stream Function” solver (amalgamated / modernised build unit)
-Original source code - Fourier.zip, version 23 July 2015.
-See URL: https://johndfenton.com/Steady-waves/Fourier.html
+fourier.cpp — Fenton-style reference solver for steady nonlinear water waves
 ================================================================================
 
-OVERVIEW
---------
-This program computes *steady, two-dimensional, periodic gravity waves* propagating
-without change of form over either:
+PROGRAM ROLE IN THE SUITE
+-------------------------
+This file is the standalone reference-style Fourier / stream-function solver in
+this repository.  It implements the same physical formulation described in the
+README: steady, two-dimensional, periodic finite-amplitude gravity waves over a
+horizontal bed, with optional collinear current and with either wavelength- or
+period-based closure.
 
-  • water of *finite* mean depth (mean depth d), or
-  • *deep water* (infinite depth limit).
+The central engineering calculation is the nonlinear mapping between wave height,
+period or wavelength, water depth, selected current convention and the resulting
+consistent wave field.  In Fenton's formulation, a steady wave train is defined
+by the coupled solution for wavelength, celerity, free surface, Fourier
+coefficients, wave-frame flux, current variables, Bernoulli constant and integral
+quantities.  Linear Airy dispersion is used only for initialization and checking;
+it is not the final finite-amplitude theory.
 
-The numerical method is the classical *Fourier approximation / stream-function*
-approach combined with *collocation* on the free surface and a *Newton iteration*
-for the resulting nonlinear algebraic system.
+PHYSICAL MODEL
+--------------
+The model is the classical Rienecker-Fenton / Fenton steady-wave problem:
 
-The implementation you are reading is an **amalgamation** (single translation unit)
-of the original multi-file C++ port that in turn follows the structure and notation
-of J.D. Fenton’s published algorithms and example program listings, principally:
+  • homogeneous inviscid fluid,
+  • incompressible and irrotational motion,
+  • two-dimensional periodic wave train,
+  • horizontal impermeable bed in finite depth,
+  • atmospheric pressure on the free surface,
+  • no breaking, viscosity, turbulence model or surface tension.
 
-  • Fenton (1999) — Review of fully-nonlinear wave computation methods (Fourier,
-                    BIE, polynomial approximation).
-  • Fenton (1990) — Survey and selection guidance: Stokes vs cnoidal vs stream-
-                    function, etc.
-  • Fenton (1988) — Core stream-function/Fourier algorithm for steady, periodic
-                    nonlinear waves.
+The numerical method is not a Stokes or cnoidal perturbation expansion.  The
+Fourier order N is a collocation/spectral resolution parameter: increasing N
+increases numerical resolution of the same nonlinear free-boundary problem.
 
-The code computes both:
-  (A) *global / integral* wave properties (c, T, Q, energies, radiation stress, …), and
-  (B) *local* kinematics and pressures (u, v, ∂φ/∂t, accelerations, Bernoulli check)
-      at arbitrary phase and elevation points, and outputs those to files.
+COORDINATE AND DATUM CONVENTION
+-------------------------------
+The README presents the theoretical datum with still-water level at y=0 and bed
+at y=-d.  This legacy source uses the equivalent bed-based physical coordinate
+for output and profile sampling:
 
-KEY CAPABILITIES
-----------------
-1) Problem types (input “Case”):
-   • Wavelength-specified cases (“Wavelength”): solve for a wave with given λ/d and H/d.
-   • Period-specified cases (“Period”): solve for a wave with given T√(g/d) and H/d.
-     This case requires careful treatment of the current definition (Fenton, 1999
-     discussion in the Fourier/Newton method section).
+    bed:              y = 0
+    mean water level: y = d
 
-2) Water depth regimes:
-   • Finite depth: kd = k d is solved as part of the system; outputs are provided in
-     two consistent non-dimensionalisations:
-       (i) by g and wavenumber k, and
-       (ii) by g and mean depth d.
-   • Deep water: the kd → ∞ limit is handled using the exponential vertical basis
-     consistent with Fenton (1999) Eq. (3.6).
+Internally it immediately shifts to the same mean-level coordinate used by the
+README:
 
-3) Currents (two alternative criteria, as in Fenton’s formulations):
-   • “Euler” current criterion: specify the Eulerian mean current ū₁ (often denoted Uc).
-   • “Stokes” current criterion: specify the Stokes mean mass-transport current ū₂.
-   The program solves the wave on a current consistent with the chosen criterion.
+    y' = y - d,        X = k(x-ct),        Y = k y'
 
-4) Robust convergence for steep waves:
-   The program can solve a sequence of increasing heights (“height stepping”)
-   and extrapolate unknowns between steps. This is a standard robustness strategy
-   noted in Fenton (1988, 1999) for near-limiting waves and/or long waves.
+so that the finite-depth bed is Y=-kd and the mean water level is Y=0.  This is
+only a vertical datum shift; it is not a different wave theory.
 
-INPUTS AND OUTPUTS
-------------------
-This build has **one optional input file**:
+STREAM-FUNCTION FORMULATION
+---------------------------
+In the wave frame the free surface is steady.  The nondimensional stream function
+Ψ satisfies Laplace's equation, the bed condition and the nonlinear free-surface
+conditions:
 
-  • data.dat
-      The main run-control file. The attached sample shows the intended format:
+    Ψ_XX + Ψ_YY = 0
+    Ψ(X,-kd) = 0
+    Ψ(X,ζ(X)) = constant
+    1/2(Ψ_X² + Ψ_Y²) + ζ(X) = r*
 
-        Title line             (string)
-        H/d                    (positive => finite depth; negative legacy flag 
-                                => deep water)
-        Case                   ("Wavelength" or "Period")
-        λ/d  OR  T*sqrt(g/d)   (depending on Case)
-        CurrentCriterion       (1 = Eulerian ū1, 2 = Stokes/mass-transport ū2)
-        CurrentValue           (nondimensional: current / sqrt(g d))
-        N                      (number of Fourier components)
-        Steps                  (number of height steps)
+The Fourier basis is chosen so that the field equation and bed/decay condition
+are satisfied analytically.  Newton iteration then solves the nonlinear free-
+surface boundary conditions and the global wave-current constraints.
 
-If **data.dat is absent**, you may run the program in **CLI mode** (see USAGE section
-and the runtime Usage() printout). In CLI mode, the program solves the *finite-depth,
-Period-specified* family (Case="Period") because the inputs provided are H/d and
-T*sqrt(g/d) (Fenton 1999, discussion around Eq. 3.12–3.16).
+FINITE-DEPTH FOURIER BASIS
+--------------------------
+The finite-depth representation uses the stable hyperbolic combination described
+in the README:
 
-IMPORTANT CHANGE: Points.dat EMBEDDED
--------------------------------------
-The original program used a Points.dat file to control the output sampling density
-(surface point count, number of profiles, points per profile).
-**Points.dat is no longer required**: its supplied contents are embedded as constants.
+    S_j(Y) = sinh(jY) + cosh(jY) tanh(jkd)
+    C_j(Y) = cosh(jY) + sinh(jY) tanh(jkd)
 
-IMPORTANT CHANGE: Convergence.dat EMBEDDED
-------------------------------------------
-The original program read a small Convergence.dat file containing:
-  - maximum Newton iterations per height step
-  - convergence tolerance (criterion)
+These are equivalent to sinh[j(Y+kd)]/cosh(jkd) and
+cosh[j(Y+kd)]/cosh(jkd), but are more convenient in the shifted coordinate
+Y=k(y-d).  In the deep-water limit tanh(jkd) -> 1 and both functions approach
+exp(jY).
 
-**Convergence.dat is no longer required**. The values that were previously read from 
-that file are now *embedded in this source* as constants:
+STATE VECTOR AND RESIDUAL SYSTEM
+--------------------------------
+The active legacy state vector is the README/Fenton-style 1-based vector:
 
-    maximum iterations: 50
-    convergence criterion: 1e-9
+    z[1]   = kd
+    z[2]   = kH
+    z[3]   = T sqrt(gk)
+    z[4]   = c sqrt(k/g)
+    z[5]   = Eulerian current u1 sqrt(k/g)
+    z[6]   = Stokes / mass-transport current u2 sqrt(k/g)
+    z[7]   = mean wave-frame speed Ubar sqrt(k/g)
+    z[8]   = q sqrt(k^3/g), with q = Ubar*d - Q
+    z[9]   = Bernoulli offset r k/g
+    z[10..N+10]       = free-surface nodal ordinates ζ_m = kη_m
+    z[N+11..2N+10]    = Fourier coefficients B_j
 
-If you need different convergence behaviour you must edit those constants and
-recompile.
+For Fourier order N the half-wave grid has N+1 collocation nodes
+X_m=mπ/N, m=0..N.  The complete nonlinear system has
 
-FILES WRITTEN
--------------
-The program writes the following result files:
+    8 + (N+1) + (N+1) = 2N + 10
 
-  • solution.res   — summary of integral quantities, derived constants, and Fourier coefficients
-  • surface.res    — free-surface coordinates (trough–crest–trough) and pressure / Bernoulli checks
-  • flowfield.res  — phase-by-phase vertical profiles of velocity, accelerations, and Bernoulli checks
+residual equations.  The first eight impose global height, period/wavelength,
+celerity, current, flux and datum constraints.  The next N+1 equations impose
+the free-surface streamline condition.  The final N+1 equations impose
+Bernoulli's equation on the free surface.
 
-Note: The legacy redundant tabular file “Solution-Flat.res” has been intentionally removed.
+CURRENT CONVENTIONS
+-------------------
+The code distinguishes exactly the two current definitions in the README:
 
-NUMERICAL METHOD SUMMARY (WITH KEY FENTON REFERENCES)
------------------------------------------------------
-Governing equations in the travelling-wave formulation (consistent notation):
+    u1 = c - Ubar              Eulerian current
+    u2 = c - Q/d               Stokes / mass-transport current
+    q  = Ubar*d - Q            wave-volume-flux variable
 
-  • Stationary physical coordinates: (x, y), with bed at y = 0 and mean depth d
-    (mean free surface at y = d).
+The input current criterion selects whether u1 or u2 is prescribed.  The period-
+specified problem is therefore closed by both the observed period and the selected
+current convention.
 
-  • Mean-level vertical coordinate: y' := y - d
-      mean free surface: y' = 0
-      bed:              y' = -d
+OUTPUT FILES
+------------
+The program writes the Fenton-style output files:
 
-  • Travelling horizontal coordinate: ξ := x - c t
+  • solution.res   — integral quantities, dimensionless groups and Fourier coefficients
+  • surface.res    — free-surface ordinates, pressure and Bernoulli checks
+  • flowfield.res  — velocity, acceleration and pressure profiles
 
-  • Non-dimensional solver coordinates (used throughout the nonlinear system):
-      X := k ξ
-      Y := k y'
-      η(X) := k η_phys(ξ)
-    where k := 2π/λ and kd := k d.
-    One wavelength corresponds to X ∈ [0, 2π]. In finite depth, the bed is Y = -kd.
+The legacy redundant flat table is intentionally not written by this build.
 
-Stream-function formulation in the travelling frame:
-
-  • For 2D incompressible flow, a stream function ψ(X,Y) exists such that the
-    *non-dimensional* travelling-frame velocities (Û, V̂) are:
-        Û =  ∂ψ/∂Y,    V̂ = -∂ψ/∂X        (Fenton, 1999, Eq. 3.1)
-    with the usual k-based scaling: velocities ~ √(g/k), ψ ~ √(g/k³).
-
-  • Laplace equation in the fluid:
-        ∂²ψ/∂X² + ∂²ψ/∂Y² = 0            (Fenton, 1999, Eq. 3.1)
-
-  • Boundary conditions (finite depth):
-        ψ(X, -kd)     = 0                (Fenton, 1999, Eq. 3.2)
-        ψ(X,  η(X))   = -q               (Fenton, 1999, Eq. 3.3)
-        ½(ψ_X²+ψ_Y²) + η(X) = R          (Fenton, 1999, Eq. 3.4)
-
-    Deep water is recovered by the kd → ∞ limit, together with decay as Y → -∞.
-
-Fourier/stream-function representation:
-  ψ is expanded in a truncated Fourier series that satisfies Laplace and the
-  bottom/decay condition identically, leaving only the nonlinear free-surface
-  conditions to determine the coefficients (Fenton, 1999, Eq. 3.5; deep-water
-  limit Eq. 3.6).
-
-Collocation and nonlinear solve:
-  The free-surface conditions are enforced at N+1 collocation points over half a
-  wave (crest-to-trough symmetry), producing a nonlinear system. This program
-  solves that system by Newton’s method, with the Jacobian obtained by numerical
-  differencing (Fenton, 1988; see also Fenton, 1999 §3.1.2).
-
-MEAN SQUARE BED ORBITAL VELOCITY (ub2)
---------------------------------------
-This program reports a quantity labelled:
-
-    “Mean square of bed velocity (ub2)”
-
-Here, ub2 is computed by numerical phase-averaging of the near-bed *orbital*
-horizontal velocity, taken relative to the Eulerian mean current ū₁:
-
-    ub2 = ⟨ ( u_bed(t) - ū₁ )² ⟩
-
-For a steady travelling wave, temporal averaging over one period is equivalent to
-spatial averaging over one wavelength; this implementation samples phase uniformly
-in X = k ξ over [0, 2π).
-
-Implementation details:
-  • Sample phase X uniformly over [0, 2π).
-  • At each phase, evaluate the stationary-frame bed velocity u_bed at y = 0.
-  • Subtract ū₁ (Eulerian mean current) to obtain the orbital component.
-  • Square and average over the samples.
-
-Note:
-  Some legacy integral expressions in the original program use an internal
-  auxiliary quantity derived from Bernoulli constants. That internal quantity is
-  preserved for the Sxx/F-related formulas; only the *reported* ub2 quantity is
-  defined as the physically standard mean-square orbital velocity.
+INPUT FILES AND EMBEDDED CONTROLS
+---------------------------------
+The optional input file is data.dat.  If it is absent, the command-line interface
+solves a finite-depth period-specified case.  The historical Points.dat and
+Convergence.dat controls are embedded as constants in this source.
 
 COMPILATION
 -----------
-This is a single C++20 source file.
+Windows / MSYS2 / MinGW:
 
-  Windows (MSYS2/MinGW):
-      g++ -std=c++20 fourier.cpp -o fourier.exe -O2 -static -static-libgcc -static-libstdc++
+    g++ -std=c++20 fourier.cpp -o fourier.exe -O2 -static -static-libgcc -static-libstdc++
 
-  Linux/macOS:
-      g++ -std=c++20 -Wall -Wextra -pedantic fourier.cpp -O2 -o fourier -static-libstdc++ -static-libgcc
+Linux / macOS:
 
-USAGE
------
-Place data.dat in the working directory (or run in CLI mode), then run:
+    g++ -std=c++20 -Wall -Wextra -pedantic fourier.cpp -O2 -o fourier -static-libstdc++ -static-libgcc
 
-    fourier.exe
-
-The data.dat format supports multiple cases terminated by a title line "FINISH"; this build reads the first case only (single-run driver).
-
-LICENSE / ATTRIBUTION NOTES
-----------------------------
-• The hydrodynamic method and most of the mathematical formulation follows the
-  published work of J.D. Fenton and earlier stream-function/Fourier approaches cited
-  within those works (Chappelear, Dean, Chaplin, Rienecker & Fenton, etc.).
-• The linear algebra helper (SVD-based solve) is consistent with the “Numerical Recipes”
-  style routines (dsvdcmp/dsvbksb) included in the supplied source set.
-
-BIBLIOGRAPHY
--------------
-
-  1.  Fenton, J. D. (1999). "Numerical methods for nonlinear waves."
-      in P. L.-F. Liu, ed., Advances in Coastal and Ocean Engineering, Vol. 5,
-      World Scientific, Singapore, pp. 241-324.
-      [Relevance: Review of fully-nonlinear wave computation methods (Fourier,
-      BIE, polynomial approximation).]
-      URL: https://johndfenton.com/Papers/Fenton99Liu-Numerical-methods-for-nonlinear-waves.pdf
-
-  2.  Fenton, J. D. (1999). "The cnoidal theory of water waves."
-      in J. B. Herbich, ed., Developments in Offshore Engineering, Gulf
-      Publishing, Houston, pp. 275-337.
-      [Relevance: Cnoidal-wave theory (finite-depth, long waves) and numerical
-      formulations.]
-      URL: https://johndfenton.com/Papers/Fenton99Cnoidal-The-cnoidal-theory-of-water-waves.pdf
-
-  3.  Fenton, J. D. & Kennedy, A. B. (1996). "Fast methods for computing the
-      shoaling of nonlinear waves."
-      in Proc. 25th Int. Conf. Coastal Engng, Vol. 1, Orlando, pp. 1130-1143.
-      [Relevance: Nonlinear wave propagation/shoaling over varying bathymetry.]
-      URL: https://johndfenton.com/Papers/Fenton96%2BKennedy-Fast-methods-for-computing-the-shoaling-of-nonlinear-waves.pdf
-
-  4.  Fenton, J. D. (1995). "A numerical cnoidal theory for steady water waves."
-      in Proc. 12th Australasian Coastal and Ocean Engng Conference, Melbourne,
-      pp. 175-180.
-      [Relevance: Cnoidal-wave theory (finite-depth, long waves) and numerical
-      formulations.]
-      URL: https://johndfenton.com/Papers/Fenton95-A-numerical-cnoidal-theory-for-steady-water-waves.pdf
-
-  5.  Townsend, M. & Fenton, J. D. (1995). "Numerical comparisons of wave
-      analysis methods."
-      in Proc. 12th Australasian Coastal and Ocean Engng Conference, Melbourne,
-      pp. 169-173.
-      [Relevance: Wave analysis/inversion from pressure measurements;
-      conditioning and method comparison.]
-      URL: https://johndfenton.com/Papers/Townsend95%2BFenton-Numerical-comparisons-of-wave-analysis-methods.pdf
-
-  6.  Kennedy, A. B. & Fenton, J. D. (1995). "Simulation of the propagation of
-      surface gravity waves using local polynomial approximation."
-      in Proc. 12th Australasian Coastal and Ocean Engng Conference, Melbourne,
-      pp. 287-292.
-      [Relevance: Nonlinear wave propagation/shoaling over varying bathymetry.]
-      URL: https://johndfenton.com/Papers/Kennedy95%2BFenton-Simulation-of-the-propagation-of-surface-gravity-waves-using-local-polynomial-approximation.pdf
-
-  7.  Fenton, J. D. (1993). "Simulating wave shoaling with boundary integral
-      equations."
-      in Proc. 11th Australasian Conference on Coastal and Ocean Engng,
-      Townsville, pp. 71-76.
-      [Relevance: Boundary-integral formulation for nonlinear wave
-      transformation (with singularity subtraction).]
-      URL: https://johndfenton.com/Papers/Fenton93-Simulating-wave-shoaling-with-boundary-integral-equations.pdf
-
-  8.  Fenton, J. D. (1990). "Nonlinear wave theories."
-      in B. Le Méhauté & D. M. Hanes, eds, The Sea - Ocean Engineering Science,
-      Part A, Vol. 9, Wiley, New York, pp. 3-25.
-      [Relevance: Survey and selection guidance: Stokes vs cnoidal vs
-      stream-function, etc.]
-      URL: https://johndfenton.com/Papers/Fenton90b-Nonlinear-wave-theories.pdf
-
-  9.  Drennan, W. M., Fenton, J. D. & Donelan, M. A. (1990). "Numerical
-      simulation of nonlinear wave groups."
-      in Proc. 11th Ann. Conf. Canadian Applied Math. Soc., Halifax.
-      [Relevance: Relevant to nonlinear/free-surface wave modelling.]
-      URL: https://johndfenton.com/Papers/Drennan90-Numerical-simulation-of-nonlinear-wave-groups.pdf
-
- 10.  Fenton, J. D. & McKee, W. D. (1990). "On calculating the lengths of water
-      waves."
-      Coastal Engineering 14, 499-513.
-      [Relevance: Wavelength determination for nonlinear waves in finite depth.]
-      URL: https://johndfenton.com/Papers/Fenton90c%2BMcKee-On-calculating-the-lengths-of-water-waves.pdf
-
- 11.  Fenton, J. D. (1988). "The numerical solution of steady water wave
-      problems."
-      Computers and Geosciences 14, 357-368.
-      [Relevance: Core stream-function/Fourier algorithm for steady, periodic
-      nonlinear waves.]
-      URL: https://johndfenton.com/Papers/Fenton88-The-numerical-solution-of-steady-water-wave-problems.pdf
-
- 12.  Fenton, J. D. (1986). "Polynomial approximation and water waves."
-      in Proc. 20th Int. Conf. Coastal Engng, Vol. 1, Taipei, pp. 193-207.
-      [Relevance: Relevant to nonlinear/free-surface wave modelling.]
-      URL: https://johndfenton.com/Papers/Fenton86-Polynomial-approximation-and-water-waves.pdf
-
- 13.  Fenton, J. D. (1985). "A fifth-order Stokes theory for steady waves."
-      J. Waterway Port Coastal and Ocean Engng 111 , 216-234.
-      [Relevance: Closed-form Stokes expansion (5th order) for steady waves in
-      finite depth.]
-      URL: https://johndfenton.com/Papers/Fenton85d-A-fifth-order-Stokes-theory-for-steady-waves.pdf
-
- 14.  Fenton, J. D. (1983). "On the application of steady wave theories."
-      in Proc. 6th Australasian Conf. Coastal and Ocean Engng, Christchurch,
-      pp. 65-70.
-      [Relevance: Guidance on applicability/limits of steady-wave theories in
-      engineering.]
-      URL: https://johndfenton.com/Papers/Fenton83-On-the-application-of-steady-wave-theories.pdf
-
- 15.  Fenton, J. D. & Rienecker, M. M. (1982). "A Fourier method for solving
-      nonlinear water wave problems."
-      J. Fluid Mechanics 118, 411-443.
-      [Relevance: Fourier-series method for solving fully nonlinear steady water
-      waves.]
-      URL: https://johndfenton.com/Papers/Fenton82c%2BRienecker-A-Fourier-method-for-solving-nonlinear-water-wave-problems.pdf
-
- 16.  Schwartz, L. W. & Fenton, J. D. (1982). "Strongly-nonlinear waves."
-      in M. Van Dyke, J. V. Wehausen & J. L. Lumley, eds, Ann. Rev. Fluid Mech.
-      14 , 39-60.
-      [Relevance: Fundamental properties/approximations for strongly nonlinear
-      wave motion.]
-      URL: https://johndfenton.com/Papers/Schwartz82-Strongly-nonlinear-waves.pdf
-
- 17.  Rienecker, M. M. & Fenton, J. D. (1981). "A Fourier approximation method
-      for steady water waves."
-      J. Fluid Mechanics 104, 119-137.
-      [Relevance: Fourier-series method for solving fully nonlinear steady water
-      waves.]
-      URL: https://johndfenton.com/Papers/Rienecker81%2BFenton-A-Fourier-approximation-method-for-steady-water-waves.pdf
-
- 18.  Fenton, J. D. & Rienecker, M. M. (1980). "Accurate numerical solutions for
-      nonlinear waves."
-      in Proc. 17th Int. Conf. Coastal Engng, Sydney, pp. 50-69.
-      [Relevance: Benchmark accurate numerical solutions for nonlinear wave
-      profiles/kinematics.]
-      URL: https://johndfenton.com/Papers/Fenton80%2BRienecker-Accurate-numerical-solutions-for-nonlinear-waves.pdf
-
- 19.  Fenton, J. D. (1979). "A high-order cnoidal wave theory."
-      J. Fluid Mechanics 94, 129-161.
-      [Relevance: Cnoidal-wave theory (finite-depth, long waves) and numerical
-      formulations.]
-      URL: https://johndfenton.com/Papers/Fenton79-A-high-order-cnoidal-wave-theory.pdf
-
- 20.  Fenton, J. D. & Mills, D. A. (1976). "Shoaling waves: numerical solution of
-      exact equations."
-      in D. G. Provis & R. Radok, eds, Proc. IUTAM Symposium on Waves on
-      Water of Variable Depth, Canberra, Springer-Verlag, pp. 93-100.
-      [Relevance: Nonlinear wave propagation/shoaling over varying bathymetry.]
-      URL: https://johndfenton.com/Papers/Fenton76%2BMills-Shoaling-waves-Numerical-solution-of-exact-equations.pdf
-
- 21.  Fenton, J. D. (1972). "A ninth-order solution for the solitary wave."
-      J. Fluid Mechanics 53, 257-271.
-      [Relevance: High-order analytic/series solution for solitary waves.]
-      URL: https://johndfenton.com/Papers/Fenton72-A-ninth-order-solution-for-the-solitary-wave.pdf
-
+ATTRIBUTION
+-----------
+The hydrodynamic method follows J. D. Fenton's stream-function / Fourier
+formulation and the Rienecker-Fenton numerical-wave tradition.  The dense SVD
+linear solve follows the Numerical Recipes style used by the historical source
+set.
 ================================================================================
 */
 
@@ -480,42 +271,48 @@ they enforce dimensional consistency between the two nondimensional systems.
 3) UNKNOWN VECTOR z[] AND RESIDUAL VECTOR rhs[] (LEGACY INDEXING)
 -------------------------------------------------------------------------------
 
-This solver uses Numerical-Recipes style 1-based arrays. The unknown vector z[]
-therefore starts at index 1.
-
-Scalar unknowns (indices 1..9) represent global wave parameters.
-Vector unknowns represent:
-  - collocated free-surface elevations (kη at N+1 points)
-  - Fourier coefficients for the streamfunction/potential series
+This solver uses Numerical-Recipes style 1-based arrays. The active state vector
+is the README/Fenton vector z[1..2N+10].  Index 0 is unused.
 
 A convenient mental model is:
 
-  z = [ global scalars | surface elevations | Fourier coefficients ]
+  z = [ global scalars | surface ordinates | Fourier coefficients ]
 
-More precisely (see Eqns() for enforcement):
+The physical correspondence is:
 
-  z[1]   : kd        finite depth kd, in deep water a dummy normalisation (=1)
-  z[2]   : kH        wave height in k-based scaling
-  z[3]   : kc / ω    period parameter used by the legacy code (ties to τ and dispersion)
-  z[4]   : c √(k/g)  wave speed parameter in k-based scaling
-  z[5]   : u1 √(k/g) Eulerian mean current in k-based scaling
-  z[6]   : u2 √(k/g) Stokes/mass-transport current in k-based scaling
-  z[7]   : U √(k/g)  mean fluid speed in the moving frame (k-based)
-  z[8]   : (Ū*kd-q)  auxiliary streamline-constant combination (k-based)
-  z[9]   : r         Bernoulli constant in k-based scaling
+  z[1]   : kd                         dimensionless water depth
+  z[2]   : kH                         dimensionless wave height
+  z[3]   : T√(gk)                     k-based dimensionless apparent period
+  z[4]   : c√(k/g)                    k-based wave celerity
+  z[5]   : u1√(k/g)                   Eulerian current
+  z[6]   : u2√(k/g)                   Stokes / mass-transport current
+  z[7]   : Ubar√(k/g)                 mean wave-frame speed
+  z[8]   : q√(k^3/g), q=Ubar*d-Q      wave-volume-flux variable
+  z[9]   : r k/g                      Bernoulli offset
 
-  z[10 + m],  m=0..N  : collocated kη_m values at free-surface collocation points
-                        over half a wave (crest to trough). The collocation phases
-                        are X_m = m π / N (implied by the cosine/sine tables).
+  z[10 + m],  m=0..N:
+      ζ_m = kη_m, free-surface nodal ordinate at X_m=mπ/N.
 
-  z[n + 10 + j], j=1..N : B_j coefficients in the Fourier/stream-function series.
+  z[n + 10 + j], j=1..N:
+      B_j, stream-function Fourier coefficient.
 
-Residual vector rhs[] is organised in the same overall order:
-  rhs[1..8]            : global closure equations (height, period/length, current, mean level)
-  rhs[9..9+N]          : free-surface streamfunction (kinematic) BC at each collocation point
-  rhs[n+10..n+10+N]    : free-surface Bernoulli (dynamic) BC at each collocation point
+The residual vector rhs[] has the README size and ordering:
 
-The Newton solver drives rhs → 0.
+  rhs[1..8]
+      global height, period/wavelength, celerity, current, flux and datum
+      constraints;
+
+  rhs[9..9+N]
+      free-surface streamline / kinematic collocation residuals;
+
+  rhs[n+10..n+10+N]
+      free-surface Bernoulli / dynamic collocation residuals.
+
+For Fourier order N the system size is:
+
+  8 + (N+1) + (N+1) = 2N + 10.
+
+The Newton solver drives every component of rhs[] to zero.
 
 -------------------------------------------------------------------------------
 4) COLLOCATION GRIDS AND TRIGONOMETRIC TABLES (cosa[], sina[])
@@ -566,259 +363,143 @@ If you modify/extend this file later:
 
 /*
 ================================================================================
-FENTON STEADY NONLINEAR WAVE THEORY (STREAM-FUNCTION / FOURIER-APPROXIMATION)
+FENTON STEADY NONLINEAR WAVE THEORY (STREAM-FUNCTION / FOURIER-COLLOCATION)
 ================================================================================
 
-This section documents the hydrodynamic model and the mapping from the published
-Fenton formulation to the variables and nonlinear algebraic system solved here.
-
-The goal is to make the "wave theory" content explicit enough that:
-  • the governing equations can be audited line-by-line against the implementation,
-  • sign conventions and reference frames are unambiguous,
-  • future maintenance does not accidentally corrupt the mathematical model.
+This section maps the README formulation to the variables and equations in this
+legacy single-file solver.  The code body uses historical variable names and
+1-based arrays, but the mathematical problem is the same nonlinear free-boundary
+problem described in the README.
 
 ------------------------------------------------------------------------------
-A) PHYSICAL MODEL AND SCOPE
+A) PHYSICAL MODEL AND TRAVELLING-WAVE FORMULATION
 ------------------------------------------------------------------------------
 
-The wave is modelled as a *two-dimensional*, *inviscid*, *incompressible*,
-*irrotational* gravity wave of permanent form, propagating over a horizontal bed.
+The physical model is a steady progressive gravity wave of permanent form in a
+homogeneous inviscid fluid.  The flow is incompressible and irrotational, so a
+velocity potential and a stream function exist and both satisfy Laplace's
+equation in the fluid domain.
 
-Assumptions:
-  1. Two-dimensional flow (no spanwise variation).
-  2. Incompressibility: ∇·u = 0.
-  3. Irrotationality: ∇×u = 0, so a velocity potential φ exists (u = ∇φ).
-  4. No viscosity, no turbulence closure, no wave breaking.
-  5. Free surface is at atmospheric pressure; surface tension is neglected.
-  6. Strict periodicity with wavelength λ and period τ.
+The fixed-frame wave has period T, wavelength L, wavenumber k=2π/L and celerity
+c=L/T.  The travelling coordinate is ξ=x-ct.  In the wave frame the free surface
+is steady and all unknowns are periodic in X=kξ.
 
-Under these assumptions, the "steady travelling wave" problem is a classical
-nonlinear boundary-value problem that possesses a two-parameter family of
-solutions. Practical input cases fix two independent parameters among:
-  { H/d, λ/d, τ√(g/d), current specification }.
+The README uses y=0 at still-water level and y=-d at the bed.  This source uses
+a bed-based physical coordinate y for output, then shifts to y'=y-d.  Therefore:
 
-------------------------------------------------------------------------------
-B) FRAMES OF REFERENCE AND SOLVER COORDINATES
-------------------------------------------------------------------------------
+    README datum:       bed=-d, mean level=0
+    this source output: bed=0,  mean level=d
+    internal solver:    Y=k(y-d), so bed=-kd and mean level=0
 
-Three coordinate descriptions are used. Keeping them distinct is essential for
-sign conventions, current definitions, and interpreting output:
-
-  (x, y)   Stationary (laboratory/Earth) coordinates
-           x positive in the propagation direction; y positive upward.
-           Finite depth convention in this program: bed at y = 0, mean depth d
-           (mean free surface at y = d).
-
-  (ξ, y')  Travelling / mean-level coordinates
-           ξ := x - c t      (steady in ξ for a permanent-form wave)
-           y' := y - d       (mean free surface at y' = 0; bed at y' = -d)
-
-  (X, Y)   Non-dimensional travelling coordinates used by the algebraic system
-           X := k ξ
-           Y := k y'
-           with k := 2π/λ and kd := k d.
-
-Unless explicitly stated otherwise, this theory section uses (X, Y) in the last,
-non-dimensional sense above.
-
-Velocities:
-  Stationary-frame velocities are (u, v).
-  Travelling-frame velocities are (U, V) with:
-      U = u - c
-      V = v
-
-After convergence, stationary-frame time-derivatives are obtained using the
-steady-wave identity in the travelling coordinate:
-    ∂/∂t = -c ∂/∂x  (equivalently, ∂/∂t = -c ∂/∂ξ).
+Only the datum changes.  The nondimensional ordinate stored in z[10+m] is the
+same ζ_m=kη_m used in the README.
 
 ------------------------------------------------------------------------------
-C) STREAM FUNCTION AND POTENTIAL (2D IRROTATIONAL FLOW)
+B) STREAM FUNCTION, VELOCITIES AND BOUNDARY CONDITIONS
 ------------------------------------------------------------------------------
 
-In 2D incompressible flow a stream function ψ exists such that, in the k-based
-non-dimensionalisation (X,Y) and with velocities scaled by √(g/k):
+In k-based nondimensional wave-frame variables the stream function Ψ satisfies:
 
-    Û =  ∂ψ/∂Y
-    V̂ = -∂ψ/∂X
+    Ψ_XX + Ψ_YY = 0
 
-Irrotationality implies ψ is harmonic:
-    ∂²ψ/∂X² + ∂²ψ/∂Y² = 0
+and the wave-frame velocities are:
 
-A velocity potential φ exists as well:
-    Û = ∂φ/∂X
-    V̂ = ∂φ/∂Y
+    Uhat =  Ψ_Y
+    Vhat = -Ψ_X
 
-In 2D potential flow, φ and ψ are harmonic conjugates (Cauchy–Riemann):
-    φ_X =  ψ_Y
-    φ_Y = -ψ_X
+The finite-depth bed is a streamline:
 
-Implementation note:
-  The Fourier representation exploits this conjugacy: ψ is represented with cosine
-  modes in X, and the corresponding potential uses sine modes (and vice-versa).
+    Ψ(X,-kd) = 0
 
-------------------------------------------------------------------------------
-D) BOUNDARY CONDITIONS (STEADY TRAVELLING WAVE)
-------------------------------------------------------------------------------
+The free surface is also a streamline, and Bernoulli's equation is constant along
+it:
 
-Let the free surface be Y = η(X) in the non-dimensional travelling coordinates.
+    Ψ(X,ζ(X)) = constant
+    1/2(Ψ_X² + Ψ_Y²) + ζ(X) = r*
 
-Finite depth:
-  Bed is at Y = -kd and is impermeable. In stream-function form this is equivalent
-  to the bed being a streamline; the constant is chosen as:
-      ψ(X, -kd) = 0
+The constant-streamline form used by the code is algebraically rearranged through
+z[7] and z[8].  At each collocation node it is assembled as:
 
-Deep water:
-  There is no bed; instead the Fourier representation is required to decay as
-  Y → -∞ (the kd → ∞ limit of the finite-depth basis).
+    ψ_Fourier(X_m,ζ_m) - z[8] - z[7] ζ_m = 0
 
-Free-surface kinematic condition (streamline condition):
-  In the travelling frame the free surface is steady and must coincide with a
-  streamline:
-      ψ(X, η(X)) = constant = -q
+where z[8]=q√(k^3/g) and q=Ubar*d-Q.  This is the README residual
+R_m^(ψ)=0 written in the legacy variable layout.
 
-Free-surface dynamic condition (Bernoulli, p = 0 on the surface):
-  In the same k-based non-dimensionalisation, Bernoulli reduces to:
-      ½( ψ_X² + ψ_Y² ) + η(X) = R
+The Bernoulli residual is assembled as:
 
-Here q and R are global constants to be solved for (their dimensional counterparts
-are recovered by the k-based scaling).
+    1/2[(-z[7]+u_m)^2 + v_m^2] + ζ_m - z[9] = 0
 
-The nonlinear solve finds η(X), the Fourier coefficients, and the global constants
-that satisfy these conditions (together with the selected current criterion).
+where u_m and v_m are the Fourier perturbation velocity sums at the free surface.
 
 ------------------------------------------------------------------------------
-E) FOURIER-APPROXIMATION / STREAM-FUNCTION REPRESENTATION
+C) FOURIER BASIS
 ------------------------------------------------------------------------------
 
-Fenton's Fourier approximation constructs a spectral representation that:
-  • satisfies Laplace's equation exactly,
-  • satisfies the bottom condition exactly,
-  • leaves only the nonlinear free-surface conditions to be enforced by collocation.
+The finite-depth Fourier representation satisfies Laplace's equation and the bed
+condition before the nonlinear equations are assembled.  In the shifted coordinate
+Y=k(y-d), the stable basis functions are:
 
-In the common bed-based vertical coordinate (bed at y=0, mean depth d), a typical
-finite-depth representation is:
+    S_j(Y) = sinh(jY) + cosh(jY)tanh(jkd)
+    C_j(Y) = cosh(jY) + sinh(jY)tanh(jkd)
 
-  ψ(ξ,y) = -Ū y + Σ{j=1..N} B_j * sinh(j k y) / cosh(j k d) * cos(j k ξ)
-
-  where ξ := x - c t is the travelling horizontal coordinate. In non-dimensional
-  variables X = k ξ, the phase dependence is simply cos(jX).
-
-where:
-  • k = 2π/λ is the wavenumber,
-  • Ū is the mean horizontal speed on any horizontal line in the travelling frame,
-  • B_j are Fourier coefficients,
-  • N is the truncation order.
-
-This form automatically enforces ψ=0 on the bed (y=0) because sinh(0)=0.
-
----- Vertical coordinate shift used here --------------------------------------
-
-This code works with the shifted solver coordinate (mean-surface origin):
-  Y  = k (y - d)
-
-so:
-  mean surface: y=d   -> Y  = 0
-  bed:          y=0   -> Y  = -kd, where kd = k d
-
-Using the identity:
-  sinh(jk y)/cosh(jk d) = sinh(j(Y+kd))/cosh(jkd)
-                        = sinh(jY) + cosh(jY) tanh(jkd)
-
-the finite-depth basis becomes exactly the combination used in Eqns() and Point():
-
-  S_j(Y) = sinh(jY) + cosh(jY) tanh(jkd)
-
-Deep-water limit:
-  as kd → ∞, tanh(jkd) → 1 and S_j(Y) → exp(jY), giving the exponential basis
-  used in the "Deep" branches.
-
----- Separation of the uniform-flow term -------------------------------------
-
-The uniform-flow term (-Ū y) is not embedded inside the Fourier sums in this code.
-Instead, its contributions appear explicitly:
-  • in the streamline boundary condition (through z[7] and z[8]),
-  • in the Bernoulli kinetic term (through the subtraction -z[7]).
-
-This keeps the harmonic sums focused on the non-uniform wave-induced structure.
+The code evaluates ψ, Ψ_Y and -Ψ_X from these S_j and C_j combinations.  In deep
+water tanh(jkd)->1, so S_j and C_j reduce to exp(jY), matching the README's
+kd->∞ limit.
 
 ------------------------------------------------------------------------------
-F) CURRENT DEFINITIONS: EULERIAN ū₁ VS MASS-TRANSPORT ū₂
+D) CURRENT DEFINITIONS
 ------------------------------------------------------------------------------
 
-With current, "mean current" and "wave speed" depend on how averaging and
-reference frames are defined.
+The current convention is not a post-processing correction.  It closes a different
+nonlinear problem.  The two Fenton current definitions are:
 
-Depth-averaged mean velocities in the *stationary* frame:
-  ū₁ : Eulerian mean current (time mean at a point, then depth-averaged)
-  ū₂ : mass-transport (Stokes) mean current tied to net discharge
+    u1 = c - Ubar        Eulerian current
+    u2 = c - Q/d         Stokes / mass-transport current
+    q  = Ubar*d - Q      wave-volume-flux variable
 
-Travelling-frame mean speed Ū is related to ū₁ by:
-  ū₁ = c - Ū
+The corresponding residuals in this source are:
 
-Net discharge Q relates to ū₂ by:
-  ū₂ = c - Q/d
+    rhs[4] = z[5] + z[7] - z[4]
+    rhs[5] = z[1]*(z[6] + z[7] - z[4]) - z[8]
+    rhs[6] = selected-current variable - specified current
 
-These relationships are enforced by the global residual equations:
-  rhs[4] : z[5] + z[7] - z[4] = 0
-  rhs[5] : z[1]*(z[6] + z[7] - z[4]) - z[8] = 0
-
-Interpretation of variables in k-based scaling:
-  z[4] = c √(k/g)
-  z[5] = ū₁ √(k/g)
-  z[6] = ū₂ √(k/g)
-  z[7] = Ū √(k/g)
-
-The period-specified family is closed by prescribing ū₁/√(gd) or ū₂/√(gd)
-(CurrentCriterion selects which). rhs[6] implements that closure.
+The selected current criterion determines whether z[5] or z[6] is prescribed by
+the input current value.
 
 ------------------------------------------------------------------------------
-G) COLLOCATION SYSTEM AND WHY ONLY HALF A WAVE IS SOLVED
+E) COLLOCATION AND NONLINEAR SYSTEM SIZE
 ------------------------------------------------------------------------------
 
-The solver exploits the symmetry of a periodic wave about crest and trough.
-It solves on X ∈ [0, π] (crest to trough), using collocation nodes:
+The half-wave collocation grid is:
 
-  X_m = m π / N,   m = 0..N
+    X_m = mπ/N,    m=0,1,...,N
 
-This is sufficient because the fields repeat with period 2π in X, and the chosen
-Fourier structure (cosine/sine) enforces the correct parity of η, ψ, and φ.
+Symmetry about crest and trough makes this half-wave grid sufficient.  For order
+N the unknowns are:
 
-Unknowns:
-  • global scalars (kd, kH, period/celerity, current/discharge constants, R),
-  • N+1 nodal surface elevations kη_m,
-  • N Fourier coefficients B_j.
+    9 global scalars + (N+1) surface ordinates + N Fourier coefficients
+    = 2N + 10 active entries.
 
-Equations:
-  • 2(N+1) collocation equations (streamline + Bernoulli on the surface),
-  • additional global closure equations (height, mean level, current, scalings),
-giving a square nonlinear system of size num = 2N + 10.
+The residuals are:
+
+    8 global equations + (N+1) streamline equations + (N+1) Bernoulli equations
+    = 2N + 10 equations.
+
+Thus the implemented Fenton system is square and uses the same active state-vector
+meaning as described in the README.
 
 ------------------------------------------------------------------------------
-H) HOW THE IMPLEMENTATION USES THE THEORY
+F) POST-PROCESSING
 ------------------------------------------------------------------------------
 
-At each collocation point:
-  • ψ_Fourier(X_m, kη_m) is evaluated from the truncated series.
-  • ũ = ∂ψ_Fourier/∂Y and ṽ = -∂ψ_Fourier/∂X are evaluated.
+After Newton convergence the code transforms the nodal ζ_m values into cosine
+surface coefficients Y[j] for smooth evaluation.  Point() then evaluates local
+stationary-frame velocity, pressure and acceleration by combining the solved
+Fourier coefficients with the steady-wave identity ∂/∂t=-c∂/∂x.
 
-These represent deviations from the Eulerian current. The travelling-frame
-relative velocity is:
-  u - c = (ū₁ + ũ) - (ū₁ + Ū) = ũ - Ū
-so the Bernoulli kinetic term uses (ũ - Ū)² + ṽ², exactly as coded via
-(-z[7] + u)² + v².
-
-The streamline condition on the free surface in shifted coordinates can be written:
-  ψ_Fourier(X, kη) = Ū (kd + kη) - q
-where q is a discharge constant in the solver’s k-based scaling. The legacy scalar
-z[8] stores the combination (Ū*kd - q), so the residual is assembled as:
-  psi - z[8] - z[7]*(kη) = 0.
-
-After convergence:
-  • the nodal kη_m values are converted to cosine-series coefficients for smooth
-    evaluation of η(X),
-  • Point() evaluates kinematics/pressure throughout the field, converting between
-    k-based and depth-based nondimensionalisations and applying steady-wave
-    relations to obtain accelerations.
+Integral quantities are reported in both k-based and depth-based scalings where
+finite depth is available, matching the dual nondimensional interpretation in the
+README and in Fenton's SOLUTION.RES-style output.
 
 ================================================================================
 */
@@ -1025,8 +706,8 @@ Key scalars used across routines:
 
   * Q, q
       Flux-related quantities:
-        Q  = depth-integrated discharge in the moving frame (depth-based)
-        q  = auxiliary/legacy flux variable used by the original formulation
+        Q  = depth-integrated discharge in the moving frame
+        q  = Ubar*d - Q, the wave-volume-flux variable used in z[8]
 
   * R, r
       Bernoulli constants (depth-based and k-based variants)
@@ -1562,13 +1243,11 @@ static void init()
     iff(Case, Period) {
       sigma = 2. * pi * std::sqrt(height / Hoverd);
 
-      // Carvalho (2006) GEP-evolved approximation:
-      //   kd ≈ α / tanh( (6⁄5)ᵅ · α¹ᐟ² )
-      //
-      // In this code:
-      //   α = σ² = (ω² d / g)  and  α = (kd) tanh(kd)
-      //   σ = 2π / τ, with τ = T√(g/d) (dimensionless period input)
-      //   α = σ²
+      // Period-input kd initialization only.
+      // The final wavelength is not obtained from linear Airy theory; Newton's
+      // method solves the full Fenton residual system.  This approximation only
+      // supplies a finite-depth starting value for kd from the depth-based
+      // frequency parameter alpha=sigma^2, where sigma=2π/[T√(g/d)].
 
       const double alpha = sigma * sigma;
       if (alpha <= 0.0) {
@@ -1717,21 +1396,21 @@ static void init()
  * Unknown vector layout (legacy indexing, matching Fenton-style program listings):
  * z[1]   : kd        finite depth kd, in deep water a dummy normalisation (=1)
  * z[2]   : kH        wave height in k-based scaling
- * z[3]   : kc / ω    period parameter used by the legacy code (ties to τ and dispersion)
+ * z[3]   : T√(gk)    k-based dimensionless apparent period
  * z[4]   : c √(k/g)  wave speed parameter in k-based scaling
  * z[5]   : u1 √(k/g) Eulerian mean current in k-based scaling
  * z[6]   : u2 √(k/g) Stokes/mass-transport current in k-based scaling
  * z[7]   : U √(k/g)  mean fluid speed in the moving frame (k-based)
- * z[8]   : (Ū*kd-q)  auxiliary streamline-constant combination (k-based)
- * z[9]   : r         Bernoulli constant in k-based scaling
+ * z[8]   : q√(k^3/g) wave-volume-flux variable, q = Ubar*d - Q
+ * z[9]   : r k/g     Bernoulli offset in k-based scaling
  *   z[10+m], m=0..N  = kη_m surface elevations at collocation points
  *   z[n+10+j], j=1..N = B_j Fourier coefficients in ψ expansion (Fenton 1999 Eq. 3.5)
  *
- * The core of this routine enforces the two free-surface boundary conditions
- * at N+1 collocation points over half a wave (crest-to-trough):
+ * The core of this routine enforces the two README free-surface residual
+ * blocks at N+1 collocation points over half a wave (crest-to-trough):
  *
- *   (1) ψ(X, η(X)) = -Q          (Fenton 1999 Eq. 3.3 / 3.7)
- *   (2) ½(ψ_X² + ψ_Y²) + η = R   (Fenton 1999 Eq. 3.4 / 3.8)
+ *   (1) ψ_Fourier(X_m,ζ_m) - z[8] - z[7]ζ_m = 0
+ *   (2) ½[(-z[7]+u_m)^2 + v_m^2] + ζ_m - z[9] = 0
  *
  * A Newton solver (see Newton()) drives rhs[] → 0.
  *
@@ -1762,13 +1441,13 @@ static double Eqns(double *rhs)
       For each collocation point m = 0..N:
 
         rhs[9 + m]          : streamfunction BC on free surface (kinematic):
-                              ψ(X_m, η_m) + Q = 0  (in program variables)
+                              ψ_Fourier(X_m,ζ_m) - z[8] - z[7]ζ_m = 0
 
         rhs[(N+10) + m]     : Bernoulli BC on free surface (dynamic):
-                              ½(U^2+V^2) + η_m - r = 0  (in program variables)
+                              ½[(-z[7]+u_m)^2 + v_m^2] + ζ_m - z[9] = 0
 
-    This organisation matches the original driver and is relied upon by Newton()
-    when forming the Jacobian and updating z[].
+    This organisation matches the README state-vector/residual layout and is
+    relied upon by Newton() when forming the Jacobian and updating z[].
 
     ---------------------------------------------------------------------------
   */
@@ -1783,17 +1462,18 @@ static double Eqns(double *rhs)
     These residual components implement the additional equations needed to close
     the steady-wave system beyond the 2(N+1) free-surface collocation equations.
 
-    Fenton (1999) counts 2N+5 unknowns for the canonical formulation (Eq. 3.7–3.11
-    plus Eq. 3.15/3.16 variants). This legacy driver uses a slightly expanded
-    unknown set (2N+10 entries in z[]) for convenience and historical reasons,
-    but the constraints map directly to the same physical requirements:
+    The README/Fenton-style active system has 2N+10 equations:
 
-      - known H/d (relative height),
-      - known λ/d (wavelength case) OR known τ*sqrt(g/d) and current (period case),
-      - chosen definition of mean current (Eulerian ū1 or Stokes ū2),
-      - consistency relations between the various nondimensional groups.
+      - prescribed H/d or H/L through the continuation height,
+      - specified wavelength or specified apparent period,
+      - celerity-period consistency,
+      - Eulerian and Stokes-current definitions,
+      - selected current closure,
+      - mean-level convention,
+      - crest-to-trough height definition,
+      - streamline and Bernoulli conditions at N+1 collocation nodes.
 
-    See Fenton (1999) §3.1.2 and equations (3.9)–(3.16).
+    These equations define the nonlinear free-boundary wave solution.
   */
 
   // rhs[1]: enforce kH = kd*(H/d) in finite depth.
@@ -2046,7 +1726,7 @@ static double Newton(int count)
   for (i = 1; i <= num; i++) z[i] += x[i];
 
   /*
-    CONVERGENCE METRIC USED BY THE LEGACY DRIVER
+    CONVERGENCE METRIC USED BY THE FENTON DRIVER
     --------------------------------------------
     The original program monitored convergence primarily via the mean absolute
     correction to the *free-surface* degrees of freedom (kη_m). Those are stored
