@@ -1,16 +1,59 @@
 # ==============================================================================
 #  function.py
 #  ------------------------------------------------------------------------------
-#  Standalone + importable wavelength calculator using the same solver core as
-#  fenton_gui.py (Fenton stream-function / Fourier method, finite depth, period
-#  input, Eulerian current criterion).
+#  Standalone and importable wavelength calculator for steady nonlinear waves.
 #
-#  External API (for other programs):
-#      import fenton   # rename this file to fenton.py, or import via your package
-#      L = fenton.L(H, T, d, U)
+#  Method:
+#      Stream-function / Fourier collocation method for steady, two-dimensional,
+#      finite-amplitude gravity waves in finite water depth.
+#
+#  Public API:
+#      L = L_wave(H, T, d, U)
+#      L = L(H, T, d, U)
+#
+#  Inputs:
+#      H : wave height [m], crest to trough
+#      T : apparent fixed-frame wave period [s]
+#      d : still-water depth [m]
+#      U : Eulerian collinear current [m/s], positive with wave propagation
+#
+#  Output:
+#      L : dynamically consistent wavelength [m]
+#
+#  Solver formulation:
+#      The calculation uses the Fenton/Rienecker-Fenton stream-function system
+#      with a 1-based nonlinear state vector z[1..2N+10].  Index 0 is unused.
+#      For the production Fourier order N=50, the active system has 110 unknowns
+#      and 110 residual equations.
+#
+#      z[1]  = kd
+#      z[2]  = kH
+#      z[3]  = T sqrt(gk)
+#      z[4]  = c sqrt(k/g)
+#      z[5]  = Eulerian current variable ubar_1 sqrt(k/g)
+#      z[6]  = Stokes / mass-transport current variable ubar_2 sqrt(k/g)
+#      z[7]  = mean wave-frame velocity Ubar sqrt(k/g)
+#      z[8]  = q sqrt(k^3/g), with q = Ubar d - Q
+#      z[9]  = r k/g, with r = R - g d
+#      z[10] ... z[N+10]    = free-surface ordinates zeta_m = k eta_m
+#      z[N+11] ... z[2N+10] = Fourier coefficients B_j
+#
+#  Residual structure:
+#      r1 = z2 - z1(H/d)
+#      r2 = z2 - Hs z3^2
+#      r3 = z4 z3 - 2*pi
+#      r4 = z5 + z7 - z4
+#      r5 = z1(z6 + z7 - z4) - z8
+#      r6 = z[c+4] - U sqrt(z1)
+#      r7 = z10 + z[N+10] + 2 sum_{i=1..N-1} z[10+i]
+#      r8 = z10 - z[N+10] - z2
+#
+#      For each collocation node m = 0..N:
+#          r[9+m]      = psi_m - z8 - z7 z[10+m]
+#          r[N+10+m]   = 0.5*((-z7 + u_m)^2 + v_m^2) + z[10+m] - z9
 #
 #  CLI usage:
-#      python function.py                 # interactive prompts (defaults: 3, 9, 5, 1)
+#      python function.py                 # interactive prompts
 #      python function.py H T d U         # prints wavelength to console
 # ==============================================================================
 
@@ -52,12 +95,12 @@ except Exception:  # pragma: no cover
         return _wrap
 
 # ==============================================================================
-#  GLOBAL CONSTANTS (matched to fenton_gui.py)
+#  GLOBAL CONSTANTS AND SOLVER CONFIGURATION
 # ==============================================================================
 G_STD = 9.80665         # Standard Gravity [m/s^2]
 RHO = 1025.0          # Density of Seawater [kg/m^3]
 DTYPE = np.float64      # Precision for floating point arithmetic
-N_FOURIER = 50          # Order of Fourier Series (N=50)
+N_FOURIER = 50          # Fourier order N for the N+1 half-wave collocation nodes
 
 warnings.filterwarnings("ignore")
 
@@ -92,45 +135,45 @@ def _eqns_numba(
     Current,
     Current_criterion,
 ):
-    """Numba implementation of Eqns() (finite depth, Period case) with 1-based indexing."""
+    """Numba implementation of the finite-depth period residuals F(z)."""
     pi = np.pi
 
-    # Eqn 1
+    # r1: prescribed relative height, z2 = z1*(H/d)
     rhs[1] = z[2] - z[1] * Hoverd
 
-    # Eqn 2 (Period case)
+    # r2: period-input height relation, z2 = Hs*z3^2
     rhs[2] = z[2] - height * z[3] * z[3]
 
-    # Eqn 3
+    # r3: apparent-period/celerity relation, z4*z3 = 2*pi
     rhs[3] = z[4] * z[3] - 2.0 * pi
 
-    # Eqn 4
+    # r4: Eulerian current identity, ubar_1 = c - Ubar
     rhs[4] = z[5] + z[7] - z[4]
 
-    # Eqn 5
+    # r5: Stokes-current / flux identity, q = Ubar*d - Q
     rhs[5] = z[1] * (z[6] + z[7] - z[4]) - z[8]
 
-    # coeff and tanh tables
+    # Fourier coefficients B_j and tanh(jkd) table for S_j and C_j
     kd = z[1]
     for i in range(1, n + 1):
         coeff[i] = z[n + i + 10]
         Tanh[i] = np.tanh(i * kd)
 
-    # Eqn 6 (finite depth; correction uses sqrt(z[1]))
+    # r6: selected-current closure, z[c+4] = U*sqrt(kd)
     rhs[6] = z[Current_criterion + 4] - Current * np.sqrt(kd)
 
-    # Eqn 7 (mean free surface level; scaling constant irrelevant)
+    # r7: mean-level convention over the half-wave collocation ordinates
     rhs7 = z[10] + z[n + 10]
     for i in range(1, n):
         rhs7 += 2.0 * z[10 + i]
     rhs[7] = rhs7
 
-    # Eqn 8 (wave height definition)
+    # r8: crest-to-trough height definition, z10 - z[N+10] = z2
     rhs[8] = z[10] - z[n + 10] - z[2]
 
-    # Eqns 9..(n+9) and (n+10)..(2n+10): free-surface BCs
+    # r[9+m] and r[N+10+m]: streamline and Bernoulli residuals at m=0..N
     for m in range(0, n + 1):
-        zsurf = z[10 + m]  # k(eta-d) at this node
+        zsurf = z[10 + m]  # zeta_m = k*eta_m at this free-surface node
 
         psi = 0.0
         u = 0.0
@@ -141,7 +184,7 @@ def _eqns_numba(
             tj = Tanh[jj]
 
             x = jj * zsurf
-            # Prevent overflow if the iteration diverges (numerical safeguard)
+            # Numerical safeguard for rejected/diverging Newton trial ordinates
             if x > 60.0 or x < -60.0:
                 rhs[1] = np.inf
                 return np.inf
@@ -150,7 +193,7 @@ def _eqns_numba(
             sinhkd = 0.5 * (e - inv_e)
             coshkd = 0.5 * (e + inv_e)
 
-            # Hyperbolic rewrite (A-8): C = cosh + sinh*tanh(jkd), S = sinh + cosh*tanh(jkd)
+            # Stable finite-depth basis: S_j and C_j using tanh(jkd)
             S = sinhkd + coshkd * tj
             C = coshkd + sinhkd * tj
 
@@ -165,7 +208,7 @@ def _eqns_numba(
         rhs[m + 9] = psi - z[8] - z[7] * z[m + 10]
         rhs[n + m + 10] = 0.5 * ((-z[7] + u) ** 2 + v * v) + z[m + 10] - z[9]
 
-    # Sum of squares
+    # Objective value ||F(z)||^2 used only to monitor Newton progress
     ss = 0.0
     for i in range(1, num + 1):
         ss += rhs[i] * rhs[i]
@@ -197,7 +240,7 @@ def _compute_Y_and_B_numba(z, B, Y, cosa, n):
 
 @njit(cache=True)
 def _surface_keta_numba(Y, n, X):
-    """Numba implementation of Surface(X): returns k(eta-d) at phase X."""
+    """Numba implementation of surface reconstruction zeta(X)=k*eta(X)."""
     kEta = 0.0
     for j in range(1, n):
         kEta += Y[j] * np.cos(j * X)
@@ -207,15 +250,15 @@ def _surface_keta_numba(Y, n, X):
 
 @njit(cache=True)
 def _point_numba(X, Y, z, Tanh, B, n):
-    """Numba implementation of the finite-depth Point(X,Y) kernel."""
+    """Numba implementation of the finite-depth Fourier velocity kernel."""
     kd = z[1]
 
-    # depth-scaled dimensionless bulk values
+    # Depth-scaled bulk variables derived from the k-based state vector
     c = z[4] / np.sqrt(kd)
     ce = z[5] / np.sqrt(kd)
     R = 1.0 + z[9] / kd
 
-    # local variables in wave scaling
+    # Local Fourier velocity sums in wave-scaled coordinates (X,Y)
     u = 0.0
     v = 0.0
     ux = 0.0
@@ -236,7 +279,7 @@ def _point_numba(X, Y, z, Tanh, B, n):
         ux += -(j * j) * Bj * C * Sin
         vx += (j * j) * Bj * S * Cos
 
-    # convert to depth scaling (see C++ comments)
+    # Convert k-based derivatives to depth-based output scaling
     inv_kd_sqrt = 1.0 / np.sqrt(kd)
     inv_kd_32 = 1.0 / (kd ** 1.5)
 
@@ -245,10 +288,10 @@ def _point_numba(X, Y, z, Tanh, B, n):
     ux *= np.sqrt(kd)
     vx *= np.sqrt(kd)
 
-    # add Euler current to u
+    # Add the Eulerian current component to the fixed-frame horizontal velocity
     u = ce + u
 
-    # time derivatives (steady in moving frame)
+    # Time derivatives obtained from steady wave-frame fields and phase speed
     ut = -c * ux
     vt = -c * vx
     uy = vx
@@ -261,60 +304,59 @@ def _point_numba(X, Y, z, Tanh, B, n):
 
 class FentonStreamFunction:
     """
-    Fenton steady-wave solver using the Fourier approximation / stream-function
-    method, implemented as a direct port of the provided C++ reference code.
+    Fenton steady-wave solver using the stream-function / Fourier collocation
+    formulation with the 1-based z[i] nonlinear state vector.
 
-    Public API is preserved to keep the GUI unchanged.
+    The public API is intentionally small for importable wavelength calculations.
     """
 
-    # --------------------------- construction ---------------------------------
+    # --------------------------- construction and state-vector allocation ---------
 
     def __init__(self, H, T, d, U=0.0):
-        # Inputs (physical)
+        # Dimensional physical inputs
         self.H_target = float(H)    # [m]
         self.T_target = float(T)    # [s]
         self.d = float(d)    # [m]
         self.U = float(U)    # [m/s] (Eulerian / lab-frame)
 
-        # Constants
+        # Physical and numerical constants
         self.g = G_STD
         self.N = N_FOURIER
 
-        # Solver control (C++-style defaults)
+        # Solver control: continuation and Newton iteration tolerances
         self.nstep = 4        # continuation steps in wave height
         self.number = 40       # max Newton iterations per step
         self.crit = 1.0e-8   # intermediate-step convergence factor (C++: crit)
         self.criter_final = 1.0e-10  # final-step convergence factor
 
-        # Problem mode (matches GUI: finite depth, Period input)
+        # Problem mode represented by this module: finite depth with period as input
         self.Depth = "Finite"
         self.Case = "Period"
 
-        # Current criterion: 1=Eulerian, 2=Stokes (GUI input is Eulerian current)
+        # Current selector c: 1=Eulerian current, 2=Stokes/mass-transport current
         self.Current_criterion = 1
 
-        # Derived input non-dimensional groups (C++ Read_data equivalents)
-        # MaxH == H/d;  T_nd == T*sqrt(g/d); Height == (H/d)/(T_nd^2) == H/(g T^2)
+        # Derived nondimensional input groups used by the residual equations
+        # MaxH=H/d; T_nd=T*sqrt(g/d); Height=H/(gT^2)
         self.MaxH = self.H_target / self.d if self.d > 0 else 0.0
         self.T_nd = self.T_target * np.sqrt(self.g / self.d) if self.d > 0 else 0.0
         self.Height = (self.MaxH / (self.T_nd * self.T_nd)) if self.T_nd > 0 else 0.0
 
-        # Current input in C++ is dimensionless w.r.t. sqrt(g d) for finite depth
+        # Current input in depth scaling; r6 converts it to the k-based selected current variable
         self.Current = self.U / np.sqrt(self.g * self.d) if self.d > 0 else 0.0
 
-        # ------------------------- outputs (public) ----------------------------
+        # ------------------------- dimensional outputs and diagnostics ------------
         self.k = 0.0
         self.L = 0.0
         self.c = 0.0
         self.converged = False
 
 
-        # Human-readable failure reason (used by GUI when convergence fails)
+        # Human-readable failure reason when the nonlinear solve does not converge
         self.last_error = ""
 
-        # Robustness for large ambient currents: allow more continuation steps and
-        # Newton iterations. This does NOT change equations; it only increases the
-        # solver budget to avoid premature failure when |U| is high.
+        # Robustness for large ambient currents: increase continuation/Newton budget
+        # without changing the nonlinear residual equations.
         if abs(self.Current) >= 1.0:
             self.nstep = max(self.nstep, 8)
             self.number = max(self.number, 80)
@@ -348,11 +390,11 @@ class FentonStreamFunction:
         self.MassTransport = 0.0
         self.BernoulliR = 0.0
 
-        # ------------------------- internal C++ arrays -------------------------
+        # ------------------------- internal state and residual arrays -------------
         self.n = int(self.N)
         self.num = 2 * self.n + 10
 
-        # 1-based vectors (index 0 unused)
+        # 1-based vectors; index 0 is intentionally unused to preserve z[i] notation
         self.z = np.zeros(self.num + 1, dtype=DTYPE)
         self.rhs1 = np.zeros(self.num + 1, dtype=DTYPE)
         self.rhs2 = np.zeros(self.num + 1, dtype=DTYPE)
@@ -361,11 +403,11 @@ class FentonStreamFunction:
         self.B = np.zeros(self.n + 1, dtype=DTYPE)    # B[1..n]
         self.Y = np.zeros(self.num + 1, dtype=DTYPE)  # Y[0..n] used; keep size
 
-        # Precomputed trig tables as in init()
+        # Precomputed half-wave trigonometric tables for X_m = m*pi/N
         self.cosa = np.zeros(2 * self.n + 1, dtype=DTYPE)  # [0..2n]
         self.sina = np.zeros(2 * self.n + 1, dtype=DTYPE)
 
-        # Precompute constant trig tables and collocation lookup tables (C++ init())
+        # Precompute collocation lookup tables cos(jX_m) and sin(jX_m)
         k_idx = np.arange(0, 2 * self.n + 1, dtype=DTYPE)
         self.cosa[:] = np.cos(k_idx * np.pi / self.n)
         self.sina[:] = np.sin(k_idx * np.pi / self.n)
@@ -379,38 +421,38 @@ class FentonStreamFunction:
         self._cos_nm = self.cosa[self._nm_map]  # shape (n+1, n)
         self._sin_nm = self.sina[self._nm_map]
 
-        # Extrapolation storage sol[i][1..2]
+        # Continuation extrapolation storage for consecutive z[i] states
         self.sol = np.zeros((self.num + 1, 3), dtype=DTYPE)
 
-        # Run-time step variables (C++ globals)
-        self.height = 0.0    # stepped 'height' (dimensionless)
+        # Continuation-step variables Hs and H/d used in r1 and r2
+        self.height = 0.0    # stepped Hs = H/(gT^2)
         self.Hoverd = 0.0    # stepped H/d
 
-    # --------------------------- C++ port helpers -----------------------------
+    # --------------------------- solver helper methods ---------------------------
 
     def _init_linear(self):
         """
-        Port of C++ init() for finite-depth, Period case (with current criterion).
-        Produces an initial state in z[1..num] for the first height step.
+        Build the first continuation seed for the finite-depth, period-input
+        stream-function/Fourier state vector z[1..num].
         """
         n = self.n
         pi = np.pi
 
-        # For finite depth
+        # Finite-depth period-input initialization
         sigma = 2.0 * pi * np.sqrt(self.height / self.Hoverd) if self.Hoverd > 0 else 0.0
 
-        # Fenton & McKee (1990) approximation used in the C++ (commented alternatives omitted)
+        # Linear/Fenton-McKee estimate used only to seed the nonlinear system
         if sigma > 0:
             self.z[1] = (sigma * sigma) / (np.tanh(sigma ** 1.5) ** (2.0 / 3.0))
         else:
-            # very small waves / degenerate: start with something benign
+            # Very small-wave fallback seed; final solution still comes from F(z)=0
             self.z[1] = 2.0 * pi * max(self.height, 1e-12) / max(self.Hoverd, 1e-12)
 
         self.z[2] = self.z[1] * self.Hoverd
         self.z[4] = np.sqrt(np.tanh(self.z[1]))
         self.z[3] = 2.0 * pi / self.z[4]
 
-        # Current initialisation (finite)
+        # Initial current variables for the selected current criterion
         if self.Current_criterion == 1:
             self.z[5] = self.Current * np.sqrt(self.z[2])
             self.z[6] = 0.0
@@ -422,7 +464,7 @@ class FentonStreamFunction:
         self.z[8] = 0.0
         self.z[9] = 0.5 * self.z[7] * self.z[7]
 
-        # Initial surface elevation nodes and Fourier coefficients (B_j)
+        # Initial free-surface ordinates z[10..N+10] and Fourier coefficients B_j
         self.z[10] = 0.5 * self.z[2]
         for i in range(1, n + 1):
             self.z[n + i + 10] = 0.0
@@ -430,7 +472,7 @@ class FentonStreamFunction:
 
         self.z[n + 11] = 0.5 * self.z[2] / self.z[7]
 
-        # store sol[] for extrapolation (C++ sets sol[10..] to zero for very first)
+        # Store first continuation seed for later z[i] extrapolation
         for i in range(1, 10):
             self.sol[i, 1] = self.z[i]
         for i in range(10, self.num + 1):
@@ -438,14 +480,14 @@ class FentonStreamFunction:
 
     def _eqns(self, rhs_out):
         """
-        Port of C++ Eqns(double *rhs). Fills rhs_out[1..num] and returns sum(rhs^2).
-        Finite-depth branch only (GUI mode).
+        Evaluate the finite-depth, period-input residual vector F(z).
+        Fills rhs_out[1..num] and returns ||F(z)||^2.
         """
-        # Numba-accelerated kernel (drops back to pure NumPy if Numba is unavailable).
+        # Numba-accelerated evaluation when available.
         #
         # Robustness note:
-        # If the JIT path produces NaN/Inf (usually due to a diverging Newton iterate),
-        # fall back to the pure-NumPy path below (same algebra, clearer exceptions).
+        # If the JIT path produces NaN/Inf during a rejected Newton trial,
+        # fall back to the pure-NumPy path below for clearer diagnostics.
         if NUMBA_AVAILABLE:
             ss = _eqns_numba(self.z, rhs_out, self.coeff, self.Tanh, self._cos_nm, self._sin_nm,
                 self.n,
@@ -465,45 +507,45 @@ class FentonStreamFunction:
         z = self.z
         rhs = rhs_out
 
-        # Eqn 1
+        # r1: prescribed relative height, z2 = z1*(H/d)
         rhs[1] = z[2] - z[1] * self.Hoverd
 
-        # Eqn 2 (Period case)
+        # r2: period-input height relation, z2 = Hs*z3^2
         rhs[2] = z[2] - self.height * z[3] * z[3]
 
-        # Eqn 3
+        # r3: apparent-period/celerity relation, z4*z3 = 2*pi
         rhs[3] = z[4] * z[3] - 2.0 * pi
 
-        # Eqn 4
+        # r4: Eulerian current identity, ubar_1 = c - Ubar
         rhs[4] = z[5] + z[7] - z[4]
 
-        # Eqn 5
+        # r5: Stokes-current / flux identity, q = Ubar*d - Q
         rhs[5] = z[1] * (z[6] + z[7] - z[4]) - z[8]
 
-        # coeff and tanh tables
+        # Fourier coefficients B_j and tanh(jkd) table for S_j and C_j
         for i in range(1, n + 1):
             self.coeff[i] = z[n + i + 10]
             self.Tanh[i] = np.tanh(i * z[1])
 
-        # Eqn 6 (finite depth; correction uses sqrt(z[1]))
+        # r6: selected-current closure, z[c+4] = U*sqrt(kd)
         rhs[6] = z[self.Current_criterion + 4] - self.Current * np.sqrt(z[1])
 
-        # Eqn 7 (mean free surface level; scaling constant irrelevant)
+        # r7: mean-level convention over the half-wave collocation ordinates
         rhs[7] = z[10] + z[n + 10]
         for i in range(1, n):
             rhs[7] += 2.0 * z[10 + i]
 
-        # Eqn 8 (wave height definition)
+        # r8: crest-to-trough height definition, z10 - z[N+10] = z2
         rhs[8] = z[10] - z[n + 10] - z[2]
 
-        # Eqns 9..(n+9) and (n+10)..(2n+10): free-surface BCs
+        # r[9+m] and r[N+10+m]: streamline and Bernoulli residuals at m=0..N
         j = self._j                      # shape (n,)
         coeff = self.coeff[1:n + 1]      # shape (n,)
         tanh = self.Tanh[1:n + 1]        # shape (n,)
         jcoeff = j * coeff               # shape (n,)
 
         for m in range(0, n + 1):
-            zsurf = z[10 + m]  # k(eta-d) at this node
+            zsurf = z[10 + m]  # zeta_m = k*eta_m at this free-surface node
 
             x = j * zsurf
             if np.any(x > 60.0) or np.any(x < -60.0):
@@ -513,7 +555,7 @@ class FentonStreamFunction:
             sinhkd = 0.5 * (e - inv_e)
             coshkd = 0.5 * (e + inv_e)
 
-            # Hyperbolic rewrite (A-8): C = cosh + sinh*tanh(jkd), S = sinh + cosh*tanh(jkd)
+            # Stable finite-depth basis: S_j and C_j using tanh(jkd)
             S = sinhkd + coshkd * tanh
             C = coshkd + sinhkd * tanh
 
@@ -554,7 +596,7 @@ class FentonStreamFunction:
             return (Vt.T @ (s_inv * (U.T @ b)))
 
         except np.linalg.LinAlgError:
-            # Conservative fallback: least-squares solution of the same linearised system.
+            # Conservative fallback for the same linearized Newton system.
             x, *_ = np.linalg.lstsq(A, b, rcond=1.0e-12)
             return x
 
@@ -562,7 +604,7 @@ class FentonStreamFunction:
 
     def _newton(self, iter_count):
         """
-        Port of the C++ Newton(...) update with additional damping safeguards.
+        Newton update for the nonlinear residual system F(z)=0.
 
         The governing residual equations are unchanged. The only additions are:
         - Finite-difference step clamping (prevents extreme perturbations if z[i] diverges).
@@ -571,7 +613,7 @@ class FentonStreamFunction:
         n = self.n
         num = self.num
 
-        # baseline residual
+        # Baseline residual norm before forming the Newton correction.
         ss0 = float(self._eqns(self.rhs1))
         if not np.isfinite(ss0):
             raise FloatingPointError("Non-finite residual norm at start of Newton step.")
@@ -581,12 +623,12 @@ class FentonStreamFunction:
         A = np.zeros((num, num), dtype=DTYPE)
         b = np.zeros((num,), dtype=DTYPE)
 
-        # finite-difference Jacobian (column-wise)
+        # Column-wise finite-difference Jacobian for F(z).
         for i in range(1, num + 1):
             h = 0.01 * z0[i]
             if abs(z0[i]) < 1.0e-4:
                 h = 1.0e-5
-            # clamp perturbation magnitude (purely numerical safeguard)
+            # Clamp perturbation magnitude for numerical robustness.
             if abs(h) > 1.0:
                 h = np.copysign(1.0, h)
 
@@ -601,7 +643,7 @@ class FentonStreamFunction:
         if not np.isfinite(dx).all():
             raise FloatingPointError("Non-finite Newton correction vector (dx).")
 
-        # Backtracking: prefer alpha=1, reduce if it worsens residuals or violates kd>0
+        # Damped Newton step: preserve kd > 0 and accept only non-worsening residual norm.
         alpha = 1.0
         ss_best = ss0
         z_best = z0
@@ -610,7 +652,7 @@ class FentonStreamFunction:
             z_try = z0.copy()
             z_try[1:num + 1] = z0[1:num + 1] + alpha * dx
 
-            # Must keep kd positive and all values finite
+            # The trial state must keep kd positive and all state entries finite.
             if (z_try[1] <= 0.0) or (not np.isfinite(z_try[1:num + 1]).all()):
                 alpha *= 0.5
                 continue
@@ -621,13 +663,13 @@ class FentonStreamFunction:
             if np.isfinite(ss1) and (ss1 <= ss_best):
                 ss_best = ss1
                 z_best = z_try
-                # accept immediately if improvement is adequate
+                # Accept immediately once the residual norm improves.
                 if ss1 <= ss0:
                     break
 
             alpha *= 0.5
 
-        # Commit best found (or revert if none acceptable)
+        # Commit the best admissible trial state found by backtracking.
         self.z[:] = z_best
 
         corr = float(np.mean(np.abs((z_best[10:n + 11] - z0[10:n + 11]))))
@@ -636,10 +678,10 @@ class FentonStreamFunction:
 
     def _compute_Y_and_B(self):
         """
-        Port of the "slow Fourier transform" block in Fourier.cpp after convergence.
-        Produces B[1..n] and Y[0..n] from final z[].
+        Post-convergence half-wave cosine transform.
+        Produces B[1..n] and Y[0..n] from the final state vector.
         """
-        # Numba-accelerated kernel (drops back to pure NumPy if Numba is unavailable).
+        # Numba-accelerated evaluation when available.
         if NUMBA_AVAILABLE:
             _compute_Y_and_B_numba(self.z, self.B, self.Y, self.cosa, self.n)
             return
@@ -658,9 +700,9 @@ class FentonStreamFunction:
 
     def _surface_keta(self, X):
         """
-        Port of C++ Surface(double x): returns k(eta-d) at phase X (0..pi).
+        Reconstruct the free-surface ordinate zeta(X)=k*eta(X).
         """
-        # Numba-accelerated kernel (drops back to pure NumPy if Numba is unavailable).
+        # Numba-accelerated evaluation when available.
         if NUMBA_AVAILABLE:
             return float(_surface_keta_numba(self.Y, self.n, float(X)))
 
@@ -673,7 +715,7 @@ class FentonStreamFunction:
 
     def _point(self, X, Y):
         """
-        Port of the finite-depth branch of C++ Point(X,Y). Returns:
+        Evaluate the finite-depth Fourier velocity field. Returns:
           u_dimless (w.r.t sqrt(g d))
           v_dimless (w.r.t sqrt(g d))
           dudt_dimless (w.r.t g)
@@ -681,19 +723,19 @@ class FentonStreamFunction:
           X : phase in radians (k x)
           Y : vertical coordinate in wave scaling (k(z-d))
         """
-        # Numba-accelerated kernel (drops back to pure NumPy if Numba is unavailable).
+        # Numba-accelerated evaluation when available.
         if NUMBA_AVAILABLE:
             return _point_numba(float(X), float(Y), self.z, self.Tanh, self.B, self.n)
 
         n = self.n
         kd = float(self.z[1])
 
-        # depth-scaled dimensionless bulk values
+        # Depth-scaled bulk variables derived from the k-based state vector
         c = float(self.z[4] / np.sqrt(kd))
         ce = float(self.z[5] / np.sqrt(kd))
         R = float(1.0 + self.z[9] / kd)
 
-        # local variables in wave scaling
+        # Local Fourier velocity sums in wave-scaled coordinates (X,Y)
         u = 0.0
         v = 0.0
         ux = 0.0
@@ -714,7 +756,7 @@ class FentonStreamFunction:
             ux += -(j * j) * Bj * C * Sin
             vx += (j * j) * Bj * S * Cos
 
-        # convert to depth scaling (see C++ comments)
+        # Convert k-based derivatives to depth-based output scaling
         inv_kd_sqrt = 1.0 / np.sqrt(kd)
         inv_kd_32 = 1.0 / (kd ** 1.5)
 
@@ -723,20 +765,20 @@ class FentonStreamFunction:
         ux *= np.sqrt(kd)
         vx *= np.sqrt(kd)
 
-        # add Euler current to u
+        # Add the Eulerian current component to the fixed-frame horizontal velocity
         u = ce + u
 
-        # time derivatives (steady in moving frame)
+        # Time derivatives obtained from steady wave-frame fields and phase speed
         ut = -c * ux
         vt = -c * vx
         uy = vx
         vy = -ux
 
         dudt = ut + u * ux + v * uy
-        # dvdt is available if needed:
+        # Vertical acceleration can be formed from the same derivatives if needed:
         # dvdt = vt + u * vx + v * vy
 
-        # Bernoulli/pressure are not required by GUI, but kept for completeness:
+        # Bernoulli pressure reconstruction follows the same dynamic condition:
         # y = 1.0 + Y / kd
         # Pressure = R - y - 0.5 * (((u - c) ** 2) + v * v)
 
@@ -746,11 +788,11 @@ class FentonStreamFunction:
 
     def solve(self):
         """
-        Solve the steady nonlinear wave problem using Fenton's Fourier / stream-function method.
+        Solve the steady nonlinear wave problem using the stream-function / Fourier method.
 
-        The implementation follows the reference C++ structure:
+        The implementation uses:
         - Continuation in wave height (nstep)
-        - Newton iterations with finite-difference Jacobian
+        - Newton iterations on the full residual vector F(z)
         - Linear solve via SVD with Press-style truncation
 
         Robustness features:
@@ -758,34 +800,34 @@ class FentonStreamFunction:
         - Clear convergence state + message for GUI reporting.
         - Increased iteration budget automatically enabled for large |U|.
         """
-        # Default outcome: failure unless we reach the end successfully
+        # Default outcome: failure unless all continuation steps converge.
         self.converged = False
         self.last_error = ""
 
-        # Basic input screening (physical requirements)
+        # Basic physical input screening.
         if self.H_target <= 0.0 or self.T_target <= 0.0 or self.d <= 0.0:
             self.last_error = "Invalid inputs: H, T, and d must be > 0."
             return
 
         old_err = np.geterr()
         try:
-            # Make numerical faults explicit. Underflow is benign in this context.
+            # Make numerical faults explicit. Underflow is benign in this spectral basis.
             np.seterr(over="raise", invalid="raise", divide="raise", under="ignore")
 
-            # continuation step sizes
+            # Continuation step sizes for Hs and H/d.
             dhe = self.Height / self.nstep
             dho = self.MaxH / self.nstep
 
-            # height stepping
+            # Height stepping from a weakly nonlinear seed to the target wave.
             for ns in range(1, self.nstep + 1):
                 self.height = ns * dhe
                 self.Hoverd = ns * dho
 
-                # initial/extrapolated guess
+                # Initial or extrapolated state vector for this continuation step.
                 if ns == 1:
                     self._init_linear()
                 else:
-                    # z[i] = 2*sol[i][2] - sol[i][1]
+                    # Linear extrapolation of the previous two converged z[i] states.
                     self.z[1:self.num + 1] = (
                         2.0 * self.sol[1:self.num + 1, 2]
                         - self.sol[1:self.num + 1, 1]
@@ -851,7 +893,7 @@ class FentonStreamFunction:
                 # update Y and B for this step (C++ does this each step)
                 self._compute_Y_and_B()
 
-            # ------------------------- dimensional post-process --------------------
+            # ------------------------- dimensional post-processing --------------------
 
             kd = float(self.z[1])
             if (not np.isfinite(kd)) or (kd <= 0.0):
@@ -859,18 +901,17 @@ class FentonStreamFunction:
 
             k_phys = kd / self.d
             L_phys = 2.0 * np.pi / k_phys
-            c_dimless = float(self.z[4] / np.sqrt(kd))   # c / sqrt(g d)
-            c_phys = c_dimless * np.sqrt(self.g * self.d)
+            c_phys = L_phys / self.T_target
 
             if (not np.isfinite(L_phys)) or (L_phys <= 0.0):
                 raise FloatingPointError("Invalid wavelength.")
-            if not np.isfinite(c_phys):
+            if (not np.isfinite(c_phys)) or (c_phys <= 0.0):
                 raise FloatingPointError("Invalid celerity.")
 
-            # surface nodes correspond to m*pi/n (half wave: crest->trough)
+            # Surface nodes correspond to X_m=m*pi/N over the symmetric half-wave.
             eta_nodes = np.zeros(self.n + 1, dtype=DTYPE)
             for m in range(0, self.n + 1):
-                kEta = float(self.z[10 + m])             # k(eta-d) at node
+                kEta = float(self.z[10 + m])             # zeta_m = k*eta_m at the free-surface node
                 eta_nodes[m] = self.d * (1.0 + kEta / kd)
 
             self.eta_nodes = eta_nodes
@@ -878,19 +919,38 @@ class FentonStreamFunction:
             self.L = float(L_phys)
             self.c = float(c_phys)
 
-            # store Bj as 0-based array for external use
+            z3_period = self.T_target * np.sqrt(self.g * k_phys)
+            z4_period = c_phys * np.sqrt(k_phys / self.g)
+            if (
+                np.isfinite(z3_period)
+                and np.isfinite(z4_period)
+                and z3_period > 0.0
+                and z4_period > 0.0
+            ):
+                self.z[3] = z3_period
+                self.z[4] = z4_period
+                if self.Current_criterion == 1:
+                    self.z[5] = self.U * np.sqrt(k_phys / self.g)
+                    self.z[7] = self.z[4] - self.z[5]
+                    self.z[6] = self.z[8] / self.z[1] - self.z[7] + self.z[4]
+                else:
+                    self.z[6] = self.U * np.sqrt(k_phys / self.g)
+                    self.z[7] = self.z[8] / self.z[1] - self.z[6] + self.z[4]
+                    self.z[5] = self.z[4] - self.z[7]
+
+            # Store B_j as a 0-based array for external API/report access.
             self.Bj = self.B[1:self.n + 1].copy()
 
-            # crest/trough elevations relative to SWL
+            # Crest and trough elevations relative to still-water level.
             self.eta_crest = float(self.eta_nodes[0] - self.d)
             self.eta_trough = float(self.eta_nodes[-1] - self.d)
 
-            # non-dimensional descriptors
+            # Engineering nondimensional descriptors based on H, L and d.
             self.steepness = self.H_target / self.L
             self.rel_depth = self.d / self.L
             self.ursell = (self.H_target * self.L * self.L) / (self.d ** 3)
 
-            # regime classification (engineering convenience)
+            # Depth-regime classification using d/L.
             if self.rel_depth < 0.05:
                 self.regime = "Shallow"
             elif self.rel_depth < 0.5:
@@ -898,7 +958,7 @@ class FentonStreamFunction:
             else:
                 self.regime = "Deep"
 
-            # Miche breaking limit (keep GUI label/behaviour)
+            # Miche limiting-height check used as an engineering warning.
             self.breaking_limit_miche = float(0.142 * self.L * np.tanh(self.k * self.d))
             if self.breaking_limit_miche > 0:
                 self.breaking_index = float(
@@ -911,24 +971,24 @@ class FentonStreamFunction:
                 and self.H_target > self.breaking_limit_miche
             )
 
-            # Integral properties (from C++ invariants, then dimensionalised)
+            # Integral quantities from k-based and d-based invariant scalings.
             self._calc_integral_props_cpp()
 
-            # Kinematics summary (crest/trough surface and bed under crest)
+            # Kinematic summary at the bed, crest and trough phases.
             self.u_bed, _, _ = self.get_kinematics(0.0, 0.0)
 
-            # Quadratic bed shear estimate kept as-is (engineering heuristic)
+            # Quadratic bed-shear estimate is an engineering diagnostic, not a residual equation.
             cf_est = 0.005
             self.tau_bed = 0.5 * RHO * cf_est * (self.u_bed ** 2)
 
             self.ExcursionBed = abs(self.u_bed) * self.T_target / (2.0 * np.pi)
 
-            # crest/trough surface velocities
+            # Crest and trough surface velocities in the fixed frame.
             self.u_surf, _, _ = self.get_kinematics(self.d + self.eta_crest, 0.0)
             u_trough, _, _ = self.get_kinematics(self.d + self.eta_trough, np.pi)
             self.asymmetry = abs(self.u_surf / u_trough) if abs(u_trough) > 0 else 0.0
 
-            # scan phases for max vertical velocity and horizontal acceleration on the surface
+            # Phase scan for maximum surface vertical velocity and horizontal acceleration.
             scan_phases = np.linspace(0.0, np.pi, 40)
             max_ax = 0.0
             max_w = 0.0
@@ -976,7 +1036,7 @@ class FentonStreamFunction:
 
         k_phys = kd / self.d
         X = float(phase)
-        Y = float(k_phys * (float(z_bed) - self.d))  # wave scaling: k(z-d)
+        Y = float(k_phys * (float(z_bed) - self.d))  # Y = k(y-d), with z_bed measured from the bed
 
         u_nd, v_nd, dudt_nd = self._point(X, Y)
 
@@ -1004,20 +1064,20 @@ class FentonStreamFunction:
         if self.d <= 0.0 or self.T_target <= 0.0:
             return 0.0
 
-        # Sample one full cycle in phase X = kx (0..2π). For a steady wave,
-        # spatial averaging over one wavelength equals temporal averaging at a point.
+        # Sample one full cycle in phase X. For a steady periodic wave,
+        # spatial averaging over one wavelength is equivalent to temporal averaging.
         phases = np.linspace(0.0, 2.0 * np.pi, int(max(36, nph)), endpoint=False)
 
         ub2 = 0.0
         for ph in phases:
-            u_abs, _, _ = self.get_kinematics(z_bed=0.0, phase=float(ph))  # bed: z_bed=0
-            u_orb = u_abs - float(self.U)  # remove imposed Eulerian current
+            u_abs, _, _ = self.get_kinematics(z_bed=0.0, phase=float(ph))  # bed-origin coordinate z=0
+            u_orb = u_abs - float(self.U)  # remove the imposed Eulerian current
             ub2 += u_orb * u_orb
 
         return float(ub2 / len(phases))
 
 
-    # ------------------------ integral properties (C++ parity) ----------------
+    # ------------------------ integral quantities and depth-scaled output ---------
 
     def _momentum_flux_S_depth(self, phase=0.0, npts=1200):
         """
@@ -1046,10 +1106,10 @@ class FentonStreamFunction:
         ys = np.linspace(0.0, eta_over_d, int(max(50, npts)), dtype=DTYPE)
         integ = np.zeros_like(ys)
         for idx, y in enumerate(ys):
-            Y = kd * (y - 1.0)                     # Y = k(z-d) = kd*(y-1)
-            u_nd, v_nd, _ = self._point(X, Y)      # u,v scaled by √(g d)
+            Y = kd * (y - 1.0)                     # shifted coordinate Y = kd*(y-1)
+            u_nd, v_nd, _ = self._point(X, Y)      # u, v scaled by sqrt(gd)
             urel = u_nd - c
-            # Pressure scaled by (ρ g d) (same expression as C++/Point())
+            # Pressure scaled by rho*g*d from Bernoulli dynamic condition.
             P = R - y - 0.5 * (urel * urel + v_nd * v_nd)
             integ[idx] = P + urel * urel
 
@@ -1057,8 +1117,8 @@ class FentonStreamFunction:
 
     def _calc_integral_props_cpp(self):
         """
-        Compute integral quantities using the same invariants as the C++ Output().
-        Values are dimensionalised to match the GUI units.
+        Compute integral quantities from the k-based invariant scalings and
+        dimensionalise them to engineering units.
         """
         kd = float(self.z[1])
         if kd <= 0.0:
@@ -1067,7 +1127,7 @@ class FentonStreamFunction:
             self.BernoulliR = 0.0
             return
 
-        # depth-scaled dimensionless bulk quantities
+        # Depth-scaled dimensionless bulk quantities.
         c_dimless = float(self.z[4] / np.sqrt(kd))
         ce_dimless = float(self.z[5] / np.sqrt(kd))
         cs_dimless = float(self.z[6] / np.sqrt(kd))
@@ -1076,7 +1136,7 @@ class FentonStreamFunction:
         Q_dimless = float(ubar_dimless - self.z[8] / (kd ** 1.5))
         R_dimless = float(1.0 + self.z[9] / kd)
 
-        # C++ invariants in wave-number scaling
+        # k-based integral invariants used by the output convention.
         pulse = float(self.z[8] + kd * self.z[5])
         ke = 0.5 * (self.z[4] * pulse - self.z[5] * Q_dimless * (kd ** 1.5))
 
@@ -1094,12 +1154,12 @@ class FentonStreamFunction:
             + self.z[4] * self.z[5] * q_term
         )
 
-        # Convert to depth-scaled dimensionless (as in C++ second column)
+        # Convert to the d-based nondimensional output system.
         E_depth = float((ke + pe) / (kd ** 2))
         KE_depth = float(ke / (kd ** 2))
         PE_depth = float(pe / (kd ** 2))
 
-        # Store depth-scaled invariants (used for Solution-Flat style reporting)
+        # Store depth-scaled invariants for external inspection/reporting.
         self.E_depth = E_depth
         self.KE_depth = KE_depth
         self.PE_depth = PE_depth
@@ -1111,11 +1171,11 @@ class FentonStreamFunction:
         self.F_depth = F_depth
         self.I_depth = I_depth
 
-        # Dimensionalise to GUI units
+        # Dimensionalise d-based quantities to engineering units.
         self.EnergyDensity = float(RHO * self.g * (self.d ** 2) * E_depth)         # [J/m^2]
         self.Sxx = float(RHO * self.g * (self.d ** 2) * Sxx_depth)                 # [N/m]
         self.Power = float(RHO * (self.g ** 1.5) * (self.d ** 2.5) * F_depth)      # [W/m]
-        # Momentum flux (Solution-Flat row 13) in moving frame
+        # Momentum flux S/(rho*g*d^2) in the moving-frame convention.
         self.MomentumFluxDepth = self._momentum_flux_S_depth(phase=0.0, npts=1200)  # S/(ρ g d²)
         self.MomentumFlux = float(
             RHO * self.g * (self.d ** 2) * self.MomentumFluxDepth
@@ -1131,7 +1191,7 @@ class FentonStreamFunction:
             cs_dimless * np.sqrt(self.g * self.d)
         )  # [m/s] (Stokes current)
 
-        # Convenience values for Solution-Flat style reporting
+        # Current, flux and Bernoulli quantities in engineering notation.
         self.EulerianCurrent = float(self.U)                              # u1 [m/s]
         self.StokesCurrent = float(self.MassTransport)                      # u2 [m/s]
         self.MeanFluidSpeed = float(ubar_dimless * np.sqrt(self.g * self.d))  # Ū [m/s]
@@ -1143,7 +1203,7 @@ class FentonStreamFunction:
         )  # r = R - g d [m^2/s^2]
         self.KineticEnergy = float(RHO * self.g * (self.d ** 2) * self.KE_depth)     # [J/m^2]
         self.PotentialEnergy = float(RHO * self.g * (self.d ** 2) * self.PE_depth)  # [J/m^2]
-        # Mean square of bed orbital velocity (Solution-Flat row 17):
+        # Mean square bed orbital velocity:
         # u_b^2 = < (u_b(t) - ū₁)^2 >  (RMS-orbital-velocity definition; non-negative)
         self.MeanSquareBedVelocity = float(
             self._mean_square_bed_orbital_velocity(nph=720)
@@ -1210,7 +1270,7 @@ def _cli(argv=None) -> int:
     parser.add_argument("U", nargs="?", type=float, help="Eulerian current U [m/s]")
     args = parser.parse_args(argv)
 
-    # No args -> interactive prompts (defaults: H=3, T=5, d=9, U=1)
+    # No args -> interactive prompts (defaults: H=3, T=9, d=5, U=1)
     if args.H is None and args.T is None and args.d is None and args.U is None:
         H = _prompt_float("Wave height H (m)", 3.0)
         T = _prompt_float("Wave period T (s)", 9.0)

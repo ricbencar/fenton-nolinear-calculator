@@ -63,6 +63,8 @@ $$
 c=\frac{L}{T}, \qquad k=\frac{2\pi}{L}, \qquad \omega=\frac{2\pi}{T}.
 $$
 
+In the program outputs, the reported celerity is the value obtained from the final solved wavelength and the specified period, so the printed geometry remains consistent with this kinematic identity.
+
 Periodicity requires that the surface and the full flow field repeat every wavelength:
 
 $$
@@ -737,6 +739,8 @@ $$
 \frac{\lambda}{d}=\frac{2\pi}{kd}, \qquad L=\lambda, \qquad c=\frac{L}{T}.
 $$
 
+The residual variable $z_4$ enforces the same period-celerity closure during Newton iteration; final reports and API diagnostics should still derive the dimensional celerity from the final $L/T$ relation.
+
 ### 7.4 Newton iteration and stabilized linear solve
 
 The residual system is written compactly as
@@ -809,6 +813,8 @@ After convergence, the nondimensional state is converted back to dimensional eng
 $$
 k=\frac{2\pi}{L}, \qquad c=\frac{L}{T}.
 $$
+
+This post-processing convention avoids treating wavelength and celerity as independent reported quantities in period-specified runs.
 
 The moving-frame volume flux $Q$ and the wave flux variable $q$ are related by
 

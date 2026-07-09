@@ -1,237 +1,173 @@
 /* ==============================================================================
  *  ENGINEERING TECHNICAL REFERENCE & THEORETICAL FORMULATION
  * ==============================================================================
- *  PROGRAM:      Nonlinear Wave Hydrodynamics Solver (Fenton's Stream Function)
- *  METHOD:       Fourier Approximation Method for Steady Water Waves (N=50)
- *  REFERENCE:    Fenton, J.D. (1999). "Numerical methods for nonlinear waves."
- *                In P.L.-F. Liu (Ed.), Advances in Coastal and Ocean Engineering
- *                (Vol. 5, pp. 241–324). World Scientific: Singapore.
+ *  PROGRAM:      Fenton Nonlinear Wave Suite - native Windows GUI solver
+ *  FILE:         fenton_gui.cpp
+ *  METHOD:       Stream-function / Fourier collocation method for steady,
+ *                two-dimensional, finite-amplitude gravity waves.
+ *  REFERENCE:    Rienecker-Fenton / Fenton numerical-wave formulation,
+ *                as implemented in this source file.
  * ==============================================================================
  *
- *  1. INTRODUCTION & SCOPE
+ *  1. SCOPE OF THIS IMPLEMENTATION
  *  -----------------------------------------------------------------------------
- *  This software calculates the hydrodynamics of steady, periodic surface gravity
- *  waves using high-order Stream Function theory. Unlike Linear (Airy) Theory,
- *  which assumes infinitesimal amplitudes, this method retains full nonlinearity
- *  in the boundary conditions.
+ *  This executable computes steady, periodic, finite-amplitude gravity waves in
+ *  finite water depth, with optional collinear current.  The calculation follows
+ *  the implemented reference formulation: the Fourier basis satisfies Laplace's
+ *  equation and the bed condition analytically, while Newton iteration solves the
+ *  nonlinear free-surface streamline condition, Bernoulli condition, wave-height
+ *  constraint, period relation, current closure and global flux identities.
  *
- *  Implementation Specifics (C++ Port):
- *  - Solver:    Dense nonlinear least-squares solver aligned with SciPy
- *               scipy.optimize.least_squares behavior:
- *               • TRF-style trust-region steps for robust continuation seeding.
- *               • MINPACK-style Levenberg–Marquardt for final rapid convergence.
- *  - Stability: Uses a Homotopy (continuation) method, stepping wave height
- *               incrementally from near-linear to target height to guarantee convergence.
- *               (Implemented as 4 steps: linspace(0.01, H_target, 4), matching Python.)
- *  - Regime:    Applicable to stable waves in shallow, intermediate, and deep
- *               water regimes up to the Miche breaking limit.
+ *  The central engineering mapping is
  *
- *  2. GOVERNING FIELD EQUATIONS
+ *      L = F(H, T, d, U_c)
+ *
+ *  where H is crest-to-trough wave height, T is the apparent fixed-frame period,
+ *  d is still-water depth, U_c is the imposed collinear current under the selected
+ *  current convention, and L is the dynamically consistent wavelength.  In the
+ *  Fenton formulation a steady wave train is fundamentally defined by H, d and L;
+ *  when T is specified instead of L, the current or wave-speed convention is part
+ *  of the closure because the observed period is Doppler-shifted by current.
+ *
+ *  2. COORDINATES, NONDIMENSIONAL VARIABLES AND VELOCITIES
  *  -----------------------------------------------------------------------------
- *  The fluid is modeled as inviscid, incompressible, and irrotational.
- *  The flow is solved in a frame of reference moving with the wave celerity (c),
- *  rendering the flow steady.
+ *  The moving wave-frame phase coordinate and vertical coordinate are
  *
- *  A. Field Equation (Laplace):
- *     ∇²ψ = ∂²ψ/∂x² + ∂²ψ/∂z² = 0
- *     Where ψ(x,z) is the stream function. Velocities are defined as:
- *     u =  ∂ψ/∂z   (Horizontal)
- *     w = -∂ψ/∂x   (Vertical)
+ *      X = k(x - c t),        Y = k y,        k = 2*pi/L,
  *
- *  B. Bottom Boundary Condition (BBC) at z=0:
- *     The seabed is impermeable (a streamline).
- *     ψ(x, 0) = -Q
- *     Where Q is the volume flux per unit width in the moving frame.
+ *  with y = 0 at still-water level and y = -d at the bed.  One wavelength is
+ *  X in [0, 2*pi], and the bed is Y = -k d.  The free surface is represented by
  *
- *  3. FREE SURFACE BOUNDARY CONDITIONS
+ *      Y = zeta(X) = k eta(X).
+ *
+ *  The nondimensional stream function is
+ *
+ *      Psi = psi * sqrt(k^3/g),
+ *
+ *  and the wave-frame velocities are
+ *
+ *      U_hat = U * sqrt(k/g) = dPsi/dY,
+ *      V_hat = V * sqrt(k/g) = -dPsi/dX.
+ *
+ *  3. STREAM-FUNCTION / FOURIER REPRESENTATION
  *  -----------------------------------------------------------------------------
- *  The solution is constrained by two nonlinear conditions at the unknown
- *  free surface elevation z = η(x):
+ *  The finite-depth Fourier representation used by the residual equations is
  *
- *  A. Kinematic Boundary Condition (KBC):
- *     The free surface is a streamline (constant ψ).
- *     ψ(x, η) = 0
+ *      Psi(X,Y) = -Ubar*(Y + kd)
+ *                 + sum_{j=1..N} B_j sinh[j(Y+kd)]/cosh(jkd) cos(jX),
  *
- *  B. Dynamic Boundary Condition (DBC - Bernoulli):
- *     Pressure is constant (atmospheric) along the surface.
- *     1/2 * [ (∂ψ/∂x)² + (∂ψ/∂z)² ] + gη = R
- *     Where R is the Bernoulli constant (Total Energy Head).
+ *  where Ubar* = Ubar sqrt(k/g).  At the bed, Y = -kd, both the linear term and
+ *  all hyperbolic sine terms vanish, so the impermeable-bed condition is already
+ *  satisfied before the nonlinear equations are assembled.
  *
- *  4. NUMERICAL SOLUTION (FOURIER ANSATZ)
+ *  For numerical stability the hyperbolic ratios are evaluated in the stable
+ *  form
+ *
+ *      S_j(Y) = sinh(jY) + cosh(jY) tanh(jkd),
+ *      C_j(Y) = cosh(jY) + sinh(jY) tanh(jkd).
+ *
+ *  For large jkd, tanh(jkd) tends to 1 and both functions tend to exp(jY).
+ *
+ *  4. STATE VECTOR z[i]
  *  -----------------------------------------------------------------------------
- *  The stream function is approximated by a truncated Fourier series of order N
- *  (N=50) that analytically satisfies the Field Equation and Bottom BC:
+ *  This file implements the Fenton-style 1-based state vector.  Index 0
+ *  is intentionally unused so that the residual equations map directly to the
+ *  documented z[i] notation:
  *
- *    ψ(x,z) = -(ū + c) z + Σ_{j=1..N} B_j * [sinh(jkz)/cosh(jkd)] * cos(jkx)
+ *      z[1]  = kd
+ *      z[2]  = kH
+ *      z[3]  = T sqrt(gk)
+ *      z[4]  = c sqrt(k/g)
+ *      z[5]  = Eulerian current variable ubar_1 sqrt(k/g)
+ *      z[6]  = Stokes / mass-transport current variable ubar_2 sqrt(k/g)
+ *      z[7]  = mean wave-frame velocity Ubar sqrt(k/g)
+ *      z[8]  = q sqrt(k^3/g), with q = Ubar d - Q
+ *      z[9]  = r k/g, with r = R - g d
+ *      z[10] ... z[N+10]       = free-surface ordinates zeta_m = k eta_m
+ *      z[N+11] ... z[2N+10]    = Fourier coefficients B_j
  *
- *  Deep Water Numerical Stability:
- *  To prevent floating-point overflow when kd >> 1, the code replaces the
- *  hyperbolic ratio with asymptotic exponentials when arguments > 25.0:
+ *  Therefore, for Fourier order N, the active vector length is
  *
- *    sinh(jkz)/cosh(jkd) ≈ exp(jk(z-d))
+ *      num = 2N + 10.
  *
- *  Optimization Vector (State Space):
- *  The solver minimizes residuals for the vector
+ *  With the production value N = 50, this gives 110 active 1-based state entries
+ *  and 110 nonlinear residual equations, matching the full full residual
+ *  system for the stream-function / Fourier collocation solver.
  *
- *    X = [k, η_0...η_N, B_1...B_N, Q, R]
- *
- *  IMPORTANT (Overdetermined Residual System):
- *  The residual vector dimension is NOT equal to the number of unknowns.
- *  For N=50:
- *    - Unknowns: n = 1 + (N+1) + N + 2 = 2N + 4 = 104
- *    - Residuals: m = 3 + (N+1) + (N+1) = 2(N+1) + 3 = 105
- *  The implementation MUST allocate m=105 and never assume m==n, otherwise
- *  out-of-bounds writes will occur and results will become optimizer/flags dependent.
- *
- *  5. DERIVED PHYSICAL PARAMETERS & OUTPUT DEFINITIONS
+ *  5. RESIDUAL SYSTEM IMPLEMENTED IN eqns()
  *  -----------------------------------------------------------------------------
- *  Upon convergence, the software calculates the following engineering parameters
- *  derived from the solved Fourier coefficients (B_j).
+ *  At convergence every component of F(z) is zero.  The first eight residuals are
+ *  the global scalar constraints; the next N+1 enforce the free-surface streamline
+ *  condition; the final N+1 enforce Bernoulli's equation at the same collocation
+ *  nodes X_m = m*pi/N, m = 0..N.
  *
- *  A. FUNDAMENTAL WAVE GEOMETRY & PHASE
- *  ------------------------------------
- *  1. Wavelength (L):
- *     Horizontal distance between crests. Solved via dispersion relation.
- *     L = c·T = 2π / k
+ *      r1 = z2 - z1(H/d)
+ *      r2 = z2 - Hs z3^2
+ *      r3 = z4 z3 - 2*pi
+ *      r4 = z5 + z7 - z4
+ *      r5 = z1(z6 + z7 - z4) - z8
+ *      r6 = z[c+4] - U_c sqrt(z1)
+ *      r7 = z10 + z[N+10] + 2 sum_{i=1..N-1} z[10+i]
+ *      r8 = z10 - z[N+10] - z2
  *
- *  2. Celerity (c):
- *     Phase velocity. c = L / T.
+ *  For each free-surface node m = 0..N,
  *
- *  B. KINEMATICS (VELOCITIES & ACCELERATIONS)
- *  ------------------------------------------
- *  1. Horizontal Velocity (u):
- *     u(x,z) = c - ū + Σ_{j=1..N} jkB_j * [cosh(jkz)/cosh(jkd)] * cos(jkx)
+ *      r[9+m] = psi_m - z8 - z7 z[10+m]
  *
- *  2. Vertical Velocity (w):
- *     w(x,z) = Σ_{j=1..N} jkB_j * [sinh(jkz)/cosh(jkd)] * sin(jkx)
+ *  and
  *
- *  3. Max Acceleration (a_x):
- *     Total derivative (Convective acceleration).
- *     a_x = Du/Dt = u * ∂u/∂x + w * ∂u/∂z
+ *      r[N+10+m] = 0.5*((-z7 + u_m)^2 + v_m^2) + z[10+m] - z9.
  *
- *     NOTE (Python-parity detail):
- *     The vertical perturbation term uses +sin(j·phase) (not -sin). A sign error
- *     here distorts the convective term w·∂u/∂z and breaks Max Accel parity.
+ *  These equations solve the wave form, wave speed, current variables, mean-flow
+ *  flux, Bernoulli offset and Fourier coefficients as one coupled nonlinear
+ *  free-boundary problem.  They are not empirical fitting equations and are not a
+ *  post-processing correction to linear Airy theory.
  *
- *  4. Velocity Asymmetry:
- *     Asymmetry = |u_crest| / |u_trough|
+ *  6. CURRENT CONVENTIONS
+ *  -----------------------------------------------------------------------------
+ *  The solver keeps the current variables separate, as required by the Fenton formulation:
  *
- *  C. DYNAMICS (INTEGRAL PROPERTIES)
- *  ---------------------------------
- *  Computed using exact integral invariants (Fenton Eqs 14-16).
+ *      ubar_1 = c - Ubar,
+ *      ubar_2 = c - Q/d,
+ *      q      = Ubar d - Q.
  *
- *  1. Impulse (I):
- *     Total wave momentum (kg·m/s).
- *     I = ρ(c d - Q)
+ *  The GUI uses the Eulerian-current criterion by default, but the state vector and
+ *  residual equation r6 preserve the Fenton current-selector convention.
  *
- *  2. Energy Density (E):
- *     Mean Energy (J/m²).
- *     PE = 1/2 ρ g mean(η²)
- *     KE = 1/2 (cI - Qρ U_c)
- *     E  = PE + KE
+ *  7. NUMERICAL SOLUTION STRATEGY
+ *  -----------------------------------------------------------------------------
+ *  Wave height is introduced by continuation from a near-linear wave to the target
+ *  value.  At each continuation step, Newton iteration linearizes F(z) about the
+ *  current iterate and solves J dz = -F(z).  Numerical finite-difference Jacobians
+ *  and singular-value stabilized dense linear algebra are used because high-order
+ *  stream-function waves, near-limiting waves and current cases can make the
+ *  Jacobian ill-conditioned.
  *
- *  3. Power / Energy Flux (P):
- *     Rate of energy transfer (W/m).
- *     P = c(3KE - 2PE) + 1/2 mean(u_b²)(I + ρ c d) + 1/2 ρ Q U_c²
+ *  The linear Airy/Fenton-McKee estimates are used only as initialization and
+ *  checking aids.  The final result is the converged nonlinear stream-function /
+ *  Fourier collocation solution.
  *
- *     Note on mean(u_b²) (Mean Square Bed Velocity):
- *     To avoid deep-water integration errors, this is computed algebraically:
- *     mean(u_b²) = 2(R - g d) - c²
+ *  8. OUTPUT INTERPRETATION
+ *  -----------------------------------------------------------------------------
+ *  The report follows the distinction between k-based and d-based
+ *  nondimensional quantities: kd, kH, T sqrt(gk), c sqrt(k/g), current variables,
+ *  fluxes, Bernoulli constants, impulse, energy, momentum flux, radiation stress
+ *  and wave power are reported alongside their engineering depth-scaled forms.
  *
- *  4. Radiation Stress (Sxx):
- *     Excess momentum flux (N/m).
- *     Sxx = 4KE - 3PE + ρ mean(u_b²) d + 2ρ I U_c
+ *  The same calculation is run for no-current and, when requested, with-current
+ *  cases so the output can be compared under the selected current convention.
  *
- *  5. Mean Stokes Drift (U_drift):
- *     U_drift = I / (ρ d)
+ *  9. BUILDING FROM SOURCE
+ *  -----------------------------------------------------------------------------
+ *  Windows / MinGW-w64 release-like GUI build:
  *
- *  D. STABILITY & REGIME CLASSIFICATION
- *  ------------------------------------
- *  1. Ursell Number (U_r):
- *     U_r = H L² / d³ (Values > 26 indicate significant nonlinearity).
+ *      g++ fenton_gui.cpp -o fenton_gui.exe -O3 -std=c++20 -march=native ^
+ *          -lgdi32 -luser32 -lkernel32 -lcomctl32 ^
+ *          -static-libgcc -static-libstdc++ -mwindows -pthread
  *
- *  2. Miche Limit (H_max):
- *     Theoretical max height before breaking.
- *     H_max = 0.142 L tanh(kd)
- *
- *  3. Saturation (Breaking Index):
- *     Saturation = H / H_max
- *     - If > 1.0: Wave is BREAKING.
- *     - If < 1.0: Wave is STABLE.
- *
- *  4. Regime:
- *     - Shallow:      d/L < 0.05
- *     - Intermediate: 0.05 < d/L < 0.5
- *     - Deep:         d/L > 0.5
- *
- * ==============================================================================
- *  6. SOFTWARE USAGE & COMPILATION GUIDE (C++)
- * ==============================================================================
- *
- *  A. PREREQUISITES
- *  ----------------
- *  - Windows (Win32 API GUI build). MinGW-w64 (g++) or MSVC with C++20 support.
- *  - Basic familiarity with the command line (Terminal/CMD).
- *
- *  B. BUILDING FROM SOURCE
- *  ------------------------------------
- *  1. Ensure a C++20-capable toolchain is installed and on PATH (g++ recommended).
- *
- *  2. Compile (release-like build, GUI subsystem):
- *     > g++ fenton_gui.cpp -o fenton_gui.exe -O3 -std=c++20 -march=native ^
- *       -lgdi32 -luser32 -lkernel32 -lcomctl32 ^
- *       -static-libgcc -static-libstdc++ -mwindows -pthread
- *
- *     Build note (Python-parity / "no current" stability):
- *     This solver is path-sensitive: small floating-point differences can change trust-region
- *     acceptance and LM step damping, pushing the "no current" case to a different local minimum.
- *     On this system, Python-parity (including the "no current" scenario) is achieved ONLY when
- *     compiling with -march=native (enables CPU-specific instruction selection such as FMA and
- *     vectorization patterns). Removing -march=native has been observed to produce incorrect
- *     "no current" results even when all equations and tolerances are unchanged.
- *     For bitwise-stable results, keep the same CPU family, compiler version, and flags.
- *
- *  3. Run:
- *     > fenton_gui.exe
- *
- *  C. STANDALONE EXECUTABLE (.EXE)
- *  ------------------------------
- *  The build command above produces a standalone fenton_gui.exe (no Python required).
- *  The program writes results to the GUI output panel and also produces an "output.txt"
- *  file (UTF-8) to disk.
- *
- * ==============================================================================
- *  BIBLIOGRAPHY
- * ==============================================================================
- *
- *  1.  Fenton, J.D. (1999). "Numerical methods for nonlinear waves."
- *      In P.L.-F. Liu (Ed.), Advances in Coastal and Ocean Engineering (Vol. 5,
- *      pp. 241–324). World Scientific: Singapore.
- *      [Primary Source: Comprehensive review of fully-nonlinear methods including
- *      Fourier approximation, Boundary Integral Equation (BIE) methods, and
- *      Local Polynomial Approximation].
- *      URL: https://johndfenton.com/Papers/Fenton99Liu-Numerical-methods-for-nonlinear-waves.pdf
- *
- *  2.  Fenton, J.D. (1988). "The numerical solution of steady water wave problems."
- *      Computers & Geosciences, 14(3), 357–368.
- *      [The core algorithm for high-accuracy Stream Function Theory].
- *      URL: https://doi.org/10.1016/0098-3004(88)90066-0
- *
- *  3.  Fenton, J.D. (1985). "A fifth-order Stokes theory for steady waves."
- *      Journal of Waterway, Port, Coastal, and Ocean Engineering, 111(2), 216–234.
- *      [Standard analytical theory for deep/intermediate water pile design].
- *      URL: https://doi.org/10.1061/(ASCE)0733-950X(1985)111:2(216)
- *
- *  4.  Fenton, J.D. (1978). "Wave forces on vertical bodies of revolution."
- *      Journal of Fluid Mechanics, 85(2), 241–255.
- *      [Foundational diffraction theory for large diameter piles].
- *      URL: https://johndfenton.com/Papers/Fenton78-Waves-on-bodies-of-revolution.pdf
- *
- *  5.  Fenton, J.D. (1990). "Nonlinear wave theories." In B. Le Méhauté &
- *      D.M. Hanes (Eds.), The Sea: Ocean Engineering Science (Vol. 9, Part A).
- *      John Wiley & Sons.
- *      [Comprehensive guide for selecting wave theories: Stokes vs Cnoidal vs Stream].
- *      URL: https://www.johndfenton.com/Papers/Fenton90b-Nonlinear-wave-theories.pdf
+ *  Keep the same compiler family, CPU family and optimization flags when bitwise
+ *  reproducibility is required, because Newton/trust-region acceptance and SVD
+ *  truncation can be sensitive to floating-point differences.
  * ==============================================================================
  */
 
@@ -299,7 +235,7 @@ int __cdecl nanosleep64(const struct _timespec64* request, struct _timespec64* r
 #endif // defined(_WIN32) && defined(__MINGW32__)
 // -------------------------------------------------------------------------------
 
-// Continue with the rest of C/C++ includes
+// Standard C++ support for numerical solution, reporting and Win32 GUI plumbing
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -321,7 +257,7 @@ int __cdecl nanosleep64(const struct _timespec64* request, struct _timespec64* r
 #include <fstream>
 
 // ==============================================================================
-//  THREAD POOL (Persistent, low overhead)
+//  THREAD POOL (persistent support for numerical Jacobian work)
 // ==============================================================================
 
 class ThreadPool {
@@ -387,11 +323,11 @@ private:
     bool m_stop;
 };
 
-// Lazy global pool (used for Jacobian construction)
+// Lazy global pool available to dense residual/Jacobian operations
 static std::unique_ptr<ThreadPool> g_pool;
 
 // ==============================================================================
-//  PHYSICAL CONSTANTS (must match fenton_gui.py)
+//  PHYSICAL CONSTANTS (dimensional convention)
 // ==============================================================================
 
 namespace Phys {
@@ -403,7 +339,7 @@ namespace Phys {
 using Phys::Real;
 
 // ==============================================================================
-//  SMALL LINEAR ALGEBRA (dense, for n ~ 100)
+//  SMALL LINEAR ALGEBRA (dense stabilized solves for num = 2N + 10)
 // ==============================================================================
 
 namespace LinAlg {
@@ -584,8 +520,8 @@ static inline void mat_vec_mul(int rows, int cols,
 // ------------------------------------------------------------------------------
 // Symmetric eigen-decomposition (Jacobi rotations)
 // ------------------------------------------------------------------------------
-// Implemented dependency-free to support SciPy-parity TRF(tr_solver='exact')
-// steps. For our dense n~100 systems, Jacobi is sufficiently robust.
+// Dependency-free stabilized eigen-decomposition used by the dense SVD helpers.
+// For the state-vector system, n is num = 2N + 10 (110 when N=50).
 //
 // Input:
 //   A_in : symmetric matrix (n x n) in row-major.
@@ -722,12 +658,10 @@ static bool svd_via_jtj(int m, int n,
 // One-sided Jacobi SVD for tall/skinny dense matrices (m >= n).
 //
 // Why this exists:
-//   SciPy's TRF('exact') path performs an SVD of J_h directly (LAPACK), which is
-//   numerically more stable than forming J^T J (squares the condition number).
-//   The earlier C++ parity implementation used eigen(J^T J) for convenience.
-//   That is usually fine, but if you want to be extreme about accuracy
-//   (especially near-breaking regimes, strong nonlinearity, or ill-conditioned
-//   Jacobians), one-sided Jacobi SVD is a better match to SciPy's intent.
+//   The residual system can become ill-conditioned for high finite-amplitude
+//   waves, near-limiting waves and current cases.  Directly orthogonalizing the
+//   dense Jacobian columns provides a stable singular-value basis for Newton
+//   corrections without forming J^T J as the primary solve path.
 //
 // Algorithm:
 //   We orthogonalize the columns of A = J in-place by applying Jacobi rotations
@@ -736,10 +670,9 @@ static bool svd_via_jtj(int m, int n,
 //   the singular values are the column norms of the orthogonalized matrix.
 //
 // Notes:
-//   - We do NOT explicitly construct U.
-//   - TRF only needs (s, V) and uf = U^T f. We compute uf via
-//       uf = diag(1/s) * V^T * (J^T f)
-//     which remains valid for this decomposition.
+//   - U is not explicitly constructed.
+//   - The Newton correction only requires singular values and right singular
+//     vectors for the dense residual Jacobian.
 //   - Output singular values are sorted descending, with V columns permuted.
 // --------------------------------------------------------------------------------------
 static bool svd_jacobi_onesided(int m, int n,
@@ -788,7 +721,7 @@ static bool svd_jacobi_onesided(int m, int n,
     // Tolerance consistent with Jacobi sweeps.
     const Real eps = std::sqrt(std::numeric_limits<Real>::epsilon());
 
-    // Sweeps: for n~104, 20-30 sweeps is more than enough for near-orthogonality.
+    // Sweeps: for num≈110, 20-30 sweeps is enough for near-orthogonality in this dense system.
     const int max_sweeps = 30;
     for (int sweep = 0; sweep < max_sweeps; ++sweep) {
         Real max_corr = 0.0;
@@ -871,42 +804,42 @@ static bool svd_jacobi_onesided(int m, int n,
 } // namespace LinAlg
 
 // ==============================================================================
-//  FENTON STREAM FUNCTION SOLVER (Matches Python formulation)
+//  FENTON STREAM-FUNCTION SOLVER (z[i] formulation)
 // ==============================================================================
 
 
 class FentonStreamFunction {
 public:
-    // ----------------------------- inputs -----------------------------------
-    Real H_target;   // [m]
-    Real T_target;   // [s]
-    Real d;          // [m]
-    Real Uc;         // [m/s] (Eulerian / lab-frame)
-    Real g;          // [m/s^2]
-    int  N;          // Fourier order (N=50)
+    // ----------------------- physical input variables -------------------------
+    Real H_target;   // [m] wave height H, crest-to-trough
+    Real T_target;   // [s] apparent fixed-frame period T
+    Real d;          // [m] still-water depth d
+    Real Uc;         // [m/s] imposed collinear current U_c, GUI Eulerian convention
+    Real g;          // [m/s^2] gravitational acceleration g
+    int  N;          // Fourier order / half-wave interval count N (production N=50)
 
-    // ------------------------- solver controls ------------------------------
-    int  nstep;          // continuation steps in wave height
-    int  number;         // max Newton iterations per step
-    Real crit;           // intermediate-step convergence factor
-    Real criter_final;   // final-step convergence factor
+    // ----------------------- continuation / Newton controls --------------------
+    int  nstep;          // continuation steps in H/(gT^2) toward the target wave height
+    int  number;         // maximum Newton iterations per continuation step
+    Real crit;           // intermediate-step convergence threshold on surface correction
+    Real criter_final;   // final-step convergence threshold on surface correction
 
-    // Current criterion (1=Eulerian, 2=Stokes). GUI uses Eulerian current.
+    // Current selector used in residual r6: 1 = Eulerian current, 2 = Stokes/mass-transport current.
     int Current_criterion;
 
-    // Derived nondimensional inputs (C++ Read_data equivalents)
-    Real MaxH;     // H/d
-    Real T_nd;     // T * sqrt(g/d)
-    Real Height;   // (H/d) / (T_nd^2) = H/(g T^2)
-    Real Current;  // Uc / sqrt(g d)
+    // Derived nondimensional inputs
+    Real MaxH;     // H/d, prescribed relative wave height
+    Real T_nd;     // T sqrt(g/d), depth-based dimensionless period
+    Real Height;   // H/(gT^2), period-form height parameter H_s
+    Real Current;  // U_c/sqrt(gd), depth-based imposed-current Froude variable
 
-    // ----------------------------- outputs ----------------------------------
-    Real k;        // [rad/m]
-    Real L;        // [m]
-    Real c;        // [m/s]
+    // ----------------------- dimensional and report outputs --------------------
+    Real k;        // [rad/m] wave number, k = 2*pi/L
+    Real L;        // [m] dynamically consistent wavelength L
+    Real c;        // [m/s] fixed-frame wave celerity, c = L/T
 
-    std::vector<Real> eta_nodes; // size (N+1), absolute z from bed [m]
-    std::vector<Real> Bj;        // size (N), B_1..B_N (depth scaling)
+    std::vector<Real> eta_nodes; // size N+1, free-surface node elevations as bed-origin coordinates [m]
+    std::vector<Real> Bj;        // size N, Fourier stream-function coefficients B_1..B_N
 
     Real eta_crest;    // [m] relative to SWL
     Real eta_trough;   // [m] relative to SWL
@@ -920,7 +853,7 @@ public:
     Real breaking_index;
     bool is_breaking;
 
-    // Integral properties (dimensional)
+    // Integral properties reported in the SOLUTION.RES convention
     Real EulerianCurrent;
     Real StokesCurrent;
     Real MeanFluidSpeed;
@@ -949,23 +882,23 @@ public:
 
     Real Cg;
 
-    // Additional invariants (depth-scaled; used in Solution-Flat reporting)
+    // Depth-scaled invariants used in the dimensionless-output table
     Real E_depth;
     Real KE_depth;
     Real PE_depth;
 
-    // Mean Stokes / mass-transport current (dimensional)
+    // Stokes / mass-transport current derived from the nonlinear flux solution
     Real MassTransport;
 
-    // Bed orbital statistics / kinematics
-    Real MeanSquareBedVelocity;  // ub^2 [m^2/s^2]
+    // Bed and free-surface kinematic diagnostics derived after convergence
+    Real MeanSquareBedVelocity;  // ub^2 [m^2/s^2], phase-mean orbital bed velocity square
     Real u_bed;
     Real u_surf;
     Real acc_max;
     Real w_max;
     Real asymmetry;
 
-    // Convenience (not printed in the report header but computed like Python)
+    // Convenience quantities for secondary engineering diagnostics
     Real tau_bed;
     Real ExcursionBed;
 
@@ -999,7 +932,7 @@ public:
           tau_bed(0.0), ExcursionBed(0.0),
           converged(false), last_error("")
     {
-        // Inputs screening (keep parity philosophy: fail-fast on invalid physical inputs)
+        // Input screening for the physical problem: H, T and d must be positive.
         if (d > 0.0) {
             MaxH   = H_target / d;
             T_nd   = T_target * std::sqrt(g / d);
@@ -1007,13 +940,13 @@ public:
             Current = Uc / std::sqrt(g * d);
         }
 
-        // Robustness for large ambient currents: increase continuation/iteration budget.
+        // Large imposed-current cases may require more continuation/Newton work.
         if (std::abs(Current) >= 1.0) {
             nstep  = std::max(nstep, 8);
             number = std::max(number, 80);
         }
 
-        // Internal arrays (C++-parity with Python's z[1..num] layout)
+        // Internal arrays follow the Fenton 1-based z[1..num] state-vector layout.
         n = N;
         num = 2 * n + 10;
 
@@ -1059,7 +992,7 @@ public:
         }
     }
 
-    // GUI-facing kinematics: (u_abs, w_abs, a_x) at z from bed [m] and phase X=kx [rad].
+    // GUI-facing kinematics: fixed-frame u, w and a_x at bed-origin z [m] and phase X=kx [rad].
     void get_kinematics(Real z_bed, Real phase, Real& u_abs, Real& w_abs, Real& ax) const {
         const Real kd = z[1];
         if (!(kd > 0.0) || !(d > 0.0)) {
@@ -1069,7 +1002,7 @@ public:
 
         const Real k_phys = kd / d;
         const Real X = phase;
-        const Real Yloc = k_phys * (z_bed - d); // wave scaling: k(z-d)
+        const Real Yloc = k_phys * (z_bed - d); // Y = k y, with bed-origin z converted to y = z-d
 
         Real u_nd = 0.0, v_nd = 0.0, dudt_nd = 0.0;
         point(X, Yloc, u_nd, v_nd, dudt_nd);
@@ -1080,40 +1013,40 @@ public:
         ax    = dudt_nd * g;
     }
 
-    // Accessor used for reporting (dimensionless wavenumber kd)
+    // Accessor used for SOLUTION.RES-style reporting: dimensionless wavenumber kd.
     Real kd_dimless() const { return (z.size() > 1) ? z[1] : 0.0; }
 
 private:
     int n = 0;
     int num = 0;
 
-    // 1-based vectors (index 0 unused)
+    // Fenton 1-based vectors; index 0 is intentionally unused.
     std::vector<Real> z, rhs1, rhs2, coeff, Tanh, B, Y;
 
-    // trig tables
+    // Collocation trigonometric tables for X_m = m*pi/N and harmonics j = 1..N.
     std::vector<Real> cosa, sina;
-    std::vector<Real> cos_nm, sin_nm; // (n+1) x n, row-major: [m*n + (j-1)]
+    std::vector<Real> cos_nm, sin_nm; // (N+1) x N, row-major values cos(jX_m), sin(jX_m)
 
-    // continuation storage sol[i][1..2] flattened: sol[(i*3)+k]
+    // Continuation storage for extrapolating the state vector between height steps.
     std::vector<Real> sol;
 
-    // step variables
-    Real height = 0.0; // stepped dimensionless height
-    Real Hoverd = 0.0; // stepped H/d
+    // Current continuation-step variables
+    Real height = 0.0; // stepped H_s = H/(gT^2) value used in r2
+    Real Hoverd = 0.0; // stepped H/d value used in r1
 
 private:
     inline Real& SOL(int i, int k) { return sol[(size_t)i * 3 + (size_t)k]; }
     inline Real  SOL(int i, int k) const { return sol[(size_t)i * 3 + (size_t)k]; }
 
     void init_trig_tables() {
-        // cosa[k] = cos(k*pi/n), k=0..2n
+        // cosa[k] = cos(k*pi/N), k = 0..2N, used by the half-wave collocation grid.
         for (int i = 0; i <= 2 * n; ++i) {
             const Real ang = (Real)i * Phys::PI / (Real)n;
             cosa[(size_t)i] = std::cos(ang);
             sina[(size_t)i] = std::sin(ang);
         }
 
-        // cos_nm[m,j] = cos((m*j)%2n * pi/n), for m=0..n, j=1..n
+        // cos_nm[m,j] and sin_nm[m,j] store cos(jX_m), sin(jX_m), X_m = m*pi/N.
         for (int m = 0; m <= n; ++m) {
             for (int j = 1; j <= n; ++j) {
                 const int nm = (m * j) % (2 * n);
@@ -1124,7 +1057,7 @@ private:
     }
 
     // ----------------------------------------------------------------------
-    // Port of Python _init_linear()
+    // Linear/Fenton-McKee initial estimate used only to seed the nonlinear nonlinear residual solve.
     // ----------------------------------------------------------------------
     void init_linear() {
         const Real pi = Phys::PI;
@@ -1133,7 +1066,7 @@ private:
 
         if (sigma > 0.0) {
             const Real t = std::tanh(std::pow(sigma, 1.5));
-            // Fenton & McKee (1990) approximation (as used in the Python port)
+            // Fenton-McKee approximation for the initial kd estimate; not the final theory.
             z[1] = (sigma * sigma) / std::pow(t, (Real)(2.0 / 3.0));
         } else {
             z[1] = 2.0 * pi * std::max(height, (Real)1e-12) / std::max(Hoverd, (Real)1e-12);
@@ -1143,68 +1076,68 @@ private:
         z[4] = std::sqrt(std::tanh(z[1]));
         z[3] = 2.0 * pi / z[4];
 
-        // Current initialisation (finite depth)
+        // Current-variable initialization for the selected Eulerian/Stokes closure.
         if (Current_criterion == 1) {
-            z[5] = Current * std::sqrt(z[2]); // ce
-            z[6] = 0.0;                       // cs
+            z[5] = Current * std::sqrt(z[2]); // ubar_1 sqrt(k/g), Eulerian current variable
+            z[6] = 0.0;                       // ubar_2 sqrt(k/g), Stokes current variable
         } else {
             z[6] = Current * std::sqrt(z[2]);
             z[5] = 0.0;
         }
 
-        z[7] = z[4];       // ubar (dimensionless)
-        z[8] = 0.0;        // q-term
+        z[7] = z[4];       // Ubar sqrt(k/g), mean wave-frame velocity variable
+        z[8] = 0.0;        // q sqrt(k^3/g), flux-related variable
         z[9] = 0.5 * z[7] * z[7];
 
         z[10] = 0.5 * z[2];
         for (int i = 1; i <= n; ++i) {
-            z[n + i + 10] = 0.0;                 // coeff
+            z[n + i + 10] = 0.0;                 // Fourier coefficient B_i
             z[i + 10] = 0.5 * z[2] * cosa[(size_t)i];
         }
         z[n + 11] = 0.5 * z[2] / z[7];
 
-        // store sol[] for extrapolation
+        // Store the initial state for continuation extrapolation.
         for (int i = 1; i < 10; ++i) SOL(i, 1) = z[(size_t)i];
         for (int i = 10; i <= num; ++i) SOL(i, 1) = 0.0;
     }
 
     // ----------------------------------------------------------------------
-    // Port of Python _eqns(): fills rhs_out[1..num] and returns sum(rhs^2)
+    // residual vector F(z): fills rhs_out[1..2N+10] and returns sum(F_i^2).
     // ----------------------------------------------------------------------
     Real eqns(std::vector<Real>& rhs_out) {
         const Real pi = Phys::PI;
         rhs_out.assign((size_t)num + 1, 0.0);
 
-        // Eqn 1
+        // r1: prescribed relative height, z2 = z1(H/d)
         rhs_out[1] = z[2] - z[1] * Hoverd;
-        // Eqn 2 (Period case)
+        // r2: period-form height closure, z2 = H_s z3^2
         rhs_out[2] = z[2] - height * z[3] * z[3];
-        // Eqn 3
+        // r3: period-celerity identity, z4 z3 = 2*pi
         rhs_out[3] = z[4] * z[3] - 2.0 * pi;
-        // Eqn 4
+        // r4: Eulerian-current identity, z5 + z7 = z4
         rhs_out[4] = z[5] + z[7] - z[4];
-        // Eqn 5
+        // r5: Stokes-current / flux identity, z1(z6+z7-z4) = z8
         rhs_out[5] = z[1] * (z[6] + z[7] - z[4]) - z[8];
 
-        // coeff and tanh tables
+        // Fourier coefficients B_j and tanh(jkd) tables used in S_j and C_j.
         for (int i = 1; i <= n; ++i) {
             coeff[(size_t)i] = z[(size_t)(n + i + 10)];
             Tanh[(size_t)i]  = std::tanh((Real)i * z[1]);
         }
 
-        // Eqn 6 (finite depth; correction uses sqrt(z[1]))
+        // r6: prescribed-current equation, z[current_selector+4] = U_c sqrt(z1).
         rhs_out[6] = z[(size_t)(Current_criterion + 4)] - Current * std::sqrt(z[1]);
 
-        // Eqn 7 (mean free surface level; scaling constant irrelevant)
+        // r7: mean-free-surface datum constraint over the half-wave collocation nodes.
         rhs_out[7] = z[10] + z[(size_t)(n + 10)];
         for (int i = 1; i < n; ++i) rhs_out[7] += 2.0 * z[(size_t)(10 + i)];
 
-        // Eqn 8 (wave height definition)
+        // r8: crest-to-trough wave-height definition, z10 - z[N+10] = z2.
         rhs_out[8] = z[10] - z[(size_t)(n + 10)] - z[2];
 
-        // Eqns 9.. and n+10.. : free surface BCs at nodes m=0..n
+        // r9.. and rN+10..: streamline and Bernoulli residuals at X_m = m*pi/N.
         for (int m = 0; m <= n; ++m) {
-            const Real zsurf = z[(size_t)(10 + m)]; // k(eta-d)
+            const Real zsurf = z[(size_t)(10 + m)]; // zeta_m = k eta_m at the free-surface node
 
             Real psi = 0.0;
             Real u   = 0.0;
@@ -1245,15 +1178,15 @@ private:
                                            + z[(size_t)(m + 10)] - z[9];
         }
 
-        // sum of squares
+        // Objective used only to monitor convergence: sum of squared residual components.
         Real ss = 0.0;
         for (int i = 1; i <= num; ++i) ss += rhs_out[(size_t)i] * rhs_out[(size_t)i];
         return ss;
     }
 
     // ----------------------------------------------------------------------
-    // SVD solve with Press-style truncation: wmin = wmax*1e-12 (Python parity)
-    // Solves A x = b for square A (num x num), returning x.
+    // SVD solve for the Newton correction with small singular-value truncation.
+    // Solves J dz = -F for the square system, num = 2N + 10.
     // ----------------------------------------------------------------------
     static std::vector<Real> svd_solve(const std::vector<Real>& A, const std::vector<Real>& b, int n) {
         std::vector<Real> s, V;
@@ -1300,7 +1233,7 @@ private:
     }
 
     // ----------------------------------------------------------------------
-    // Port of Python _newton()
+    // Newton iteration for the nonlinear residual system F(z) = 0.
     // ----------------------------------------------------------------------
     Real newton_step(int /*iter_count*/) {
         const Real ss0 = eqns(rhs1);
@@ -1313,7 +1246,7 @@ private:
         std::vector<Real> A((size_t)num * (size_t)num, 0.0);
         std::vector<Real> b((size_t)num, 0.0);
 
-        // finite-difference Jacobian (column-wise)
+        // Column-wise numerical Jacobian, consistent with Fenton-style program derivatives.
         for (int i = 1; i <= num; ++i) {
             Real h = (Real)0.01 * z0[(size_t)i];
             if (std::abs(z0[(size_t)i]) < (Real)1e-4) h = (Real)1e-5;
@@ -1336,7 +1269,7 @@ private:
             if (!std::isfinite(v)) throw std::runtime_error("Non-finite Newton correction vector (dx).");
         }
 
-        // Backtracking: prefer alpha=1, reduce if it worsens residuals or violates kd>0
+        // Damped Newton step: preserve kd > 0 and accept only non-worsening residual norm.
         Real alpha = 1.0;
         Real ss_best = ss0;
         std::vector<Real> z_best = z0;
@@ -1365,7 +1298,7 @@ private:
 
         z = z_best;
 
-        // mean absolute correction on the free surface nodes (indices 10..n+10 inclusive)
+        // Convergence monitor: mean absolute correction of free-surface ordinates z[10..N+10].
         Real corr = 0.0;
         for (int i = 10; i <= n + 10; ++i) corr += std::abs(z_best[(size_t)i] - z0[(size_t)i]);
         corr /= (Real)(n + 1);
@@ -1374,7 +1307,7 @@ private:
     }
 
     // ----------------------------------------------------------------------
-    // Port of Python _compute_Y_and_B()
+    // Reconstruct free-surface cosine coefficients Y_j and copy Fourier coefficients B_j.
     // ----------------------------------------------------------------------
     void compute_Y_and_B() {
         std::fill(Y.begin(), Y.end(), 0.0);
@@ -1390,12 +1323,12 @@ private:
             Y[(size_t)j] = 2.0 * s / (Real)n;
         }
 
-        // Refresh Tanh[] for post-processing / kinematics.
+        // Refresh tanh(jkd) for kinematic and post-processing evaluations.
         for (int i = 1; i <= n; ++i) Tanh[(size_t)i] = std::tanh((Real)i * z[1]);
     }
 
     // ----------------------------------------------------------------------
-    // Port of Python _surface_keta()
+    // Evaluate the free-surface ordinate zeta(X) = k eta(X) from cosine coefficients.
     // ----------------------------------------------------------------------
     Real surface_keta(Real X) const {
         Real kEta = 0.0;
@@ -1405,14 +1338,14 @@ private:
     }
 
     // ----------------------------------------------------------------------
-    // Port of Python _point(): returns (u_nd, v_nd, dudt_nd) in depth scaling.
+    // Point kinematics: returns depth-scaled fixed-frame u, v and material acceleration.
     // ----------------------------------------------------------------------
     void point(Real X, Real Yloc, Real& u_out, Real& v_out, Real& dudt_out) const {
         const Real kd = z[1];
         const Real kd_sqrt = std::sqrt(kd);
 
-        const Real c_nd  = z[4] / kd_sqrt; // c/√(gd)
-        const Real ce_nd = z[5] / kd_sqrt; // ce/√(gd)
+        const Real c_nd  = z[4] / kd_sqrt; // c/sqrt(gd)
+        const Real ce_nd = z[5] / kd_sqrt; // ubar_1/sqrt(gd), Eulerian current variable
 
         Real u = 0.0, v = 0.0, ux = 0.0, vx = 0.0;
 
@@ -1454,7 +1387,7 @@ private:
     }
 
     // ----------------------------------------------------------------------
-    // Mean square bed orbital velocity ub^2 = < (u_b - Uc)^2 >
+    // Mean square orbital bed velocity ub^2 = <(u_b - ubar_1)^2>.
     // ----------------------------------------------------------------------
     Real mean_square_bed_orbital_velocity(int nph = 720) {
         if (!(d > 0.0) || !(T_target > 0.0)) return 0.0;
@@ -1464,7 +1397,7 @@ private:
         for (int i = 0; i < Nph; ++i) {
             const Real ph = (2.0 * Phys::PI) * (Real)i / (Real)Nph;
             Real u_abs, w_abs, ax;
-            get_kinematics(0.0, ph, u_abs, w_abs, ax); // bed: z_bed=0
+            get_kinematics(0.0, ph, u_abs, w_abs, ax); // bed-origin coordinate z = 0
             const Real u_orb = u_abs - Uc;
             ub2 += u_orb * u_orb;
         }
@@ -1472,7 +1405,7 @@ private:
     }
 
     // ----------------------------------------------------------------------
-    // Depth-scaled momentum flux S/(rho g d^2) in moving frame (phase-invariant).
+    // Depth-scaled momentum flux S/(rho g d^2), evaluated in the moving-frame formulation.
     // ----------------------------------------------------------------------
     Real momentum_flux_S_depth(Real phase = 0.0, int npts = 1200) {
         const Real kd = z[1];
@@ -1483,7 +1416,7 @@ private:
 
         const Real X = phase;
         const Real kEta = surface_keta(X);
-        const Real eta_over_d = 1.0 + kEta / kd; // y at free surface
+        const Real eta_over_d = 1.0 + kEta / kd; // free-surface elevation as bed-origin y/d
 
         const int Np = std::max(50, npts);
         const Real dy = eta_over_d / (Real)(Np - 1);
@@ -1491,7 +1424,7 @@ private:
         Real integ = 0.0;
         for (int i = 0; i < Np; ++i) {
             const Real y = dy * (Real)i;
-            const Real Yloc = kd * (y - 1.0); // Y = kd*(y-1)
+            const Real Yloc = kd * (y - 1.0); // Y = k y, with y/d measured from still-water level
 
             Real u_nd, v_nd, dudt_nd;
             point(X, Yloc, u_nd, v_nd, dudt_nd);
@@ -1508,7 +1441,7 @@ private:
     }
 
     // ----------------------------------------------------------------------
-    // Integral properties (Python _calc_integral_props_cpp parity)
+    // Integral properties in the SOLUTION.RES nondimensional and dimensional convention.
     // ----------------------------------------------------------------------
     void calc_integral_props_cpp() {
         const Real kd = z[1];
@@ -1558,7 +1491,7 @@ private:
         F_depth = f / kd25;
         I_depth = pulse / kd_32;
 
-        // dimensionalise
+        // Convert depth-scaled invariants to dimensional engineering units.
         EnergyDensity = Phys::RHO * g * (d * d) * E_depth;            // [J/m^2]
         Sxx           = Phys::RHO * g * (d * d) * Sxx_depth;          // [N/m]
         Power         = Phys::RHO * std::pow(g, 1.5) * std::pow(d, 2.5) * F_depth; // [W/m]
@@ -1571,7 +1504,7 @@ private:
         BernoulliR = R_dimless * g * d;
         MassTransport = cs_dimless * std::sqrt(g * d);
 
-        // Convenience values for reporting
+        // Convenience values for the output tables and glossary.
         EulerianCurrent = Uc;
         StokesCurrent = MassTransport;
         MeanFluidSpeed = ubar_dimless * std::sqrt(g * d);
@@ -1590,24 +1523,24 @@ private:
     }
 
     // ----------------------------------------------------------------------
-    // Core continuation + Newton loop + dimensional post-process (Python parity)
+    // Core continuation, Newton solution of F(z)=0, and dimensional post-processing.
     // ----------------------------------------------------------------------
     void solve_internal() {
         const Real dhe = Height / (Real)nstep;
         const Real dho = MaxH   / (Real)nstep;
 
-        // continuation in height
+        // Continue in wave-height parameter from near-linear wave to target H.
         for (int ns = 1; ns <= nstep; ++ns) {
             height = (Real)ns * dhe;
             Hoverd = (Real)ns * dho;
 
-            // initial/extrapolated guess
+            // Initial or extrapolated state vector for the current continuation step.
             if (ns == 1) {
                 init_linear();
             } else {
                 for (int i = 1; i <= num; ++i) z[(size_t)i] = 2.0 * SOL(i, 2) - SOL(i, 1);
 
-                // fallback if extrapolation yields invalid state
+                // Fallback if extrapolation yields an invalid Fenton state vector.
                 if (!(z[1] > 0.0)) {
                     for (int i = 1; i <= num; ++i) z[(size_t)i] = SOL(i, 2);
                 }
@@ -1631,7 +1564,7 @@ private:
                 try {
                     err = newton_step(it);
                 } catch (const std::exception&) {
-                    // Retry once from last converged state if first iteration failed.
+                    // Retry once from the last converged continuation state if the Newton step fails.
                     if (ns > 1 && it == 1) {
                         for (int i = 1; i <= num; ++i) z[(size_t)i] = SOL(i, 2);
                         err = newton_step(it);
@@ -1642,7 +1575,7 @@ private:
 
                 if (!std::isfinite(err)) throw std::runtime_error("Non-finite Newton correction.");
 
-                // IMPORTANT: update continuation storage BEFORE convergence break (Python parity)
+                // Update continuation storage before testing convergence, preserving the next extrapolation state.
                 if (ns == 1) {
                     for (int i = 1; i <= num; ++i) SOL(i, 2) = z[(size_t)i];
                 } else {
@@ -1650,7 +1583,7 @@ private:
                     for (int i = 1; i <= num; ++i) SOL(i, 2) = z[(size_t)i];
                 }
 
-                // protect linear algebra calls on diverging states
+                // Guard the dense Newton solve against diverging or non-finite residuals.
                 if (!(z[1] > 0.0)) throw std::runtime_error("Divergence: invalid state vector encountered.");
                 for (int i = 1; i <= num; ++i) {
                     if (!std::isfinite(z[(size_t)i])) throw std::runtime_error("Divergence: non-finite state vector encountered.");
@@ -1667,7 +1600,7 @@ private:
                 throw std::runtime_error("Newton did not converge within iteration budget.");
             }
 
-            // update Y and B for this step (C++ does this each step)
+            // Reconstruct free-surface harmonics and Fourier coefficients for this step.
             compute_Y_and_B();
         }
 
@@ -1677,16 +1610,14 @@ private:
 
         const Real k_phys = kd / d;
         const Real L_phys = 2.0 * Phys::PI / k_phys;
-
-        const Real c_dimless = z[4] / std::sqrt(kd); // c / sqrt(g d)
-        const Real c_phys = c_dimless * std::sqrt(g * d);
+        const Real c_phys = L_phys / T_target;
 
         if (!(L_phys > 0.0) || !std::isfinite(L_phys)) throw std::runtime_error("Invalid wavelength.");
-        if (!std::isfinite(c_phys)) throw std::runtime_error("Invalid celerity.");
+        if (!(c_phys > 0.0) || !std::isfinite(c_phys)) throw std::runtime_error("Invalid celerity.");
 
-        // surface nodes correspond to m*pi/n (half wave: crest->trough)
+        // Surface nodes correspond to X_m = m*pi/N over the symmetric half-wave crest-to-trough.
         for (int m = 0; m <= n; ++m) {
-            const Real kEta = z[(size_t)(10 + m)]; // k(eta-d) at node
+            const Real kEta = z[(size_t)(10 + m)]; // zeta_m = k eta_m at node
             eta_nodes[(size_t)m] = d * (1.0 + kEta / kd);
         }
 
@@ -1694,7 +1625,24 @@ private:
         L = L_phys;
         c = c_phys;
 
-        // store Bj as 0-based array
+        const Real z3_period = T_target * std::sqrt(g * k_phys);
+        const Real z4_period = c_phys * std::sqrt(k_phys / g);
+        if (std::isfinite(z3_period) && std::isfinite(z4_period) && z3_period > 0.0 && z4_period > 0.0) {
+            z[3] = z3_period;
+            z[4] = z4_period;
+
+            if (Current_criterion == 1) {
+                z[5] = Uc * std::sqrt(k_phys / g);
+                z[7] = z[4] - z[5];
+                z[6] = z[8] / z[1] - z[7] + z[4];
+            } else {
+                z[6] = Uc * std::sqrt(k_phys / g);
+                z[7] = z[8] / z[1] - z[6] + z[4];
+                z[5] = z[4] - z[7];
+            }
+        }
+
+        // Store B_j as a zero-based C++ array for reporting and kinematics.
         for (int j = 1; j <= n; ++j) Bj[(size_t)(j - 1)] = B[(size_t)j];
 
         eta_crest  = eta_nodes[0] - d;
@@ -1714,28 +1662,28 @@ private:
 
         calc_integral_props_cpp();
 
-        // Kinematics summary
+        // Kinematic diagnostics derived from the converged Fourier stream-function field.
         {
             Real w, ax;
             get_kinematics(0.0, 0.0, u_bed, w, ax);
         }
 
-        // Quadratic bed shear estimate kept as-is (engineering heuristic)
+        // Quadratic bed-shear estimate retained as an engineering diagnostic, not part of F(z).
         const Real cf_est = 0.005;
         tau_bed = 0.5 * Phys::RHO * cf_est * (u_bed * u_bed);
         ExcursionBed = std::abs(u_bed) * T_target / (2.0 * Phys::PI);
 
-        // crest/trough surface velocities
+        // Crest and trough horizontal velocities at the free surface.
         Real w, ax, u_trough;
         get_kinematics(d + eta_crest, 0.0, u_surf, w, ax);
         get_kinematics(d + eta_trough, Phys::PI, u_trough, w, ax);
         asymmetry = (std::abs(u_trough) > 0.0) ? std::abs(u_surf / u_trough) : 0.0;
 
-        // scan phases for max vertical velocity and horizontal acceleration on the surface
+        // Scan phase over the free surface for maximum vertical velocity and horizontal acceleration.
         acc_max = 0.0;
         w_max   = 0.0;
         for (int i = 0; i < 40; ++i) {
-            const Real X = (Real)i * Phys::PI / (Real)39; // linspace(0,pi,40)
+            const Real X = (Real)i * Phys::PI / (Real)39; // 40-point half-wave scan, X in [0,pi]
             const Real kEta = surface_keta(X);
             const Real z_surf = d * (1.0 + kEta / kd);
 
@@ -1748,14 +1696,14 @@ private:
 };
 
 // ==============================================================================
-//  OUTPUT FORMATTING (Exact match to fenton_gui.py / output.txt)
+//  OUTPUT FORMATTING (SOLUTION.RES-style report)
 // ==============================================================================
 
 namespace ReportFmt {
 
-static constexpr int W = 107; // report width (characters) including borders
+static constexpr int W = 107; // fixed report width, including table borders
 
-// Count UTF-8 codepoints (good enough for monospace alignment in the report file)
+// Count UTF-8 codepoints for fixed-width SOLUTION.RES-style tables.
 static size_t utf8_len(const std::string& s) {
     size_t n = 0;
     for (unsigned char c : s) {
@@ -1810,7 +1758,7 @@ static std::string py_str_float(double v) {
     const bool has_exp = (s.find('e') != std::string::npos) || (s.find('E') != std::string::npos);
     const bool has_dot = (s.find('.') != std::string::npos);
     if (!has_exp && !has_dot) s += ".0";
-    // C++ may print "inf"/"nan" in uppercase depending on locale; normalize:
+    // Normalize non-finite numeric text for stable report rendering.
     if (s == "inf" || s == "+inf") return "inf";
     if (s == "-inf") return "-inf";
     return s;
@@ -1938,7 +1886,7 @@ static std::vector<std::string> wrap_text(const std::string& s_in, int width) {
         }
 
         // If a word exceeds width (break_long_words=False), we keep it as-is;
-        // fmt_cell will truncate it later to match Python behavior.
+        // fmt_cell will truncate it later to preserve fixed-width table behavior.
         if (!line.empty() && line_len(line) > width) {
             lines.push_back(line);
             line.clear();
@@ -1965,7 +1913,7 @@ static void print_table(std::ostringstream& out,
 {
     box_title(out, title);
 
-    // Header
+    // Table header
     std::string line = "|";
     for (size_t i = 0; i < headers.size(); ++i) {
         Cell c = Cell::strv(headers[i]);
@@ -1974,7 +1922,7 @@ static void print_table(std::ostringstream& out,
     out << line << "\n";
     table_sep(out, col_w);
 
-    // Body
+    // Table body
     for (const auto& r : rows) {
         if (r.is_section) {
             const std::string sec = " " + r.section + " ";
@@ -2020,22 +1968,22 @@ static void print_table(std::ostringstream& out,
 } // namespace ReportFmt
 
 // ----------------------------------------------------------------------------
-// Report generator (runs the solver for no-current and with-current cases).
+// Report generator: no-current and Eulerian-current cases under the convention.
 // ----------------------------------------------------------------------------
 static std::string generate_output(double H_in, double T_in, double d_in, double Uc_in) {
     using namespace ReportFmt;
 
-    // Case A: No current
+    // Case A: zero imposed current, U_c = 0.
     FentonStreamFunction solver0(H_in, T_in, d_in, 0.0);
     solver0.solve();
 
-    // Case B: With ambient current (Eulerian)
+    // Case B: imposed Eulerian collinear current, U_c as entered in the GUI.
     FentonStreamFunction solverC(H_in, T_in, d_in, Uc_in);
     solverC.solve();
 
     const bool has_current = (Uc_in != 0.0);
 
-    // Numerical sanity checks (mirror Python _solver_status behaviour)
+    // Numerical sanity checks for convergence and finite nonlinear-wave outputs.
     auto solver_issue = [&](const FentonStreamFunction& s, const char* label) -> std::string {
         if (!s.converged) {
             if (!s.last_error.empty()) return std::string("[") + label + "] " + s.last_error;
@@ -2085,6 +2033,13 @@ static std::string generate_output(double H_in, double T_in, double d_in, double
 
     auto wc_num = [&](double v) -> Cell { return has_current ? Cell::numv(v) : Cell::strv("-"); };
     auto wc_str = [&](const std::string& s) -> Cell { return has_current ? Cell::strv(s) : Cell::strv("-"); };
+    auto report_celerity = [](const FentonStreamFunction& slv) -> Real {
+        if (slv.T_target > 0.0 && std::isfinite(slv.L)) return slv.L / slv.T_target;
+        return slv.c;
+    };
+
+    const Real c0_report = report_celerity(solver0);
+    const Real cC_report = report_celerity(solverC);
 
     const std::vector<std::string> headers = { "PARAMETER", "NO CURRENT", "WITH CURRENT", "UNIT" };
     const std::vector<int> col_w = { 42, 16, 16, 20 };
@@ -2104,8 +2059,8 @@ static std::string generate_output(double H_in, double T_in, double d_in, double
     rows.push_back(Row{ false, "", { Cell::strv("Wave number (k)"), Cell::numv(solver0.k), wc_num(solverC.k), Cell::strv("rad/m") } });
     rows.push_back(Row{ false, "", { Cell::strv("kd"), Cell::numv(solver0.kd_dimless()), wc_num(solverC.kd_dimless()), Cell::strv("-") } });
     rows.push_back(Row{ false, "", { Cell::strv("Angular frequency (ω)"), Cell::numv(2.0 * Phys::PI / solver0.T_target), wc_num(2.0 * Phys::PI / solverC.T_target), Cell::strv("rad/s") } });
-    rows.push_back(Row{ false, "", { Cell::strv("Celerity / phase speed (c)"), Cell::numv(solver0.c), wc_num(solverC.c), Cell::strv("m/s") } });
-    rows.push_back(Row{ false, "", { Cell::strv("c/√(gd)"), Cell::numv(solver0.c / sqrt_gd), wc_num(solverC.c / sqrt_gd), Cell::strv("-") } });
+    rows.push_back(Row{ false, "", { Cell::strv("Celerity / phase speed (c)"), Cell::numv(c0_report), wc_num(cC_report), Cell::strv("m/s") } });
+    rows.push_back(Row{ false, "", { Cell::strv("c/√(gd)"), Cell::numv(c0_report / sqrt_gd), wc_num(cC_report / sqrt_gd), Cell::strv("-") } });
     rows.push_back(Row{ false, "", { Cell::strv("Crest elevation (ηc)"), Cell::numv(solver0.eta_crest), wc_num(solverC.eta_crest), Cell::strv("m") } });
     rows.push_back(Row{ false, "", { Cell::strv("Trough elevation (ηt)"), Cell::numv(solver0.eta_trough), wc_num(solverC.eta_trough), Cell::strv("m") } });
 
@@ -2149,7 +2104,7 @@ static std::string generate_output(double H_in, double T_in, double d_in, double
 
     print_table(out, "CALCULATED HYDRODYNAMIC PARAMETERS", headers, col_w, aligns, rows);
 
-    // ------------------------ SOLUTION-FLAT tables (exact set) -------------------
+    // ------------------------ dimensionless-variable tables ----------------
     auto print_solution_flat = [&](const FentonStreamFunction& slv, const std::string& title) {
         const std::vector<std::string> h = { "#", "PARAMETER", "value", "adim param", "adim value" };
         const std::vector<int> cw = { 2, 37, 13, 25, 14 };
@@ -2160,7 +2115,7 @@ static std::string generate_output(double H_in, double T_in, double d_in, double
         const Real H_ = slv.H_target;
         const Real T_ = slv.T_target;
         const Real L_ = slv.L;
-        const Real c_ = slv.c;
+        const Real c_ = L_ / T_;
 
         const Real sqrt_gd_ = std::sqrt(g_ * d_);
         const Real sqrt_gd3_ = std::sqrt(g_ * (d_ * d_ * d_));
@@ -2247,7 +2202,7 @@ static std::string generate_output(double H_in, double T_in, double d_in, double
 
     return out.str();
 }
-// Convert \n to \r\n for Win32 multiline EDIT control display.
+// Convert LF to CRLF for Win32 multiline EDIT control display.
 static std::string to_windows_newlines(const std::string& s) {
     std::string out;
     out.reserve(s.size() + s.size() / 20);
@@ -2259,7 +2214,7 @@ static std::string to_windows_newlines(const std::string& s) {
 }
 
 // ==============================================================================
-//  GUI (Win32): Robust UI-thread updates (no direct control updates from worker)
+//  GUI (Win32): inputs H, T, d and U_c; output displays the reference formulation-style report
 // ==============================================================================
 
 #define IDC_EDIT_H      101
@@ -2283,16 +2238,16 @@ static std::atomic<bool> g_closing(false);
 
 static constexpr UINT WM_APP_RESULT = WM_APP + 1;
 
-// The formatted report uses a fixed line width (output.txt reference).
-// We size the output area so the full line width is visible without horizontal clipping.
+// The formatted report uses a fixed reference formulation/SOLUTION.RES-style line width.
+// The output area is sized so that the complete line is visible without clipping.
 static constexpr int OUTPUT_COLS = 107;
 
 static bool parse_double_w(const std::wstring& in, double& out_val) {
     std::wstring s = in;
-    // accept decimal comma
+    // Accept decimal comma in numeric input fields.
     std::replace(s.begin(), s.end(), L',', L'.');
 
-    // trim
+    // Trim surrounding whitespace before numeric conversion.
     auto is_ws = [](wchar_t c) { return c == L' ' || c == L'\t' || c == L'\r' || c == L'\n'; };
     while (!s.empty() && is_ws(s.front())) s.erase(s.begin());
     while (!s.empty() && is_ws(s.back())) s.pop_back();
@@ -2323,26 +2278,26 @@ struct CalcParams {
 static DWORD WINAPI CalcThread(LPVOID lpParam) {
     std::unique_ptr<CalcParams> p((CalcParams*)lpParam);
 
-    // Heavy compute
+    // Execute the nonlinear stream-function solve and report generation.
     std::string txt = generate_output(p->H, p->T, p->d, p->Uc);
 
-    // Write output.txt (Python parity)
+    // Write output.txt in the same SOLUTION.RES-style report format.
     try {
         std::ofstream f("output.txt", std::ios::binary);
         f.write(txt.data(), (std::streamsize)txt.size());
     } catch (...) {
-        // ignore
+        // Ignore output-file write failures; the GUI report remains available.
     }
 
-    // Display uses Windows newlines
+    // Convert report text to Windows newlines before displaying it.
     std::string display_txt = to_windows_newlines(txt);
 
-    // Convert to UTF-16
+    // Convert UTF-8 report text to UTF-16 for the Win32 EDIT control.
     const int wlen = MultiByteToWideChar(CP_UTF8, 0, display_txt.c_str(), -1, nullptr, 0);
     std::wstring* wres = new std::wstring((size_t)wlen, L'\0');
     MultiByteToWideChar(CP_UTF8, 0, display_txt.c_str(), -1, &(*wres)[0], wlen);
 
-    // Post back to UI thread (safe)
+    // Post the completed report back to the UI thread.
     if (!g_closing.load() && g_hMain && IsWindow(g_hMain)) {
         PostMessageW(g_hMain, WM_APP_RESULT, 0, (LPARAM)wres);
     } else {
@@ -2418,7 +2373,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             300, 20, 800, 520, hwnd, (HMENU)IDC_OUTPUT, nullptr, nullptr);
         SendMessageW(g_hOutput, WM_SETFONT, (WPARAM)g_hMonoFont, TRUE);
 
-        // Make the output area wide enough for the fixed-width report.
+        // Make the output area wide enough for the fixed-width SOLUTION.RES-style report.
         resize_gui_to_fit_output(hwnd);
 
         return 0;
