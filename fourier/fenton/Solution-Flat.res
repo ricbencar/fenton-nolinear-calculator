@@ -1,4 +1,4 @@
-# Test wave
+# Test wave - low & intermediate length to test all three theories
 # Solution non-dimensionalised by (1) g & wavenumber, and (2) g & mean depth
  1	  3.9854159e-01	  1.0000000e+00	# Water depth                        (d)
  2	  6.2831853e+00	  1.5765444e+01	# Wave length                   (lambda)
