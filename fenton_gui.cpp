@@ -162,8 +162,8 @@
  *  Windows / MinGW-w64 release-like GUI build:
  *
  *      g++ fenton_gui.cpp -o fenton_gui.exe -O3 -std=c++20 -march=native ^
- *          -lgdi32 -luser32 -lkernel32 -lcomctl32 ^
- *          -static-libgcc -static-libstdc++ -mwindows -pthread
+ *          -flto=auto -fopenmp -static -static-libgcc -static-libstdc++ ^
+ *          -mwindows -pthread -lgdi32 -luser32 -lkernel32 -lcomctl32
  *
  *  Keep the same compiler family, CPU family and optimization flags when bitwise
  *  reproducibility is required, because Newton/trust-region acceptance and SVD
@@ -239,92 +239,33 @@ int __cdecl nanosleep64(const struct _timespec64* request, struct _timespec64* r
 #include <algorithm>
 #include <atomic>
 #include <cmath>
-#include <condition_variable>
 #include <cstdint>
-#include <functional>
-#include <future>
 #include <iomanip>
 #include <limits>
 #include <memory>
-#include <mutex>
-#include <queue>
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 #include <fstream>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 // ==============================================================================
-//  THREAD POOL (persistent support for numerical Jacobian work)
+//  OPENMP EXECUTION CONTROL
 // ==============================================================================
 
-class ThreadPool {
-public:
-    explicit ThreadPool(size_t threads = 0) : m_stop(false) {
-        if (threads == 0) threads = std::thread::hardware_concurrency();
-        if (threads == 0) threads = 2;
-
-        m_workers.reserve(threads);
-        for (size_t i = 0; i < threads; ++i) {
-            m_workers.emplace_back([this]() {
-                for (;;) {
-                    std::function<void()> task;
-                    {
-                        std::unique_lock<std::mutex> lock(m_mutex);
-                        m_cv.wait(lock, [this]() { return m_stop || !m_tasks.empty(); });
-                        if (m_stop && m_tasks.empty()) return;
-                        task = std::move(m_tasks.front());
-                        m_tasks.pop();
-                    }
-                    task();
-                }
-            });
-        }
-    }
-
-    template <class F, class... Args>
-    auto enqueue(F&& f, Args&&... args)
-        -> std::future<typename std::result_of<F(Args...)>::type>
-    {
-        using return_type = typename std::result_of<F(Args...)>::type;
-
-        auto task = std::make_shared<std::packaged_task<return_type()>>(
-            std::bind(std::forward<F>(f), std::forward<Args>(args)...)
-        );
-
-        std::future<return_type> res = task->get_future();
-        {
-            std::unique_lock<std::mutex> lock(m_mutex);
-            if (m_stop) throw std::runtime_error("enqueue on stopped ThreadPool");
-            m_tasks.emplace([task]() { (*task)(); });
-        }
-        m_cv.notify_one();
-        return res;
-    }
-
-    ~ThreadPool() {
-        {
-            std::unique_lock<std::mutex> lock(m_mutex);
-            m_stop = true;
-        }
-        m_cv.notify_all();
-        for (std::thread& w : m_workers) {
-            if (w.joinable()) w.join();
-        }
-    }
-
-private:
-    std::vector<std::thread> m_workers;
-    std::queue<std::function<void()>> m_tasks;
-    std::mutex m_mutex;
-    std::condition_variable m_cv;
-    bool m_stop;
-};
-
-// Lazy global pool available to dense residual/Jacobian operations
-static std::unique_ptr<ThreadPool> g_pool;
+static int openmp_thread_count() noexcept {
+#ifdef _OPENMP
+    const int available = std::max(1, omp_get_num_procs());
+    return std::max(1, std::min(available, omp_get_max_threads()));
+#else
+    return 1;
+#endif
+}
 
 // ==============================================================================
 //  PHYSICAL CONSTANTS (dimensional convention)
@@ -682,55 +623,57 @@ static bool svd_jacobi_onesided(int m, int n,
 {
     if (m < n || m <= 0 || n <= 0) return false;
 
-    // Working copy of J (A in the algorithm).
-    std::vector<Real> A = J; // row-major (m x n)
+    // Column-major working arrays make every Jacobi column operation contiguous.
+    std::vector<Real> A((size_t)m * (size_t)n, 0.0);
+    for (int i = 0; i < m; ++i) {
+        for (int j = 0; j < n; ++j) {
+            A[(size_t)j * (size_t)m + (size_t)i] =
+                J[(size_t)i * (size_t)n + (size_t)j];
+        }
+    }
 
-    // V starts as identity.
-    V.assign((size_t)n * (size_t)n, 0.0);
-    for (int i = 0; i < n; ++i) V[(size_t)i * (size_t)n + (size_t)i] = 1.0;
+    std::vector<Real> Vcol((size_t)n * (size_t)n, 0.0);
+    for (int i = 0; i < n; ++i) Vcol[(size_t)i * (size_t)n + (size_t)i] = 1.0;
 
     auto col_dot = [&](int p, int q) -> Real {
+        const Real* ap = A.data() + (size_t)p * (size_t)m;
+        const Real* aq = A.data() + (size_t)q * (size_t)m;
         Real sum = 0.0;
-        // Deterministic accumulation order; use compensated summation to reduce
-        // round-off when m is large or columns are nearly parallel.
-        Real c = 0.0;
-        for (int i = 0; i < m; ++i) {
-            const Real prod = A[(size_t)i * (size_t)n + (size_t)p] * A[(size_t)i * (size_t)n + (size_t)q];
-            const Real y = prod - c;
-            const Real t = sum + y;
-            c = (t - sum) - y;
-            sum = t;
-        }
+#ifdef _OPENMP
+#pragma omp simd reduction(+:sum)
+#endif
+        for (int i = 0; i < m; ++i) sum += ap[(size_t)i] * aq[(size_t)i];
         return sum;
     };
 
     auto col_norm2 = [&](int p) -> Real {
+        const Real* ap = A.data() + (size_t)p * (size_t)m;
         Real sum = 0.0;
-        Real c = 0.0;
+        Real compensation = 0.0;
         for (int i = 0; i < m; ++i) {
-            const Real v = A[(size_t)i * (size_t)n + (size_t)p];
-            const Real prod = v * v;
-            const Real y = prod - c;
+            const Real product = ap[(size_t)i] * ap[(size_t)i];
+            const Real y = product - compensation;
             const Real t = sum + y;
-            c = (t - sum) - y;
+            compensation = (t - sum) - y;
             sum = t;
         }
         return sum;
     };
 
-    // Tolerance consistent with Jacobi sweeps.
     const Real eps = std::sqrt(std::numeric_limits<Real>::epsilon());
-
-    // Sweeps: for num≈110, 20-30 sweeps is enough for near-orthogonality in this dense system.
     const int max_sweeps = 30;
+    std::vector<Real> norm2_cache((size_t)n, 0.0);
+    for (int j = 0; j < n; ++j) norm2_cache[(size_t)j] = col_norm2(j);
+
     for (int sweep = 0; sweep < max_sweeps; ++sweep) {
         Real max_corr = 0.0;
 
         for (int p = 0; p < n; ++p) {
-            const Real app = col_norm2(p);
+            const Real app = norm2_cache[(size_t)p];
             if (app <= 0.0) continue;
+
             for (int q = p + 1; q < n; ++q) {
-                const Real aqq = col_norm2(q);
+                const Real aqq = norm2_cache[(size_t)q];
                 if (aqq <= 0.0) continue;
 
                 const Real apq = col_dot(p, q);
@@ -739,65 +682,80 @@ static bool svd_jacobi_onesided(int m, int n,
 
                 const Real corr = std::abs(apq) / denom;
                 if (corr > max_corr) max_corr = corr;
-
-                // If columns are nearly orthogonal, skip.
                 if (corr < 10.0 * eps) continue;
 
-                // Compute Jacobi rotation for columns p, q.
                 const Real tau = (aqq - app) / (2.0 * apq);
                 const Real t = std::copysign((Real)1.0, tau) /
                                (std::abs(tau) + std::sqrt((Real)1.0 + tau * tau));
                 const Real c_rot = 1.0 / std::sqrt(1.0 + t * t);
                 const Real s_rot = t * c_rot;
 
-                // Rotate columns of A.
+                Real* ap = A.data() + (size_t)p * (size_t)m;
+                Real* aq = A.data() + (size_t)q * (size_t)m;
+                Real norm_p = 0.0, comp_p = 0.0;
+                Real norm_q = 0.0, comp_q = 0.0;
                 for (int i = 0; i < m; ++i) {
-                    const size_t off = (size_t)i * (size_t)n;
-                    const Real aip = A[off + (size_t)p];
-                    const Real aiq = A[off + (size_t)q];
-                    A[off + (size_t)p] = c_rot * aip - s_rot * aiq;
-                    A[off + (size_t)q] = s_rot * aip + c_rot * aiq;
-                }
+                    const Real aip = ap[(size_t)i];
+                    const Real aiq = aq[(size_t)i];
+                    const Real new_p = c_rot * aip - s_rot * aiq;
+                    const Real new_q = s_rot * aip + c_rot * aiq;
+                    ap[(size_t)i] = new_p;
+                    aq[(size_t)i] = new_q;
 
-                // Accumulate rotation into V.
+                    const Real prod_p = new_p * new_p;
+                    const Real yp = prod_p - comp_p;
+                    const Real tp = norm_p + yp;
+                    comp_p = (tp - norm_p) - yp;
+                    norm_p = tp;
+
+                    const Real prod_q = new_q * new_q;
+                    const Real yq = prod_q - comp_q;
+                    const Real tq = norm_q + yq;
+                    comp_q = (tq - norm_q) - yq;
+                    norm_q = tq;
+                }
+                norm2_cache[(size_t)p] = norm_p;
+                norm2_cache[(size_t)q] = norm_q;
+
+                Real* vp = Vcol.data() + (size_t)p * (size_t)n;
+                Real* vq = Vcol.data() + (size_t)q * (size_t)n;
+#ifdef _OPENMP
+#pragma omp simd
+#endif
                 for (int i = 0; i < n; ++i) {
-                    const size_t off = (size_t)i * (size_t)n;
-                    const Real vip = V[off + (size_t)p];
-                    const Real viq = V[off + (size_t)q];
-                    V[off + (size_t)p] = c_rot * vip - s_rot * viq;
-                    V[off + (size_t)q] = s_rot * vip + c_rot * viq;
+                    const Real vip = vp[(size_t)i];
+                    const Real viq = vq[(size_t)i];
+                    vp[(size_t)i] = c_rot * vip - s_rot * viq;
+                    vq[(size_t)i] = s_rot * vip + c_rot * viq;
                 }
             }
         }
 
-        // Stop early if correlations are negligible.
         if (max_corr < 10.0 * eps) break;
     }
 
-    // Singular values are norms of orthogonalized columns.
     s.assign((size_t)n, 0.0);
     for (int j = 0; j < n; ++j) {
-        const Real n2 = col_norm2(j);
-        s[(size_t)j] = std::sqrt(std::max((Real)0.0, n2));
+        s[(size_t)j] = std::sqrt(std::max((Real)0.0, norm2_cache[(size_t)j]));
     }
 
-    // Sort descending singular values (like LAPACK/SciPy).
     std::vector<int> idx((size_t)n);
     for (int i = 0; i < n; ++i) idx[(size_t)i] = i;
-    std::sort(idx.begin(), idx.end(), [&](int a, int b) { return s[(size_t)a] > s[(size_t)b]; });
+    std::sort(idx.begin(), idx.end(), [&](int a, int b) {
+        return s[(size_t)a] > s[(size_t)b];
+    });
 
-    std::vector<Real> V_sorted((size_t)n * (size_t)n, 0.0);
     std::vector<Real> s_sorted((size_t)n, 0.0);
+    V.assign((size_t)n * (size_t)n, 0.0);
     for (int col = 0; col < n; ++col) {
         const int src = idx[(size_t)col];
         s_sorted[(size_t)col] = s[(size_t)src];
-        for (int r = 0; r < n; ++r) {
-            V_sorted[(size_t)r * (size_t)n + (size_t)col] = V[(size_t)r * (size_t)n + (size_t)src];
+        const Real* source_col = Vcol.data() + (size_t)src * (size_t)n;
+        for (int row = 0; row < n; ++row) {
+            V[(size_t)row * (size_t)n + (size_t)col] = source_col[(size_t)row];
         }
     }
-    V.swap(V_sorted);
     s.swap(s_sorted);
-
     return true;
 }
 
@@ -954,7 +912,6 @@ public:
         rhs1.assign((size_t)num + 1, 0.0);
         rhs2.assign((size_t)num + 1, 0.0);
 
-        coeff.assign((size_t)n + 1, 0.0);
         Tanh.assign((size_t)n + 1, 0.0);
         B.assign((size_t)n + 1, 0.0);
         Y.assign((size_t)num + 1, 0.0);
@@ -1021,7 +978,7 @@ private:
     int num = 0;
 
     // Fenton 1-based vectors; index 0 is intentionally unused.
-    std::vector<Real> z, rhs1, rhs2, coeff, Tanh, B, Y;
+    std::vector<Real> z, rhs1, rhs2, Tanh, B, Y;
 
     // Collocation trigonometric tables for X_m = m*pi/N and harmonics j = 1..N.
     std::vector<Real> cosa, sina;
@@ -1104,40 +1061,33 @@ private:
     // ----------------------------------------------------------------------
     // residual vector F(z): fills rhs_out[1..2N+10] and returns sum(F_i^2).
     // ----------------------------------------------------------------------
-    Real eqns(std::vector<Real>& rhs_out) {
+    Real eqns_for_state(const std::vector<Real>& state,
+                        std::vector<Real>& rhs_out,
+                        std::vector<Real>& tanh_workspace) const {
         const Real pi = Phys::PI;
-        rhs_out.assign((size_t)num + 1, 0.0);
+        if (rhs_out.size() != (size_t)num + 1) rhs_out.resize((size_t)num + 1);
+        std::fill(rhs_out.begin(), rhs_out.end(), 0.0);
+        if (tanh_workspace.size() != (size_t)n + 1) tanh_workspace.resize((size_t)n + 1);
 
-        // r1: prescribed relative height, z2 = z1(H/d)
-        rhs_out[1] = z[2] - z[1] * Hoverd;
-        // r2: period-form height closure, z2 = H_s z3^2
-        rhs_out[2] = z[2] - height * z[3] * z[3];
-        // r3: period-celerity identity, z4 z3 = 2*pi
-        rhs_out[3] = z[4] * z[3] - 2.0 * pi;
-        // r4: Eulerian-current identity, z5 + z7 = z4
-        rhs_out[4] = z[5] + z[7] - z[4];
-        // r5: Stokes-current / flux identity, z1(z6+z7-z4) = z8
-        rhs_out[5] = z[1] * (z[6] + z[7] - z[4]) - z[8];
+        rhs_out[1] = state[2] - state[1] * Hoverd;
+        rhs_out[2] = state[2] - height * state[3] * state[3];
+        rhs_out[3] = state[4] * state[3] - 2.0 * pi;
+        rhs_out[4] = state[5] + state[7] - state[4];
+        rhs_out[5] = state[1] * (state[6] + state[7] - state[4]) - state[8];
 
-        // Fourier coefficients B_j and tanh(jkd) tables used in S_j and C_j.
         for (int i = 1; i <= n; ++i) {
-            coeff[(size_t)i] = z[(size_t)(n + i + 10)];
-            Tanh[(size_t)i]  = std::tanh((Real)i * z[1]);
+            tanh_workspace[(size_t)i] = std::tanh((Real)i * state[1]);
         }
 
-        // r6: prescribed-current equation, z[current_selector+4] = U_c sqrt(z1).
-        rhs_out[6] = z[(size_t)(Current_criterion + 4)] - Current * std::sqrt(z[1]);
+        rhs_out[6] = state[(size_t)(Current_criterion + 4)] - Current * std::sqrt(state[1]);
 
-        // r7: mean-free-surface datum constraint over the half-wave collocation nodes.
-        rhs_out[7] = z[10] + z[(size_t)(n + 10)];
-        for (int i = 1; i < n; ++i) rhs_out[7] += 2.0 * z[(size_t)(10 + i)];
+        rhs_out[7] = state[10] + state[(size_t)(n + 10)];
+        for (int i = 1; i < n; ++i) rhs_out[7] += 2.0 * state[(size_t)(10 + i)];
 
-        // r8: crest-to-trough wave-height definition, z10 - z[N+10] = z2.
-        rhs_out[8] = z[10] - z[(size_t)(n + 10)] - z[2];
+        rhs_out[8] = state[10] - state[(size_t)(n + 10)] - state[2];
 
-        // r9.. and rN+10..: streamline and Bernoulli residuals at X_m = m*pi/N.
         for (int m = 0; m <= n; ++m) {
-            const Real zsurf = z[(size_t)(10 + m)]; // zeta_m = k eta_m at the free-surface node
+            const Real zsurf = state[(size_t)(10 + m)];
 
             Real psi = 0.0;
             Real u   = 0.0;
@@ -1156,8 +1106,7 @@ private:
                 const Real inv_e = 1.0 / e;
                 const Real sinhkd = 0.5 * (e - inv_e);
                 const Real coshkd = 0.5 * (e + inv_e);
-
-                const Real tanh_jkd = Tanh[(size_t)j];
+                const Real tanh_jkd = tanh_workspace[(size_t)j];
 
                 const Real S = sinhkd + coshkd * tanh_jkd;
                 const Real C = coshkd + sinhkd * tanh_jkd;
@@ -1165,7 +1114,7 @@ private:
                 const Real c_nm = cosrow[(size_t)(j - 1)];
                 const Real s_nm = sinrow[(size_t)(j - 1)];
 
-                const Real cj = coeff[(size_t)j];
+                const Real cj = state[(size_t)(n + j + 10)];
                 const Real j_cj = (Real)j * cj;
 
                 psi += cj * S * c_nm;
@@ -1173,15 +1122,23 @@ private:
                 v   += j_cj * S * s_nm;
             }
 
-            rhs_out[(size_t)(m + 9)] = psi - z[8] - z[7] * z[(size_t)(m + 10)];
-            rhs_out[(size_t)(n + m + 10)] = 0.5 * (((-z[7] + u) * (-z[7] + u)) + v * v)
-                                           + z[(size_t)(m + 10)] - z[9];
+            rhs_out[(size_t)(m + 9)] = psi - state[8] - state[7] * state[(size_t)(m + 10)];
+            rhs_out[(size_t)(n + m + 10)] =
+                0.5 * (((-state[7] + u) * (-state[7] + u)) + v * v)
+                + state[(size_t)(m + 10)] - state[9];
         }
 
-        // Objective used only to monitor convergence: sum of squared residual components.
         Real ss = 0.0;
-        for (int i = 1; i <= num; ++i) ss += rhs_out[(size_t)i] * rhs_out[(size_t)i];
+        for (int i = 1; i <= num; ++i) {
+            const Real ri = rhs_out[(size_t)i];
+            ss += ri * ri;
+        }
         return ss;
+    }
+
+    Real eqns(std::vector<Real>& rhs_out) const {
+        std::vector<Real> tanh_workspace((size_t)n + 1, 0.0);
+        return eqns_for_state(z, rhs_out, tanh_workspace);
     }
 
     // ----------------------------------------------------------------------
@@ -1245,22 +1202,51 @@ private:
 
         std::vector<Real> A((size_t)num * (size_t)num, 0.0);
         std::vector<Real> b((size_t)num, 0.0);
+        for (int i = 1; i <= num; ++i) b[(size_t)(i - 1)] = -rhs1[(size_t)i];
 
-        // Column-wise numerical Jacobian, consistent with Fenton-style program derivatives.
+        std::vector<std::string> jacobian_errors((size_t)num + 1);
+        const int jacobian_threads = std::min(openmp_thread_count(), num);
+
+        // Every Jacobian column is independent. Each OpenMP worker owns its
+        // perturbed state and residual vector, so no solver state is shared or
+        // modified while the dense finite-difference Jacobian is assembled.
+#ifdef _OPENMP
+#pragma omp parallel num_threads(jacobian_threads) if(num >= 24)
+#endif
+        {
+            std::vector<Real> z_perturbed((size_t)num + 1, 0.0);
+            std::vector<Real> rhs_column((size_t)num + 1, 0.0);
+            std::vector<Real> tanh_workspace((size_t)n + 1, 0.0);
+
+#ifdef _OPENMP
+#pragma omp for schedule(static)
+#endif
+            for (int i = 1; i <= num; ++i) {
+                try {
+                    Real h = (Real)0.01 * z0[(size_t)i];
+                    if (std::abs(z0[(size_t)i]) < (Real)1e-4) h = (Real)1e-5;
+                    if (std::abs(h) > 1.0) h = std::copysign((Real)1.0, h);
+
+                    std::copy(z0.begin(), z0.end(), z_perturbed.begin());
+                    z_perturbed[(size_t)i] += h;
+                    eqns_for_state(z_perturbed, rhs_column, tanh_workspace);
+
+                    const Real inv_h = 1.0 / h;
+                    for (int r = 1; r <= num; ++r) {
+                        A[(size_t)(r - 1) * (size_t)num + (size_t)(i - 1)] =
+                            (rhs_column[(size_t)r] - rhs1[(size_t)r]) * inv_h;
+                    }
+                } catch (const std::exception& e) {
+                    jacobian_errors[(size_t)i] = e.what();
+                } catch (...) {
+                    jacobian_errors[(size_t)i] = "Unknown failure during Jacobian evaluation.";
+                }
+            }
+        }
+
         for (int i = 1; i <= num; ++i) {
-            Real h = (Real)0.01 * z0[(size_t)i];
-            if (std::abs(z0[(size_t)i]) < (Real)1e-4) h = (Real)1e-5;
-            if (std::abs(h) > 1.0) h = std::copysign((Real)1.0, h);
-
-            z[(size_t)i] = z0[(size_t)i] + h;
-            eqns(rhs2);
-            z[(size_t)i] = z0[(size_t)i];
-
-            b[(size_t)(i - 1)] = -rhs1[(size_t)i];
-            const Real inv_h = 1.0 / h;
-            for (int r = 1; r <= num; ++r) {
-                A[(size_t)(r - 1) * (size_t)num + (size_t)(i - 1)] =
-                    (rhs2[(size_t)r] - rhs1[(size_t)r]) * inv_h;
+            if (!jacobian_errors[(size_t)i].empty()) {
+                throw std::runtime_error(jacobian_errors[(size_t)i]);
             }
         }
 
@@ -1973,15 +1959,27 @@ static void print_table(std::ostringstream& out,
 static std::string generate_output(double H_in, double T_in, double d_in, double Uc_in) {
     using namespace ReportFmt;
 
-    // Case A: zero imposed current, U_c = 0.
-    FentonStreamFunction solver0(H_in, T_in, d_in, 0.0);
-    solver0.solve();
-
-    // Case B: imposed Eulerian collinear current, U_c as entered in the GUI.
-    FentonStreamFunction solverC(H_in, T_in, d_in, Uc_in);
-    solverC.solve();
-
     const bool has_current = (Uc_in != 0.0);
+    FentonStreamFunction solver0(H_in, T_in, d_in, 0.0);
+    FentonStreamFunction solverC(H_in, T_in, d_in, Uc_in);
+
+    if (has_current) {
+#ifdef _OPENMP
+#pragma omp parallel sections num_threads(2) if(openmp_thread_count() >= 2)
+#endif
+        {
+#ifdef _OPENMP
+#pragma omp section
+#endif
+            { solver0.solve(); }
+#ifdef _OPENMP
+#pragma omp section
+#endif
+            { solverC.solve(); }
+        }
+    } else {
+        solver0.solve();
+    }
 
     // Numerical sanity checks for convergence and finite nonlinear-wave outputs.
     auto solver_issue = [&](const FentonStreamFunction& s, const char* label) -> std::string {
@@ -2429,6 +2427,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow) {
+#ifdef _OPENMP
+    omp_set_dynamic(0);
+    omp_set_max_active_levels(1);
+#endif
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(WNDCLASSEXW);
     wc.lpfnWndProc = WndProc;
