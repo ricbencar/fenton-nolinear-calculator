@@ -91,7 +91,7 @@
  *      num = 2N + 10.
  *
  *  With the production value N = 50, this gives 110 active 1-based state entries
- *  and 110 nonlinear residual equations, matching the full full residual
+ *  and 110 nonlinear residual equations, matching the full residual
  *  system for the stream-function / Fourier collocation solver.
  *
  *  5. RESIDUAL SYSTEM IMPLEMENTED IN eqns()
@@ -147,7 +147,25 @@
  *  checking aids.  The final result is the converged nonlinear stream-function /
  *  Fourier collocation solution.
  *
- *  8. OUTPUT INTERPRETATION
+ *  8. PHYSICAL AND NUMERICAL ADMISSIBILITY
+ *  -----------------------------------------------------------------------------
+ *  H is the height of one deterministic regular wave, not the significant wave
+ *  height Hs of a random sea state.  A converged algebraic root is accepted only
+ *  when all of the following checks pass:
+ *
+ *      H/d < 0.83322,
+ *      H <= 0.98 Hm(L/d),
+ *      max_i |r_i| <= 1e-8,
+ *      |E_N| <= 1e-4,
+ *      the surface decreases monotonically from crest to trough,
+ *      the free surface remains above the bed,
+ *      u_crest < c.
+ *
+ *  Hm(L/d) is evaluated from the highest-wave fit in Fenton (1990), Eq. (32).
+ *  The 0.98 factor and the E_N criterion follow the documented practical range
+ *  and spectral-resolution checks for the FOURIER method.
+ *
+ *  9. OUTPUT INTERPRETATION
  *  -----------------------------------------------------------------------------
  *  The report follows the distinction between k-based and d-based
  *  nondimensional quantities: kd, kH, T sqrt(gk), c sqrt(k/g), current variables,
@@ -157,7 +175,7 @@
  *  The same calculation is run for no-current and, when requested, with-current
  *  cases so the output can be compared under the selected current convention.
  *
- *  9. BUILDING FROM SOURCE
+ *  10. BUILDING FROM SOURCE
  *  -----------------------------------------------------------------------------
  *  Windows / MinGW-w64 release-like GUI build:
  *
@@ -807,9 +825,15 @@ public:
     Real ursell;
     std::string regime;
 
-    Real breaking_limit_miche;
-    Real breaking_index;
-    bool is_breaking;
+    // Highest-wave and numerical-admissibility diagnostics.
+    Real highest_wave_limit_fenton;     // [m] theoretical highest steady wave from Fenton (1990), Eq. (32)
+    Real highest_wave_ratio;            // H/Hm
+    Real fourier_accuracy_limit;         // [m] 98% of Hm, practical upper range for this fixed-order Fourier solve
+    Real surface_tail_coefficient;       // |E_N|, spectral-resolution indicator
+    Real max_residual;                   // ||F(z)||_infinity after final convergence
+    Real crest_stagnation_margin;        // [m/s] c-u at the crest; must remain positive below the limiting wave
+    bool near_limiting_wave;
+    bool practical_breaking_risk;
 
     // Integral properties reported in the SOLUTION.RES convention
     Real EulerianCurrent;
@@ -875,7 +899,9 @@ public:
           Bj((size_t)50, 0.0),
           eta_crest(0.0), eta_trough(0.0),
           steepness(0.0), rel_depth(0.0), ursell(0.0), regime(""),
-          breaking_limit_miche(0.0), breaking_index(0.0), is_breaking(false),
+          highest_wave_limit_fenton(0.0), highest_wave_ratio(0.0), fourier_accuracy_limit(0.0),
+          surface_tail_coefficient(0.0), max_residual(0.0), crest_stagnation_margin(0.0),
+          near_limiting_wave(false), practical_breaking_risk(false),
           EulerianCurrent(0.0), StokesCurrent(0.0), MeanFluidSpeed(0.0),
           WaveVolumeFlux_q(0.0), VolumeFluxQ(0.0),
           BernoulliR(0.0), Bernoulli_r(0.0),
@@ -932,10 +958,31 @@ public:
         converged = false;
         last_error.clear();
 
-        if (!(H_target > 0.0) || !(T_target > 0.0) || !(d > 0.0)) {
-            last_error = "Invalid inputs: H, T, and d must be > 0.";
+        if (!std::isfinite(H_target) || !std::isfinite(T_target) ||
+            !std::isfinite(d) || !std::isfinite(Uc) ||
+            !(H_target > 0.0) || !(T_target > 0.0) || !(d > 0.0)) {
+            last_error = "Invalid inputs: H, T, and d must be finite and > 0; current must be finite.";
             return;
         }
+
+        // The highest solitary-wave limit is H/d = 0.83322.  Since
+        // Fenton's finite-depth highest-wave curve never exceeds this value, an
+        // input at or above it cannot represent a regular non-breaking steady wave.
+        if (!(MaxH < kHighestSolitaryHoverD)) {
+            std::ostringstream msg;
+            msg.setf(std::ios::fixed);
+            msg << std::setprecision(6)
+                << "Physically inadmissible regular wave: H/d = " << MaxH
+                << " is not below the theoretical upper bound 0.833220.";
+            last_error = msg.str();
+            return;
+        }
+
+        // High relative waves require finer continuation even before the final
+        // wavelength-dependent limiting-wave test is available.
+        if (MaxH > 0.70) nstep = std::max(nstep, 20);
+        else if (MaxH > 0.55) nstep = std::max(nstep, 12);
+        else if (MaxH > 0.40) nstep = std::max(nstep, 8);
 
         try {
             solve_internal();
@@ -992,8 +1039,42 @@ private:
     Real Hoverd = 0.0; // stepped H/d value used in r1
 
 private:
+    static constexpr Real kHighestSolitaryHoverD = 0.83322;
+    static constexpr Real kFourierApplicabilityFraction = 0.98;
+    static constexpr Real kFinalResidualTolerance = 1.0e-8;
+    static constexpr Real kIntermediateResidualTolerance = 1.0e-7;
+    static constexpr Real kSurfaceTailTolerance = 1.0e-4;
+
     inline Real& SOL(int i, int k) { return sol[(size_t)i * 3 + (size_t)k]; }
     inline Real  SOL(int i, int k) const { return sol[(size_t)i * 3 + (size_t)k]; }
+
+    static Real fenton_highest_hoverd(Real lambda_over_d) {
+        if (!(lambda_over_d > 0.0) || !std::isfinite(lambda_over_d)) {
+            return std::numeric_limits<Real>::quiet_NaN();
+        }
+
+        // Fenton (1990), Eq. (32), evaluated in a form that avoids overflow for
+        // very large wavelength/depth ratios.
+        const Real x = lambda_over_d;
+        if (x <= 1.0) {
+            const Real numerator = x * (0.141063 + x * (0.0095721 + 0.0077829 * x));
+            const Real denominator = 1.0 + x * (0.0788340 + x * (0.0317567 + 0.0093407 * x));
+            return numerator / denominator;
+        }
+
+        const Real inv = 1.0 / x;
+        const Real inv2 = inv * inv;
+        const Real inv3 = inv2 * inv;
+        const Real numerator = 0.0077829 + 0.0095721 * inv + 0.141063 * inv2;
+        const Real denominator = 0.0093407 + 0.0317567 * inv + 0.0788340 * inv2 + inv3;
+        return numerator / denominator;
+    }
+
+    Real residual_inf_norm(const std::vector<Real>& residual) const {
+        Real value = 0.0;
+        for (int i = 1; i <= num; ++i) value = std::max(value, std::abs(residual[(size_t)i]));
+        return value;
+    }
 
     void init_trig_tables() {
         // cosa[k] = cos(k*pi/N), k = 0..2N, used by the half-wave collocation grid.
@@ -1014,7 +1095,7 @@ private:
     }
 
     // ----------------------------------------------------------------------
-    // Linear/Fenton-McKee initial estimate used only to seed the nonlinear nonlinear residual solve.
+    // Linear/Fenton-McKee initial estimate used only to seed the nonlinear residual solve.
     // ----------------------------------------------------------------------
     void init_linear() {
         const Real pi = Phys::PI;
@@ -1198,6 +1279,9 @@ private:
             throw std::runtime_error("Non-finite residual norm at start of Newton step.");
         }
 
+        const Real residual0 = residual_inf_norm(rhs1);
+        if (residual0 <= kFinalResidualTolerance) return 0.0;
+
         const std::vector<Real> z0 = z;
 
         std::vector<Real> A((size_t)num * (size_t)num, 0.0);
@@ -1208,14 +1292,14 @@ private:
         const int jacobian_threads = std::min(openmp_thread_count(), num);
 
         // Every Jacobian column is independent. Each OpenMP worker owns its
-        // perturbed state and residual vector, so no solver state is shared or
-        // modified while the dense finite-difference Jacobian is assembled.
+        // perturbed state and residual vector.
 #ifdef _OPENMP
 #pragma omp parallel num_threads(jacobian_threads) if(num >= 24)
 #endif
         {
             std::vector<Real> z_perturbed((size_t)num + 1, 0.0);
             std::vector<Real> rhs_column((size_t)num + 1, 0.0);
+            std::vector<Real> rhs_minus((size_t)num + 1, 0.0);
             std::vector<Real> tanh_workspace((size_t)n + 1, 0.0);
 
 #ifdef _OPENMP
@@ -1223,18 +1307,39 @@ private:
 #endif
             for (int i = 1; i <= num; ++i) {
                 try {
-                    Real h = (Real)0.01 * z0[(size_t)i];
-                    if (std::abs(z0[(size_t)i]) < (Real)1e-4) h = (Real)1e-5;
-                    if (std::abs(h) > 1.0) h = std::copysign((Real)1.0, h);
+                    const bool central_difference = residual0 < (Real)1.0e-1;
+                    if (central_difference) {
+                        Real h = (Real)1.0e-5 * std::max(std::abs(z0[(size_t)i]), (Real)1.0);
+                        if (i == 1) h = std::min(h, (Real)0.25 * z0[1]);
+                        if (!(h > 0.0)) h = (Real)1.0e-7;
 
-                    std::copy(z0.begin(), z0.end(), z_perturbed.begin());
-                    z_perturbed[(size_t)i] += h;
-                    eqns_for_state(z_perturbed, rhs_column, tanh_workspace);
+                        std::copy(z0.begin(), z0.end(), z_perturbed.begin());
+                        z_perturbed[(size_t)i] += h;
+                        eqns_for_state(z_perturbed, rhs_column, tanh_workspace);
 
-                    const Real inv_h = 1.0 / h;
-                    for (int r = 1; r <= num; ++r) {
-                        A[(size_t)(r - 1) * (size_t)num + (size_t)(i - 1)] =
-                            (rhs_column[(size_t)r] - rhs1[(size_t)r]) * inv_h;
+                        std::copy(z0.begin(), z0.end(), z_perturbed.begin());
+                        z_perturbed[(size_t)i] -= h;
+                        eqns_for_state(z_perturbed, rhs_minus, tanh_workspace);
+
+                        const Real inv_2h = 0.5 / h;
+                        for (int r = 1; r <= num; ++r) {
+                            A[(size_t)(r - 1) * (size_t)num + (size_t)(i - 1)] =
+                                (rhs_column[(size_t)r] - rhs_minus[(size_t)r]) * inv_2h;
+                        }
+                    } else {
+                        Real h = (Real)0.01 * z0[(size_t)i];
+                        if (std::abs(z0[(size_t)i]) < (Real)1e-4) h = (Real)1e-5;
+                        if (std::abs(h) > 1.0) h = std::copysign((Real)1.0, h);
+
+                        std::copy(z0.begin(), z0.end(), z_perturbed.begin());
+                        z_perturbed[(size_t)i] += h;
+                        eqns_for_state(z_perturbed, rhs_column, tanh_workspace);
+
+                        const Real inv_h = 1.0 / h;
+                        for (int r = 1; r <= num; ++r) {
+                            A[(size_t)(r - 1) * (size_t)num + (size_t)(i - 1)] =
+                                (rhs_column[(size_t)r] - rhs1[(size_t)r]) * inv_h;
+                        }
                     }
                 } catch (const std::exception& e) {
                     jacobian_errors[(size_t)i] = e.what();
@@ -1251,18 +1356,29 @@ private:
         }
 
         std::vector<Real> dx = svd_solve(A, b, num);
-        for (Real v : dx) {
-            if (!std::isfinite(v)) throw std::runtime_error("Non-finite Newton correction vector (dx).");
+        Real dx_inf = 0.0;
+        for (Real value : dx) {
+            if (!std::isfinite(value)) throw std::runtime_error("Non-finite Newton correction vector (dx).");
+            dx_inf = std::max(dx_inf, std::abs(value));
+        }
+        if (!(dx_inf > 0.0)) {
+            throw std::runtime_error("Newton correction vanished while residuals remained non-zero.");
         }
 
-        // Damped Newton step: preserve kd > 0 and accept only non-worsening residual norm.
+        // Damped Newton line search. A step is accepted only when it produces a
+        // genuine decrease in the residual objective; a rejected step can no
+        // longer masquerade as convergence through a zero state correction.
         Real alpha = 1.0;
         Real ss_best = ss0;
         std::vector<Real> z_best = z0;
+        bool improved = false;
+        bool armijo_accepted = false;
 
-        while (alpha >= (Real)1e-4) {
+        while (alpha >= (Real)1e-6) {
             std::vector<Real> z_try = z0;
-            for (int i = 1; i <= num; ++i) z_try[(size_t)i] = z0[(size_t)i] + alpha * dx[(size_t)(i - 1)];
+            for (int i = 1; i <= num; ++i) {
+                z_try[(size_t)i] = z0[(size_t)i] + alpha * dx[(size_t)(i - 1)];
+            }
 
             bool ok = (z_try[1] > 0.0);
             if (ok) {
@@ -1274,21 +1390,41 @@ private:
 
             z = z_try;
             const Real ss1 = eqns(rhs2);
-            if (std::isfinite(ss1) && (ss1 <= ss_best)) {
+            if (std::isfinite(ss1) && ss1 < ss_best) {
                 ss_best = ss1;
                 z_best = z_try;
-                if (ss1 <= ss0) break;
+                improved = true;
+            }
+
+            const Real armijo_limit = ss0 * (1.0 - 1.0e-4 * alpha);
+            if (std::isfinite(ss1) &&
+                (ss1 <= armijo_limit || residual_inf_norm(rhs2) <= kFinalResidualTolerance)) {
+                z_best = z_try;
+                ss_best = ss1;
+                improved = true;
+                armijo_accepted = true;
+                break;
             }
             alpha *= 0.5;
         }
 
         z = z_best;
+        if (!improved || !(ss_best < ss0)) {
+            z = z0;
+            std::ostringstream msg;
+            msg.setf(std::ios::scientific);
+            msg << std::setprecision(3)
+                << "Newton line search failed to reduce residuals; ||F||inf = "
+                << residual0 << ", ||F||2^2 = " << ss0 << ".";
+            throw std::runtime_error(msg.str());
+        }
+        (void)armijo_accepted;
 
-        // Convergence monitor: mean absolute correction of free-surface ordinates z[10..N+10].
         Real corr = 0.0;
-        for (int i = 10; i <= n + 10; ++i) corr += std::abs(z_best[(size_t)i] - z0[(size_t)i]);
+        for (int i = 10; i <= n + 10; ++i) {
+            corr += std::abs(z_best[(size_t)i] - z0[(size_t)i]);
+        }
         corr /= (Real)(n + 1);
-
         return corr;
     }
 
@@ -1575,19 +1711,84 @@ private:
                     if (!std::isfinite(z[(size_t)i])) throw std::runtime_error("Divergence: non-finite state vector encountered.");
                 }
 
-                const Real criter = (ns == nstep) ? criter_final : crit;
-                if (it > 1 && err < criter * std::abs(z[1])) {
+                const Real residual_ss = eqns(rhs2);
+                if (!std::isfinite(residual_ss)) {
+                    throw std::runtime_error("Non-finite nonlinear residual after Newton update.");
+                }
+                const Real residual_now = residual_inf_norm(rhs2);
+                max_residual = residual_now;
+
+                const Real correction_criterion = (ns == nstep) ? criter_final : crit;
+                const Real residual_criterion = (ns == nstep)
+                    ? kFinalResidualTolerance
+                    : kIntermediateResidualTolerance;
+
+                if (it > 1 &&
+                    err < correction_criterion * std::max(std::abs(z[1]), (Real)1.0) &&
+                    residual_now <= residual_criterion) {
                     step_converged = true;
                     break;
                 }
             }
 
             if (!step_converged) {
+                if (z[1] > 0.0 && std::isfinite(z[1])) {
+                    const Real candidate_lambda_over_d = 2.0 * Phys::PI / z[1];
+                    const Real candidate_hm_over_d = fenton_highest_hoverd(candidate_lambda_over_d);
+                    if (candidate_hm_over_d > 0.0 && std::isfinite(candidate_hm_over_d)) {
+                        const Real candidate_ratio = Hoverd / candidate_hm_over_d;
+                        if (candidate_ratio >= 1.0) {
+                            std::ostringstream msg;
+                            msg.setf(std::ios::fixed);
+                            msg << std::setprecision(6)
+                                << "Continuation reached the highest-wave boundary: H/Hm = "
+                                << candidate_ratio << ".";
+                            throw std::runtime_error(msg.str());
+                        }
+                        if (ns == nstep && candidate_ratio > kFourierApplicabilityFraction) {
+                            std::ostringstream msg;
+                            msg.setf(std::ios::fixed);
+                            msg << std::setprecision(6)
+                                << "Target is outside the accepted Fourier range: H/Hm = "
+                                << candidate_ratio << " exceeds 0.980000.";
+                            throw std::runtime_error(msg.str());
+                        }
+                    }
+                }
                 throw std::runtime_error("Newton did not converge within iteration budget.");
             }
 
             // Reconstruct free-surface harmonics and Fourier coefficients for this step.
             compute_Y_and_B();
+        }
+
+        // A small Newton correction alone is not proof of convergence. Validate
+        // the complete nonlinear system and the truncation tail independently.
+        {
+            const Real final_ss = eqns(rhs1);
+            if (!std::isfinite(final_ss)) {
+                throw std::runtime_error("Final nonlinear residual norm is non-finite.");
+            }
+            max_residual = residual_inf_norm(rhs1);
+            if (max_residual > kFinalResidualTolerance) {
+                std::ostringstream msg;
+                msg.setf(std::ios::scientific);
+                msg << std::setprecision(3)
+                    << "False convergence rejected: maximum residual = " << max_residual
+                    << ", tolerance = " << kFinalResidualTolerance << ".";
+                throw std::runtime_error(msg.str());
+            }
+
+            surface_tail_coefficient = std::abs(Y[(size_t)n]);
+            if (!std::isfinite(surface_tail_coefficient) ||
+                surface_tail_coefficient > kSurfaceTailTolerance) {
+                std::ostringstream msg;
+                msg.setf(std::ios::scientific);
+                msg << std::setprecision(3)
+                    << "Fourier order N=" << n << " is insufficient: |E_N| = "
+                    << surface_tail_coefficient << " exceeds " << kSurfaceTailTolerance << ".";
+                throw std::runtime_error(msg.str());
+            }
         }
 
         // ------------------------- dimensional post-process --------------------
@@ -1628,6 +1829,20 @@ private:
             }
         }
 
+        // Any dimensional consistency normalization must leave the complete
+        // nonlinear solution unchanged within the same residual tolerance.
+        {
+            const Real normalized_ss = eqns(rhs1);
+            if (!std::isfinite(normalized_ss)) {
+                throw std::runtime_error("Non-finite residual after dimensional consistency normalization.");
+            }
+            max_residual = residual_inf_norm(rhs1);
+            if (max_residual > kFinalResidualTolerance) {
+                throw std::runtime_error(
+                    "Dimensional consistency normalization invalidated the nonlinear solution.");
+            }
+        }
+
         // Store B_j as a zero-based C++ array for reporting and kinematics.
         for (int j = 1; j <= n; ++j) Bj[(size_t)(j - 1)] = B[(size_t)j];
 
@@ -1642,9 +1857,67 @@ private:
         else if (rel_depth < 0.5) regime = "Intermediate";
         else regime = "Deep";
 
-        breaking_limit_miche = 0.142 * L * std::tanh(k * d);
-        breaking_index = (breaking_limit_miche > 0.0) ? (H_target / breaking_limit_miche) : 0.0;
-        is_breaking = (breaking_limit_miche > 0.0) && (H_target > breaking_limit_miche);
+        // Validate that the computed surface is a single-crested, non-overturning
+        // regular wave and that the crest-to-trough height is the prescribed H.
+        {
+            const Real height_error = std::abs((eta_crest - eta_trough) - H_target);
+            const Real height_tolerance = 1.0e-7 * std::max((Real)1.0, H_target);
+            if (height_error > height_tolerance) {
+                throw std::runtime_error("Converged state failed the dimensional wave-height closure check.");
+            }
+
+            const Real min_water_column = *std::min_element(eta_nodes.begin(), eta_nodes.end());
+            if (!(min_water_column > 0.0) || !std::isfinite(min_water_column)) {
+                throw std::runtime_error("Physically inadmissible surface: the free surface reaches or crosses the bed.");
+            }
+
+            Real previous = surface_keta(0.0);
+            const Real monotonic_tolerance = 1.0e-7 * std::max((Real)1.0, std::abs(z[2]));
+            for (int i = 1; i <= 1000; ++i) {
+                const Real X = Phys::PI * (Real)i / 1000.0;
+                const Real current_surface = surface_keta(X);
+                if (!std::isfinite(current_surface)) {
+                    throw std::runtime_error("Non-finite reconstructed free surface.");
+                }
+                if (current_surface > previous + monotonic_tolerance) {
+                    throw std::runtime_error(
+                        "Non-physical or aliased free surface: profile is not monotonic from crest to trough.");
+                }
+                previous = current_surface;
+            }
+        }
+
+        // Fenton's wavelength-dependent theoretical highest-wave curve is the
+        // steady-wave domain boundary for this steady Fourier formulation.
+        const Real highest_hoverd = fenton_highest_hoverd(L / d);
+        if (!(highest_hoverd > 0.0) || !std::isfinite(highest_hoverd)) {
+            throw std::runtime_error("Could not evaluate the theoretical highest-wave limit.");
+        }
+
+        highest_wave_limit_fenton = highest_hoverd * d;
+        fourier_accuracy_limit = kFourierApplicabilityFraction * highest_wave_limit_fenton;
+        highest_wave_ratio = H_target / highest_wave_limit_fenton;
+        near_limiting_wave = highest_wave_ratio >= 0.90;
+        practical_breaking_risk = MaxH > 0.55;
+
+        if (!(highest_wave_ratio < 1.0)) {
+            std::ostringstream msg;
+            msg.setf(std::ios::fixed);
+            msg << std::setprecision(6)
+                << "No regular steady-wave solution exists at the computed wavelength: H/Hm = "
+                << highest_wave_ratio << " (Hm = " << highest_wave_limit_fenton << " m).";
+            throw std::runtime_error(msg.str());
+        }
+
+        if (highest_wave_ratio > kFourierApplicabilityFraction) {
+            std::ostringstream msg;
+            msg.setf(std::ios::fixed);
+            msg << std::setprecision(6)
+                << "Target wave is too close to the theoretical limiting wave for a rigorous N=" << n
+                << " solution: H/Hm = " << highest_wave_ratio
+                << " exceeds the 0.980000 acceptance limit.";
+            throw std::runtime_error(msg.str());
+        }
 
         calc_integral_props_cpp();
 
@@ -1664,6 +1937,19 @@ private:
         get_kinematics(d + eta_crest, 0.0, u_surf, w, ax);
         get_kinematics(d + eta_trough, Phys::PI, u_trough, w, ax);
         asymmetry = (std::abs(u_trough) > 0.0) ? std::abs(u_surf / u_trough) : 0.0;
+
+        const Real intrinsic_phase_speed = c - Uc;
+        if (!(intrinsic_phase_speed > 0.0) || !std::isfinite(intrinsic_phase_speed)) {
+            throw std::runtime_error("No propagating-wave solution: intrinsic phase speed c-Uc is not positive.");
+        }
+
+        crest_stagnation_margin = c - u_surf;
+        const Real stagnation_tolerance = 1.0e-8 * std::max(std::sqrt(g * d), std::abs(c));
+        if (!(crest_stagnation_margin > stagnation_tolerance) ||
+            !std::isfinite(crest_stagnation_margin)) {
+            throw std::runtime_error(
+                "Limiting-wave stagnation reached: crest particle velocity is not below wave celerity.");
+        }
 
         // Scan phase over the free surface for maximum vertical velocity and horizontal acceleration.
         acc_max = 0.0;
@@ -2006,7 +2292,7 @@ static std::string generate_output(double H_in, double T_in, double d_in, double
     std::ostringstream out;
 
     if (!issues.empty()) {
-        box_title(out, "Numerical failure / non-convergence.");
+        box_title(out, "INVALID, OUT-OF-DOMAIN, OR NON-CONVERGED WAVE");
         for (const auto& msg : issues) box_text(out, msg);
         hline(out, '-');
         return out.str();
@@ -2014,12 +2300,12 @@ static std::string generate_output(double H_in, double T_in, double d_in, double
 
     // ------------------------------- report header ------------------------------
     box_title(out, "NONLINEAR WAVE HYDRODYNAMICS SOLVER (FENTON)");
-    box_text(out, std::string("Wave height (H)             : ") + py_str_float(H_in) + " m");
+    box_text(out, std::string("Regular wave height (H)     : ") + py_str_float(H_in) + " m");
     box_text(out, std::string("Wave period (τ)             : ") + py_str_float(T_in) + " s");
     box_text(out, std::string("Water depth (d)             : ") + py_str_float(d_in) + " m");
     box_text(out, std::string("Eulerian current ū₁         : ") + py_str_float(Uc_in) + " m/s (positive with wave propagation)");
     hline(out, '-');
-    box_text(out, "Status: Full nonlinear system solved successfully.");
+    box_text(out, "Status: Full nonlinear system solved and independently validated.");
     hline(out, '-');
     out << "\n";
 
@@ -2031,6 +2317,14 @@ static std::string generate_output(double H_in, double T_in, double d_in, double
 
     auto wc_num = [&](double v) -> Cell { return has_current ? Cell::numv(v) : Cell::strv("-"); };
     auto wc_str = [&](const std::string& s) -> Cell { return has_current ? Cell::strv(s) : Cell::strv("-"); };
+    auto sci_text = [](double v) -> std::string {
+        if (!std::isfinite(v)) return "nan";
+        std::ostringstream ss;
+        ss.setf(std::ios::scientific);
+        ss << std::setprecision(3) << v;
+        return ss.str();
+    };
+    auto wc_sci = [&](double v) -> Cell { return has_current ? Cell::strv(sci_text(v)) : Cell::strv("-"); };
     auto report_celerity = [](const FentonStreamFunction& slv) -> Real {
         if (slv.T_target > 0.0 && std::isfinite(slv.L)) return slv.L / slv.T_target;
         return slv.c;
@@ -2047,7 +2341,7 @@ static std::string generate_output(double H_in, double T_in, double d_in, double
 
     rows.push_back(Row{ true, "INPUTS & REFERENCE SCALES", {} });
     rows.push_back(Row{ false, "", { Cell::strv("Water depth (d)"), Cell::numv(solver0.d), wc_num(solverC.d), Cell::strv("m") } });
-    rows.push_back(Row{ false, "", { Cell::strv("Wave height (H)"), Cell::numv(solver0.H_target), wc_num(solverC.H_target), Cell::strv("m") } });
+    rows.push_back(Row{ false, "", { Cell::strv("Regular wave height (H)"), Cell::numv(solver0.H_target), wc_num(solverC.H_target), Cell::strv("m") } });
     rows.push_back(Row{ false, "", { Cell::strv("Wave period (τ)"), Cell::numv(solver0.T_target), wc_num(solverC.T_target), Cell::strv("s") } });
     rows.push_back(Row{ false, "", { Cell::strv("H/d"), Cell::numv(solver0.H_target / solver0.d), wc_num(solverC.H_target / solverC.d), Cell::strv("-") } });
     rows.push_back(Row{ false, "", { Cell::strv("τ√(g/d)"), Cell::numv(solver0.T_target * sqrt_g_over_d), wc_num(solverC.T_target * sqrt_g_over_d), Cell::strv("-") } });
@@ -2091,12 +2385,23 @@ static std::string generate_output(double H_in, double T_in, double d_in, double
     rows.push_back(Row{ false, "", { Cell::strv("Mean square bed orbital vel ub²"), Cell::numv(solver0.MeanSquareBedVelocity), wc_num(solverC.MeanSquareBedVelocity), Cell::strv("m²/s²") } });
     rows.push_back(Row{ false, "", { Cell::strv("Bed orbital RMS velocity ub,rms"), Cell::numv(std::sqrt(std::max(0.0, solver0.MeanSquareBedVelocity))), wc_num(std::sqrt(std::max(0.0, solverC.MeanSquareBedVelocity))), Cell::strv("m/s") } });
 
-    rows.push_back(Row{ true, "NONLINEARITY / BREAKING DIAGNOSTICS", {} });
-    const std::string warn0 = solver0.is_breaking ? "BREAKING" : "STABLE";
-    const std::string warnC = has_current ? (solverC.is_breaking ? "BREAKING" : "STABLE") : "-";
-    rows.push_back(Row{ false, "", { Cell::strv("Miche breaking limit (Hmax)"), Cell::numv(solver0.breaking_limit_miche), wc_num(solverC.breaking_limit_miche), Cell::strv("m") } });
-    rows.push_back(Row{ false, "", { Cell::strv("Saturation (H/Hmax)"), Cell::numv(solver0.breaking_index), wc_num(solverC.breaking_index), Cell::strv("-") } });
-    rows.push_back(Row{ false, "", { Cell::strv("Breaking status"), Cell::strv(warn0), wc_str(warnC), Cell::strv("-") } });
+    rows.push_back(Row{ true, "NONLINEARITY / LIMITING-WAVE VALIDATION", {} });
+    const std::string theoretical0 = solver0.near_limiting_wave ? "ADMISSIBLE - NEAR LIMIT" : "ADMISSIBLE";
+    const std::string theoreticalC = has_current
+        ? (solverC.near_limiting_wave ? "ADMISSIBLE - NEAR LIMIT" : "ADMISSIBLE")
+        : "-";
+    const std::string practical0 = solver0.practical_breaking_risk ? "ELEVATED RISK" : "H/d <= 0.55";
+    const std::string practicalC = has_current
+        ? (solverC.practical_breaking_risk ? "ELEVATED RISK" : "H/d <= 0.55")
+        : "-";
+    rows.push_back(Row{ false, "", { Cell::strv("Fenton highest steady wave (Hm)"), Cell::numv(solver0.highest_wave_limit_fenton), wc_num(solverC.highest_wave_limit_fenton), Cell::strv("m") } });
+    rows.push_back(Row{ false, "", { Cell::strv("Limiting-wave ratio (H/Hm)"), Cell::numv(solver0.highest_wave_ratio), wc_num(solverC.highest_wave_ratio), Cell::strv("-") } });
+    rows.push_back(Row{ false, "", { Cell::strv("98% Fourier acceptance height"), Cell::numv(solver0.fourier_accuracy_limit), wc_num(solverC.fourier_accuracy_limit), Cell::strv("m") } });
+    rows.push_back(Row{ false, "", { Cell::strv("Steady-wave domain status"), Cell::strv(theoretical0), wc_str(theoreticalC), Cell::strv("-") } });
+    rows.push_back(Row{ false, "", { Cell::strv("Practical depth-breaking screen"), Cell::strv(practical0), wc_str(practicalC), Cell::strv("-") } });
+    rows.push_back(Row{ false, "", { Cell::strv("Crest stagnation margin (c−ucrest)"), Cell::numv(solver0.crest_stagnation_margin), wc_num(solverC.crest_stagnation_margin), Cell::strv("m/s") } });
+    rows.push_back(Row{ false, "", { Cell::strv("Maximum nonlinear residual"), Cell::strv(sci_text(solver0.max_residual)), wc_sci(solverC.max_residual), Cell::strv("-") } });
+    rows.push_back(Row{ false, "", { Cell::strv("Surface spectral tail |E_N|"), Cell::strv(sci_text(solver0.surface_tail_coefficient)), wc_sci(solverC.surface_tail_coefficient), Cell::strv("-") } });
     rows.push_back(Row{ false, "", { Cell::strv("Ursell number (U)"), Cell::numv(solver0.ursell), wc_num(solverC.ursell), Cell::strv("-") } });
     rows.push_back(Row{ false, "", { Cell::strv("Regime (by d/L)"), Cell::strv(solver0.regime), wc_str(solverC.regime), Cell::strv("-") } });
 
@@ -2164,7 +2469,7 @@ static std::string generate_output(double H_in, double T_in, double d_in, double
     };
 
     add_term("d", "Still-water depth (bed to mean water level). Reference length scale.", "m ; d/d=1");
-    add_term("H", "Wave height (crest-to-trough).", "m ; H/d");
+    add_term("H", "Regular periodic-wave height (crest-to-trough); not significant wave height Hs.", "m ; H/d");
     add_term("τ", "Wave period.", "s ; τ√(g/d)");
     add_term("L", "Wavelength (crest-to-crest).", "m ; L/d");
     add_term("k", "Wave number, k = 2π/L.", "rad/m");
@@ -2192,7 +2497,9 @@ static std::string generate_output(double H_in, double T_in, double d_in, double
     add_term("ubed,max", "Maximum horizontal velocity at seabed (scanned over phase).", "m/s");
     add_term("a_x,max", "Maximum horizontal acceleration magnitude.", "m/s²");
     add_term("Asymmetry", "Velocity asymmetry indicator |uc|/|ut|.", "-");
-    add_term("Hmax", "Miche breaking limit used as stability diagnostic.", "m");
+    add_term("Hm", "Theoretical highest regular steady wave from Fenton (1990), Eq. (32).", "m ; H/Hm");
+    add_term("E_N", "Last free-surface Fourier coefficient; |E_N| must remain below 10^-4.", "-");
+    add_term("c−ucrest", "Crest stagnation margin; positive below the limiting wave.", "m/s");
     add_term("Ursell", "Ursell number, a shallow-water nonlinearity measure.", "-");
     add_term("Regime", "Depth regime based on d/L (deep/intermediate/shallow).", "-");
 
@@ -2356,7 +2663,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return h;
         };
 
-        make_label(L"Wave Height (m):", y); g_hEditH = make_edit(L"3.0", IDC_EDIT_H, y); y += 35;
+        make_label(L"Regular Wave H (m):", y); g_hEditH = make_edit(L"3.0", IDC_EDIT_H, y); y += 35;
         make_label(L"Wave Period (s):", y); g_hEditT = make_edit(L"9.0", IDC_EDIT_T, y); y += 35;
         make_label(L"Water Depth (m):", y); g_hEditD = make_edit(L"5.0", IDC_EDIT_D, y); y += 35;
         make_label(L"Current (m/s):", y);   g_hEditUc = make_edit(L"1.0", IDC_EDIT_UC, y); y += 45;
@@ -2390,9 +2697,21 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 return 0;
             }
 
-            if (!(H > 0.0) || !(T > 0.0) || !(d > 0.0)) {
-                MessageBoxW(hwnd, L"Please enter positive values for H, T, and d.",
+            if (!std::isfinite(H) || !std::isfinite(T) || !std::isfinite(d) ||
+                !std::isfinite(Uc) || !(H > 0.0) || !(T > 0.0) || !(d > 0.0)) {
+                MessageBoxW(hwnd,
+                            L"H, T, and d must be finite and positive; current must be finite.",
                             L"Input Error", MB_ICONERROR);
+                return 0;
+            }
+
+            if (!((H / d) < 0.83322)) {
+                MessageBoxW(hwnd,
+                            L"Physically inadmissible regular wave."
+                            L"The ratio H/d must be below 0.83322, the theoretical "
+                            L"solitary-wave upper bound. The wavelength-dependent "
+                            L"Fenton limit applied after solution is generally lower.",
+                            L"Wave Outside Model Domain", MB_ICONERROR);
                 return 0;
             }
 
