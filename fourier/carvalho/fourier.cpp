@@ -5,11 +5,9 @@ fourier.cpp — Fenton-style reference solver for steady nonlinear water waves
 
 PROGRAM ROLE IN THE SUITE
 -------------------------
-This file is the standalone reference-style Fourier / stream-function solver in
-this repository.  It implements the same physical formulation described in the
-README: steady, two-dimensional, periodic finite-amplitude gravity waves over a
-horizontal bed, with optional collinear current and with either wavelength- or
-period-based closure.
+This file is a standalone Fourier / stream-function solver for steady,
+two-dimensional, periodic finite-amplitude gravity waves over a horizontal bed,
+with optional collinear current and either wavelength- or period-based closure.
 
 The central engineering calculation is the nonlinear mapping between wave height,
 period or wavelength, water depth, selected current convention and the resulting
@@ -36,15 +34,14 @@ increases numerical resolution of the same nonlinear free-boundary problem.
 
 COORDINATE AND DATUM CONVENTION
 -------------------------------
-The README presents the theoretical datum with still-water level at y=0 and bed
-at y=-d.  This legacy source uses the equivalent bed-based physical coordinate
+Fenton's formulation uses the theoretical datum with still-water level at y=0
+and the bed at y=-d.  This legacy source uses the equivalent bed-based physical coordinate
 for output and profile sampling:
 
     bed:              y = 0
     mean water level: y = d
 
-Internally it immediately shifts to the same mean-level coordinate used by the
-README:
+Internally it immediately shifts to a mean-level coordinate:
 
     y' = y - d,        X = k(x-ct),        Y = k y'
 
@@ -68,8 +65,7 @@ surface boundary conditions and the global wave-current constraints.
 
 FINITE-DEPTH FOURIER BASIS
 --------------------------
-The finite-depth representation uses the stable hyperbolic combination described
-in the README:
+The finite-depth representation uses the stable hyperbolic combination:
 
     S_j(Y) = sinh(jY) + cosh(jY) tanh(jkd)
     C_j(Y) = cosh(jY) + sinh(jY) tanh(jkd)
@@ -81,7 +77,7 @@ exp(jY).
 
 STATE VECTOR AND RESIDUAL SYSTEM
 --------------------------------
-The active legacy state vector is the README/Fenton-style 1-based vector:
+The active legacy state vector is the Fenton-style 1-based vector:
 
     z[1]   = kd
     z[2]   = kH
@@ -107,7 +103,7 @@ Bernoulli's equation on the free surface.
 
 CURRENT CONVENTIONS
 -------------------
-The code distinguishes exactly the two current definitions in the README:
+The code distinguishes Fenton's two current definitions:
 
     u1 = c - Ubar              Eulerian current
     u2 = c - Q/d               Stokes / mass-transport current
@@ -137,11 +133,11 @@ COMPILATION
 -----------
 Windows / MSYS2 / MinGW:
 
-    g++ -std=c++20 fourier.cpp -o fourier.exe -O2 -static -static-libgcc -static-libstdc++
+    g++ -std=c++20 fourier.cpp -o fourier.exe -O3 -march=native -fopenmp -static-libgcc -static-libstdc++
 
 Linux / macOS:
 
-    g++ -std=c++20 -Wall -Wextra -pedantic fourier.cpp -O2 -o fourier -static-libstdc++ -static-libgcc
+    g++ -std=c++20 -Wall -Wextra -pedantic fourier.cpp -O3 -march=native -fopenmp -o fourier
 
 ATTRIBUTION
 -----------
@@ -165,6 +161,11 @@ set.
 #include <string_view>
 #include <string>
 #include <system_error>
+#include <vector>
+
+#if defined(_OPENMP)
+  #include <omp.h>
+#endif
 
 
 #if defined(_WIN32)
@@ -272,7 +273,7 @@ they enforce dimensional consistency between the two nondimensional systems.
 -------------------------------------------------------------------------------
 
 This solver uses Numerical-Recipes style 1-based arrays. The active state vector
-is the README/Fenton vector z[1..2N+10].  Index 0 is unused.
+is the Fenton-style vector z[1..2N+10].  Index 0 is unused.
 
 A convenient mental model is:
 
@@ -296,7 +297,7 @@ The physical correspondence is:
   z[n + 10 + j], j=1..N:
       B_j, stream-function Fourier coefficient.
 
-The residual vector rhs[] has the README size and ordering:
+The residual vector rhs[] has the required size and ordering:
 
   rhs[1..8]
       global height, period/wavelength, celerity, current, flux and datum
@@ -366,10 +367,9 @@ If you modify/extend this file later:
 FENTON STEADY NONLINEAR WAVE THEORY (STREAM-FUNCTION / FOURIER-COLLOCATION)
 ================================================================================
 
-This section maps the README formulation to the variables and equations in this
-legacy single-file solver.  The code body uses historical variable names and
-1-based arrays, but the mathematical problem is the same nonlinear free-boundary
-problem described in the README.
+This section maps the Fenton formulation to the variables and equations in this
+single-file solver.  The code body uses historical variable names and 1-based
+arrays while solving the same nonlinear free-boundary problem.
 
 ------------------------------------------------------------------------------
 A) PHYSICAL MODEL AND TRAVELLING-WAVE FORMULATION
@@ -384,15 +384,16 @@ The fixed-frame wave has period T, wavelength L, wavenumber k=2π/L and celerity
 c=L/T.  The travelling coordinate is ξ=x-ct.  In the wave frame the free surface
 is steady and all unknowns are periodic in X=kξ.
 
-The README uses y=0 at still-water level and y=-d at the bed.  This source uses
-a bed-based physical coordinate y for output, then shifts to y'=y-d.  Therefore:
+Fenton's formulation uses y=0 at still-water level and y=-d at the bed. This
+source uses a bed-based physical coordinate y for output, then shifts to y'=y-d.
+Therefore:
 
-    README datum:       bed=-d, mean level=0
+    Fenton datum:      bed=-d, mean level=0
     this source output: bed=0,  mean level=d
     internal solver:    Y=k(y-d), so bed=-kd and mean level=0
 
 Only the datum changes.  The nondimensional ordinate stored in z[10+m] is the
-same ζ_m=kη_m used in the README.
+same ζ_m=kη_m used in the governing equations.
 
 ------------------------------------------------------------------------------
 B) STREAM FUNCTION, VELOCITIES AND BOUNDARY CONDITIONS
@@ -422,7 +423,7 @@ z[7] and z[8].  At each collocation node it is assembled as:
 
     ψ_Fourier(X_m,ζ_m) - z[8] - z[7] ζ_m = 0
 
-where z[8]=q√(k^3/g) and q=Ubar*d-Q.  This is the README residual
+where z[8]=q√(k^3/g) and q=Ubar*d-Q.  This is the free-surface residual
 R_m^(ψ)=0 written in the legacy variable layout.
 
 The Bernoulli residual is assembled as:
@@ -443,7 +444,7 @@ Y=k(y-d), the stable basis functions are:
     C_j(Y) = cosh(jY) + sinh(jY)tanh(jkd)
 
 The code evaluates ψ, Ψ_Y and -Ψ_X from these S_j and C_j combinations.  In deep
-water tanh(jkd)->1, so S_j and C_j reduce to exp(jY), matching the README's
+water tanh(jkd)->1, so S_j and C_j reduce to exp(jY), matching the formulation's
 kd->∞ limit.
 
 ------------------------------------------------------------------------------
@@ -486,7 +487,7 @@ The residuals are:
     = 2N + 10 equations.
 
 Thus the implemented Fenton system is square and uses the same active state-vector
-meaning as described in the README.
+meaning used by the governing equations.
 
 ------------------------------------------------------------------------------
 F) POST-PROCESSING
@@ -499,7 +500,7 @@ Fourier coefficients with the steady-wave identity ∂/∂t=-c∂/∂x.
 
 Integral quantities are reported in both k-based and depth-based scalings where
 finite depth is available, matching the dual nondimensional interpretation in the
-README and in Fenton's SOLUTION.RES-style output.
+the formulation and in Fenton's SOLUTION.RES-style output.
 
 ================================================================================
 */
@@ -590,7 +591,7 @@ Advantages (in this legacy context):
     sensitive and were historically written with globals.
 
 Costs:
-  - thread-unsafety (not relevant here: the solver is single-case, single-thread),
+  - global state is confined to one problem case; parallel residual evaluations use independent state copies,
   - "hidden" dependencies between routines (documented in comments where possible).
 
 Conventions:
@@ -664,10 +665,8 @@ static int Surface_points = 0;
 // Global arrays
 static double **sol = nullptr;
 static double *B = nullptr;
-static double *coeff = nullptr;
 static double *cosa = nullptr;
 static double *rhs1 = nullptr;
-static double *rhs2 = nullptr;
 static double *sina = nullptr;
 static double *Tanh = nullptr;
 static double *Y = nullptr;
@@ -769,7 +768,6 @@ static double q = 0.0;
 static double R = 0.0;
 static double r = 0.0;
 static double s = 0.0;
-static double sum = 0.0;
 static double sxx = 0.0;
 static double T = 0.0;
 static double u = 0.0;
@@ -824,12 +822,6 @@ RAII wrappers used in main() ensure these allocations are still released safely.
 
 #define NR_END 1
 #define FREE_ARG char*
-static float *vector(long nl, long nh)
-{
-  float *v = (float*)std::malloc((std::size_t)((nh - nl + 1 + NR_END) * sizeof(float)));
-  return v - nl + NR_END;
-}
-
 static double *dvector(long nl, long nh)
 {
   double *v = (double*)std::malloc((std::size_t)((nh - nl + 1 + NR_END) * sizeof(double)));
@@ -851,11 +843,6 @@ static double **dmatrix(long nrl, long nrh, long ncl, long nch)
 
   for (i = nrl + 1; i <= nrh; i++) m[i] = m[i - 1] + ncol;
   return m;
-}
-
-static void free_ivector(int *v_, long nl, long /*nh*/)
-{
-  std::free((FREE_ARG)(v_ + nl - NR_END));
 }
 
 static void free_dvector(double *v_, long nl, long /*nh*/)
@@ -1406,7 +1393,7 @@ static void init()
  *   z[10+m], m=0..N  = kη_m surface elevations at collocation points
  *   z[n+10+j], j=1..N = B_j Fourier coefficients in ψ expansion (Fenton 1999 Eq. 3.5)
  *
- * The core of this routine enforces the two README free-surface residual
+ * The core of this routine enforces the two free-surface residual
  * blocks at N+1 collocation points over half a wave (crest-to-trough):
  *
  *   (1) ψ_Fourier(X_m,ζ_m) - z[8] - z[7]ζ_m = 0
@@ -1416,239 +1403,86 @@ static void init()
  *
  * Returns: Sum of squares of residual components (useful as a diagnostic).
  */
-static double Eqns(double *rhs)
+static double EqnsAt(const double* state, double* rhs, double* tanh_values)
 {
+  const bool finite_depth = std::strcmp(Depth, "Finite") == 0;
+  const bool wavelength_case = std::strcmp(Case, "Wavelength") == 0;
 
-  /*
-    ---------------------------------------------------------------------------
-    rhs[] INDEX MAP (QUICK REFERENCE)
-    ---------------------------------------------------------------------------
+  rhs[1] = finite_depth ? state[2] - state[1] * Hoverd : 0.0;
+  rhs[2] = wavelength_case
+             ? state[2] - 2.0 * pi * height
+             : state[2] - height * state[3] * state[3];
+  rhs[3] = state[4] * state[3] - pi - pi;
+  rhs[4] = state[5] + state[7] - state[4];
+  rhs[5] = state[1] * (state[6] + state[7] - state[4]) - state[8];
 
-    For N Fourier modes (variable `n`), the total system size is:
-        num = 2*N + 10
-
-    Indices:
-
-      rhs[1]  : (finite depth) kH - kd*(H/d) = 0
-      rhs[2]  : ties internal continuation height variable to kH (depends on Case)
-      rhs[3]  : z[4]*z[3] - 2π = 0  (period/celerity scaling identity)
-      rhs[4]  : Euler current definition: u1 + U - c = 0
-      rhs[5]  : Stokes current definition (mass transport / discharge relation)
-      rhs[6]  : user-specified current magnitude for chosen criterion
-      rhs[7]  : mean water level condition (mean of kη_m over wavelength is zero)
-      rhs[8]  : wave height condition: kη_crest - kη_trough - kH = 0
-
-      For each collocation point m = 0..N:
-
-        rhs[9 + m]          : streamfunction BC on free surface (kinematic):
-                              ψ_Fourier(X_m,ζ_m) - z[8] - z[7]ζ_m = 0
-
-        rhs[(N+10) + m]     : Bernoulli BC on free surface (dynamic):
-                              ½[(-z[7]+u_m)^2 + v_m^2] + ζ_m - z[9] = 0
-
-    This organisation matches the README state-vector/residual layout and is
-    relied upon by Newton() when forming the Jacobian and updating z[].
-
-    ---------------------------------------------------------------------------
-  */
-  int i, j, m, nm;
-  double coshkd, e, sinhkd, Sum, u_, v_;
-
-  /*
-    ---------------------------------------------------------------------------
-    “GLOBAL” (NON-COLLOCATION) CONSTRAINT EQUATIONS
-    ---------------------------------------------------------------------------
-
-    These residual components implement the additional equations needed to close
-    the steady-wave system beyond the 2(N+1) free-surface collocation equations.
-
-    The README/Fenton-style active system has 2N+10 equations:
-
-      - prescribed H/d or H/L through the continuation height,
-      - specified wavelength or specified apparent period,
-      - celerity-period consistency,
-      - Eulerian and Stokes-current definitions,
-      - selected current closure,
-      - mean-level convention,
-      - crest-to-trough height definition,
-      - streamline and Bernoulli conditions at N+1 collocation nodes.
-
-    These equations define the nonlinear free-boundary wave solution.
-  */
-
-  // rhs[1]: enforce kH = kd*(H/d) in finite depth.
-  // This is a direct consequence of the definitions:
-  //   kd = k d,   H/d = Hoverd,   kH = z[2]  =>  z[2] - z[1]*Hoverd = 0.
-  // Compare with the wave-height specification logic around Fenton (1999) Eq. (3.10),
-  // where a known H/d is used while kd is unknown in τ-specified problems.
-  Is_deep   rhs[1] = 0.0;
-  Is_finite rhs[1] = z[2] - z[1] * Hoverd;
-
-  // rhs[2]: connects the “height parameter” used internally by the legacy code to
-  // the user-specified wave scale, depending on whether λ or τ is specified.
-  //
-  // - Wavelength case: k = 2π/λ is known once λ/d is specified, so kH can be related
-  //   directly to H/λ (cf. Fenton 1999 Eq. 3.11 for kd when λ/d known).
-  //
-  // - Period case: τ is specified instead of λ; the system uses z[3] and z[4] to
-  //   represent period/celerity consistency, and this equation ties the chosen
-  //   “height” continuation variable to z[3] (legacy driver retained exactly).
-  iff(Case, Wavelength)
-    rhs[2] = z[2] - 2.0 * pi * height;
-  else
-    rhs[2] = z[2] - height * z[3] * z[3];
-
-  // rhs[3]: period/celerity consistency (linear scaling identity preserved).
-  // In the linear limit, τ*sqrt(gk) = 2π / sqrt(tanh(kd)); the code stores the
-  // corresponding factors as z[3] and z[4] and enforces: z[4]*z[3] = 2π.
-  rhs[3] = z[4] * z[3] - pi - pi;
-
-  // rhs[4]: Eulerian current definition ū1 = c - Ū  (Fenton 1999 Eq. 3.13).
-  // Rearranged to residual form: ū1 + Ū - c = 0.
-  rhs[4] = z[5] + z[7] - z[4];
-
-  // rhs[5]: Stokes/mass-transport current definition ū2 = c - Q/d (Fenton 1999 Eq. 3.14),
-  // expressed in the program’s nondimensional variables.
-  rhs[5] = z[1] * (z[6] + z[7] - z[4]) - z[8];
-
-  for (i = 1; i <= n; i++) {
-    coeff[i] = z[n + i + 10];
-    Is_finite Tanh[i] = std::tanh(i * z[1]);
+  if (finite_depth) {
+    for (int j = 1; j <= n; ++j) {
+      tanh_values[j] = std::tanh(static_cast<double>(j) * state[1]);
+    }
+    rhs[6] = state[Current_criterion + 4] - Current * std::sqrt(state[1]);
+  } else {
+    rhs[6] = wavelength_case
+               ? state[Current_criterion + 4] - Current
+               : state[Current_criterion + 4] - Current * state[3];
   }
 
-  // rhs[6]: enforce the USER-SPECIFIED current magnitude for the chosen criterion.
-  // In the τ-specified (period) problems, Fenton (1999) shows that the equations
-  // may be closed by specifying τ*sqrt(g/d) and one of ū1/sqrt(gd) or ū2/sqrt(gd)
-  // (Eq. 3.15 or Eq. 3.16).
-  //
-  // In this implementation, Current is read/stored as that *depth-based*
-  // nondimensional value (current / sqrt(g d)). The solver’s native scaling is
-  // wavenumber-based; conversion introduces sqrt(kd)=sqrt(z[1]).
-  Is_finite rhs[6] = z[Current_criterion + 4] - Current * std::sqrt(z[1]);
-
-  Is_deep {
-    iff(Case, Wavelength)
-      rhs[6] = z[Current_criterion + 4] - Current;
-    else
-      rhs[6] = z[Current_criterion + 4] - Current * z[3];
+  rhs[7] = state[10] + state[n + 10];
+  for (int i = 1; i <= n - 1; ++i) {
+    rhs[7] = rhs[7] + state[10 + i] + state[10 + i];
   }
-
-  // rhs[7]: mean water level / mean depth condition.
-  // The Fenton (1999) formulation includes an equation for mean depth using a
-  // trapezoidal rule over the collocation points (Eq. 3.9). This legacy driver
-  // uses an equivalent condition expressed directly in terms of the collocated
-  // surface elevations kη_m: the (periodic) trapezoidal sum of kη_m is enforced
-  // to be zero, i.e. η is measured relative to the mean level.
-  rhs[7] = z[10] + z[n + 10];
-  for (i = 1; i <= n - 1; i++) rhs[7] = rhs[7] + z[10 + i] + z[10 + i];
-
-  // rhs[8]: wave height condition in k-scaling: kη_crest - kη_trough = kH.
-  // This matches the wave-height specification equation (Fenton 1999 Eq. 3.10)
-  // when expressed in terms of kH.
-  rhs[8] = z[10] - z[n + 10] - z[2];
+  rhs[8] = state[10] - state[n + 10] - state[2];
 
   /*
-    ---------------------------------------------------------------------------
-    COLLOCATION LOOP OVER FREE SURFACE POINTS
-    ---------------------------------------------------------------------------
-
-    At each collocation index m (0..N), the free surface elevation is represented
-    by the unknown value:
-        kη_m = z[10 + m]
-
-    We evaluate the truncated Fourier representation of ψ and its derivatives at:
-        X = X_m = m π / N
-        Y = kη_m   (because in k-based scaling the mean free surface is Y=0)
-
-    The basis functions depend on depth regime:
-
-      Finite depth:
-        The vertical structure that satisfies Laplace's equation and the bed
-        boundary condition is expressed using combinations of sinh/cosh and
-        tanh(j kd). In Fenton (1999), this corresponds to Eq. (3.5).
-
-      Deep water:
-        The kd → ∞ limit reduces the basis to exp(j Y) (Eq. (3.6)).
-
-    The sums below compute:
-        ψ(X_m, η_m),  U = ∂ψ/∂Y,  V = -∂ψ/∂X
-    up to the truncation order N, then enforce the two surface boundary
-    conditions by setting the corresponding residual entries.
-    ---------------------------------------------------------------------------
+    Each collocation point is independent once the state vector and finite-depth
+    tanh factors are fixed.  The loop therefore writes two unique residual entries
+    per iteration.  Newton() parallelises complete residual evaluations
+    while constructing Jacobian columns, which provides a coarser and more efficient
+    parallel workload than creating a nested region inside every evaluation.
   */
-  for (m = 0; m <= n; m++) {
-    psi = 0.;
-    u_ = 0.;
-    v_ = 0.;
-    for (j = 1; j <= n; j++) {
-      /*
-        TRIG TABLE INDEX nm
-        -------------------
-        X_m = m π / N. Therefore j X_m = (m*j) π / N.
-        Because cos/sin are 2π-periodic, we can reduce the phase modulo 2π.
-        The tables cosa[]/sina[] are stored as cos(p π / N), sin(p π / N) for
-        p = 0..2N, so the appropriate index is:
+  for (int m = 0; m <= n; ++m) {
+    double psi_sum = 0.0;
+    double u_sum = 0.0;
+    double v_sum = 0.0;
+    const double eta = state[10 + m];
 
-            nm = (m*j) mod (2N)   where 2N == (n+n) in this code.
-      */
-      nm = (m * j) % (n + n);
-      Is_finite {
-        /*
-          Vertical basis evaluation at the free surface:
-            Y = kη_m = z[10+m]
+    for (int j = 1; j <= n; ++j) {
+      const int nm = (m * j) % (2 * n);
+      const double coefficient = state[n + j + 10];
+      const double exponential = std::exp(static_cast<double>(j) * eta);
 
-          We need sinh(jY) and cosh(jY). Using exponentials improves speed and
-          was common in the original code:
+      if (finite_depth) {
+        const double inverse_exponential = 1.0 / exponential;
+        const double sinh_eta = 0.5 * (exponential - inverse_exponential);
+        const double cosh_eta = 0.5 * (exponential + inverse_exponential);
+        const double stream_basis = sinh_eta + cosh_eta * tanh_values[j];
+        const double velocity_basis = cosh_eta + sinh_eta * tanh_values[j];
+        const double weighted_mode = static_cast<double>(j) * coefficient;
 
-            sinh(jY) = (e^{jY} - e^{-jY})/2
-            cosh(jY) = (e^{jY} + e^{-jY})/2
-
-          Here:
-            e = exp(jY)
-            1/e = exp(-jY)
-
-          Note: For steep waves, Y near crest can be positive, making exp(jY)
-          large for high j. The truncation order N must therefore be chosen with
-          care for numerical stability.
-        */
-        e = std::exp(j * (z[10 + m]));
-        sinhkd = 0.5 * (e - 1. / e);
-        coshkd = 0.5 * (e + 1. / e);
-        psi = psi + coeff[j] * (sinhkd + coshkd * Tanh[j]) * cosa[nm];
-        u_ = u_ + j * coeff[j] * (coshkd + sinhkd * Tanh[j]) * cosa[nm];
-        v_ = v_ + j * coeff[j] * (sinhkd + coshkd * Tanh[j]) * sina[nm];
-      }
-      Is_deep {
-        e = std::exp(j * (z[10 + m]));
-        psi = psi + coeff[j] * e * cosa[nm];
-        u_ = u_ + j * coeff[j] * e * cosa[nm];
-        v_ = v_ + j * coeff[j] * e * sina[nm];
+        psi_sum += coefficient * stream_basis * cosa[nm];
+        u_sum += weighted_mode * velocity_basis * cosa[nm];
+        v_sum += weighted_mode * stream_basis * sina[nm];
+      } else {
+        const double weighted_mode = static_cast<double>(j) * coefficient * exponential;
+        psi_sum += coefficient * exponential * cosa[nm];
+        u_sum += weighted_mode * cosa[nm];
+        v_sum += weighted_mode * sina[nm];
       }
     }
-    // Collocation equation #1 (kinematic / streamline condition on the free surface)
-    //
-    // In the travelling frame the free surface is a streamline, so ψ is constant there.
-    // With the solver vertical coordinate Y = k(y - d) (mean surface at Y=0, bed at Y=-kd),
-    // the Fourier sum `psi` represents ψ_Fourier(X, η), where η = kη_phys and X = k(x - c t).
-    // The free-surface streamline condition may be expressed in the algebraic form:
-    //
-    //   psi(X, kη) = Ū * (kd + kη) - q
-    //
-    // where Ū is the travelling-frame mean speed (z[7]) and q is a discharge constant.
-    // The scalar z[8] stores Ū*kd - q, so the residual is assembled as:
-    //   psi - z[8] - z[7]*(kη) = 0.
-    rhs[m + 9] = psi - z[8] - z[7] * z[m + 10];
 
-    // Collocation equation #2 (dynamic / Bernoulli condition on free surface)
-    //   1/2(ψ_X^2 + ψ_Y^2) + η = R   (k-based non-dimensional Bernoulli)
-    // In dimensionless form this is Eq. (3.8) of Fenton (1999).
-    // The velocities in the moving frame enter via (U,V) = (ψ_Y, -ψ_X) (Eq. 3.1),
-    // and the squared speed term is assembled here as (Ū - U)^2 + V^2.
-    rhs[n + m + 10] = 0.5 * (std::pow((-z[7] + u_), 2.) + v_ * v_) + z[m + 10] - z[9];
+    rhs[m + 9] = psi_sum - state[8] - state[7] * eta;
+    rhs[n + m + 10] = 0.5 * (std::pow((-state[7] + u_sum), 2.0) + v_sum * v_sum)
+                      + eta - state[9];
   }
 
-  for (j = 1, Sum = 0.; j <= num; j++) Sum += rhs[j] * rhs[j];
-  return Sum;
+  double residual_sum = 0.0;
+  for (int j = 1; j <= num; ++j) residual_sum += rhs[j] * rhs[j];
+  return residual_sum;
+}
+
+static double Eqns(double* rhs)
+{
+  return EqnsAt(z, rhs, Tanh);
 }
 
 /**
@@ -1666,91 +1500,86 @@ static double Eqns(double *rhs)
  */
 static double Newton(int count)
 {
-  double **a = nullptr;
-  double *rhs = nullptr;
-  double *x = nullptr;
-  double h, sum_;
+  (void)count;
 
-  int i, j;
+  double* rhs = dvector(1, num);
+  double* correction = dvector(1, num);
+  double** jacobian = dmatrix(1, num, 1, num);
 
   Eqns(rhs1);
+  for (int i = 1; i <= num; ++i) rhs[i] = -rhs1[i];
 
   /*
-    JACOBIAN CONSTRUCTION BY FINITE DIFFERENCES
-    ------------------------------------------
-    The Jacobian matrix J = ∂rhs/∂z is not derived analytically here. Instead, we
-    approximate each column i by a forward difference:
-
-        J[:, i] ≈ ( rhs(z + h e_i) - rhs(z) ) / h
-
-    where e_i is the i-th unit vector.
-
-    Step size selection:
-      h = 0.01 * z[i]        (1% relative perturbation)
-      but if |z[i]| < 1e-4 then h = 1e-5 (absolute floor)
-
-    Rationale:
-      - A relative step captures scale differences across parameters.
-      - The absolute floor avoids h=0 when z[i] is (near) zero.
-      - Forward differences are used because they require only one extra rhs
-        evaluation per column (cheaper than central differences), which is
-        acceptable given the moderate system sizes typical of this solver.
-
-    Trade-offs:
-      - Too small h -> subtraction cancellation (roundoff dominates)
-      - Too large h -> poor linearisation (truncation error dominates)
-
-    The chosen heuristic matches the legacy code and has proven robust across the
-    intended operating range.
+    Numerical Jacobian columns are independent.  The perturbed state vectors are
+    prepared serially in the same index order as the original finite-difference
+    loop, including its floating-point add/subtract restoration semantics.  The
+    expensive residual evaluations are then distributed across OpenMP workers.
   */
+  const std::size_t state_size = static_cast<std::size_t>(num + 1);
+  std::vector<double> initial_state(state_size, 0.0);
+  std::vector<double> restored_state(state_size, 0.0);
+  std::vector<double> perturbations(state_size, 0.0);
 
-  if (count >= 1) {
-    ++count;
-    rhs = dvector(1, num);
-    x = dvector(1, num);
-    a = dmatrix(1, num, 1, num);
+  for (int k = 1; k <= num; ++k) {
+    initial_state[k] = z[k];
+    restored_state[k] = z[k];
   }
 
-  for (i = 1; i <= num; i++) {
-    h = 0.01 * z[i];
-    if (std::fabs(z[i]) < 1.e-4) h = 1.e-5;
-    z[i] = z[i] + h;
-    Eqns(rhs2);
-    z[i] = z[i] - h;
-    rhs[i] = -rhs1[i];
-    for (j = 1; j <= num; j++) a[j][i] = (rhs2[j] - rhs1[j]) / h;
+  for (int i = 1; i <= num; ++i) {
+    double h = 0.01 * initial_state[i];
+    if (std::fabs(initial_state[i]) < 1.0e-4) h = 1.0e-5;
+
+    const double perturbed_value = initial_state[i] + h;
+    restored_state[i] = perturbed_value - h;
+    perturbations[i] = h;
   }
 
-  Solve(a, rhs, (int)num, (int)num, x, (int)num, (int)num);
+  for (int k = 1; k <= num; ++k) z[k] = restored_state[k];
 
-  for (i = 1; i <= num; i++) z[i] += x[i];
+  #pragma omp parallel
+  {
+    int thread_id = 0;
+    int thread_count = 1;
+#if defined(_OPENMP)
+    thread_id = omp_get_thread_num();
+    thread_count = omp_get_num_threads();
+#endif
+    const int first_column = 1 + (thread_id * num) / thread_count;
+    const int last_column = ((thread_id + 1) * num) / thread_count;
 
-  /*
-    CONVERGENCE METRIC USED BY THE FENTON DRIVER
-    --------------------------------------------
-    The original program monitored convergence primarily via the mean absolute
-    correction to the *free-surface* degrees of freedom (kη_m). Those are stored
-    in z[10..10+N].
+    std::vector<double> local_state = initial_state;
+    std::vector<double> local_rhs(static_cast<std::size_t>(num + 1));
+    std::vector<double> local_tanh(static_cast<std::size_t>(n + 1));
 
-    This is a sensible choice because:
-      - surface elevations are directly tied to the nonlinear boundary conditions,
-      - they typically exhibit the largest sensitivity in steep-wave regimes,
-      - they provide an intuitive "physical" measure of how much the wave shape
-        is still changing.
+    for (int k = 1; k < first_column; ++k) local_state[k] = restored_state[k];
 
-    We compute:
-        error = (1/N) Σ_{m=0..N} |Δ(kη_m)|
+    for (int i = first_column; i <= last_column; ++i) {
+      local_state[i] = initial_state[i] + perturbations[i];
+      EqnsAt(local_state.data(), local_rhs.data(), local_tanh.data());
+      local_state[i] = restored_state[i];
 
-    and compare it against the tolerance criterion (crit or tighter on final step).
-  */
-  for (sum_ = 0., i = 10; i <= n + 10; i++) sum_ += std::fabs(x[i]);
-  sum_ /= n;
+      const double h = perturbations[i];
+      for (int j = 1; j <= num; ++j) {
+        jacobian[j][i] = (local_rhs[j] - rhs1[j]) / h;
+      }
+    }
+  }
+
+  Solve(jacobian, rhs, num, num, correction, num, num);
+
+  for (int i = 1; i <= num; ++i) z[i] += correction[i];
+
+  double mean_surface_correction = 0.0;
+  for (int i = 10; i <= n + 10; ++i) {
+    mean_surface_correction += std::fabs(correction[i]);
+  }
+  mean_surface_correction /= n;
 
   free_dvector(rhs, 1, num);
-  free_dvector(x, 1, num);
-  free_dmatrix(a, 1, num, 1, num);
+  free_dvector(correction, 1, num);
+  free_dmatrix(jacobian, 1, num, 1, num);
 
-  return sum_;
+  return mean_surface_correction;
 }
 
 // -----------------------------------------------------------------------------
@@ -2820,6 +2649,17 @@ nstep = steps;
   // ---------------------------------------------------------------------------
   num = 2 * n + 10;
 
+#if defined(_OPENMP)
+  // Respect an explicit OMP_NUM_THREADS setting.  Otherwise use a conservative
+  // workload-dependent limit to avoid excessive OpenMP overhead on high-core-count
+  // systems for the relatively small dense systems used by this solver.
+  if (std::getenv("OMP_NUM_THREADS") == nullptr) {
+    const int useful_threads = std::max(1, std::min(8, num / 24));
+    omp_set_num_threads(std::min(useful_threads, omp_get_num_procs()));
+  }
+  omp_set_dynamic(0);
+#endif
+
   const double dhe = Height / nstep;   // increment in “height” variable used by the legacy algorithm
   const double dho = MaxH   / nstep;   // increment in H/d used for step-wise continuation
 
@@ -2852,8 +2692,6 @@ nstep = steps;
   auto Y_owner     = make_dvector_owner(0, num);         Y = Y_owner.get();
   auto z_owner     = make_dvector_owner(1, num);         z = z_owner.get();
   auto rhs1_owner  = make_dvector_owner(1, num);         rhs1 = rhs1_owner.get();
-  auto rhs2_owner  = make_dvector_owner(1, num);         rhs2 = rhs2_owner.get();
-  auto coeff_owner = make_dvector_owner(0, n);           coeff = coeff_owner.get();
   auto cosa_owner  = make_dvector_owner(0, 2 * n);       cosa = cosa_owner.get();
   auto sina_owner  = make_dvector_owner(0, 2 * n);       sina = sina_owner.get();
   auto sol_owner   = make_dmatrix_owner(0, num, 1, 2);   sol = sol_owner.get();
@@ -2933,19 +2771,15 @@ nstep = steps;
     // POST-PROCESS: RECOVER COSINE-SERIES COEFFICIENTS FOR kη(X)
     // -------------------------------------------------------------------------
     Y[0] = 0.0;
+    #pragma omp parallel for schedule(static) if(n >= 24)
     for (int j = 1; j <= n; ++j) {
       B[j] = z[j + n + 10];
 
-      // Discrete cosine transform-like reconstruction of surface elevation Fourier
-      // coefficients E_j (stored here in Y[j]) from the collocation values kη_m.
-      //
-      // This is a “slow Fourier transform” consistent with Fenton-style post-processing:
-      // it forms the cosine-series that is later evaluated by Surface(X).
-      sum = 0.5 * (z[10] + z[n + 10] * std::pow(-1.0, static_cast<double>(j)));
-      for (int m = 1; m <= n - 1; ++m) {
-        sum += z[10 + m] * cosa[(m * j) % (n + n)];
+      double cosine_sum = 0.5 * (z[10] + z[n + 10] * std::pow(-1.0, static_cast<double>(j)));
+      for (int m = 1; m < n; ++m) {
+        cosine_sum += z[10 + m] * cosa[(m * j) % (2 * n)];
       }
-      Y[j] = 2.0 * sum / n;
+      Y[j] = 2.0 * cosine_sum / n;
     }
   }
 
