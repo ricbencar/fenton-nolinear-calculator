@@ -2,8 +2,9 @@
 """
 High-quality plotting utility for steady nonlinear-wave result files.
 
-The script reads:
+The script reads the four files written by the current fourier.cpp solver:
     solution.res   - wave summary, integral quantities and Fourier coefficients
+    solver.res     - continuation history, convergence proof and residual vector
     surface.res    - free-surface coordinates and pressure-boundary check
     flowfield.res  - vertical profiles of velocity, acceleration and diagnostics
 
@@ -23,7 +24,7 @@ import argparse
 import math
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -32,11 +33,12 @@ import matplotlib.tri as mtri
 import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
-from matplotlib.ticker import EngFormatter, MaxNLocator, ScalarFormatter
+from matplotlib.ticker import MaxNLocator
 
 
 FLOAT_PATTERN = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][+-]?\d+)?"
 FLOAT_RE = re.compile(FLOAT_PATTERN)
+NUMBER_PATTERN = rf"(?:{FLOAT_PATTERN}|[+-]?(?:inf(?:inity)?|nan))"
 PROFILE_RE = re.compile(
     rf"^#\s*X/d\s*=\s*({FLOAT_PATTERN})\s*,\s*Phase\s*=\s*({FLOAT_PATTERN})",
     re.IGNORECASE,
@@ -72,10 +74,73 @@ class SolutionData:
     residual_max: float | None
 
 
+
+
+@dataclass(frozen=True)
+class ContinuationStep:
+    trial: int
+    fraction: float
+    increment: float
+    accepted: bool
+    residual_rms: float
+    residual_max: float
+    next_increment: float
+    tangent_available: bool
+
+
+@dataclass(frozen=True)
+class ResidualGroup:
+    name: str
+    first_index: int
+    last_index: int
+    count: int
+    rms: float
+    maximum: float
+    maximum_index: int
+
+
+@dataclass(frozen=True)
+class ResidualEntry:
+    index: int
+    value: float
+    absolute_value: float
+    fraction_of_max_limit: float
+    description: str
+
+
+@dataclass(frozen=True)
+class SolverData:
+    fourier_order: int
+    unknown_count: int
+    equation_count: int
+    intermediate_tolerance: float
+    residual_rms_tolerance: float
+    residual_max_tolerance: float
+    spectral_defect_tolerance: float
+    target_height_depth: float
+    current_definition: str
+    prescribed_current: float
+    continuation: tuple[ContinuationStep, ...]
+    accepted_continuation_steps: int
+    total_continuation_trials: int
+    final_sum_squares: float
+    final_l2_norm: float
+    final_residual_rms: float
+    final_residual_max: float
+    final_newton_correction_rms: float
+    final_linear_solver: str
+    spectral_defect_max: float
+    residual_test_passed: bool
+    spectral_test_passed: bool
+    overall_convergence_passed: bool
+    residual_groups: tuple[ResidualGroup, ...]
+    residuals: tuple[ResidualEntry, ...]
+    state_count: int
+
 @dataclass(frozen=True)
 class SurfaceData:
     x_over_d: np.ndarray
-    eta_over_d: np.ndarray
+    y_over_d: np.ndarray
     pressure_check: np.ndarray
 
 
@@ -200,7 +265,11 @@ def parse_solution(path: Path) -> SolutionData:
             percent_match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*%", line)
             if percent_match:
                 fraction_of_maximum = _as_float(percent_match.group(1)) / 100.0
-            max_match = re.search(rf"maximum\s+of\s+H/d\s*=\s*({FLOAT_PATTERN})", line, re.IGNORECASE)
+            max_match = re.search(
+                rf"maximum\s+of\s+H/d\s*=\s*({FLOAT_PATTERN})",
+                line,
+                re.IGNORECASE,
+            )
             if max_match:
                 maximum_height_depth = _as_float(max_match.group(1))
 
@@ -285,10 +354,278 @@ def parse_solution(path: Path) -> SolutionData:
         modes=np.asarray(modes, dtype=int),
         stream_coefficients=np.asarray(stream_coefficients, dtype=float),
         surface_coefficients=np.asarray(surface_coefficients, dtype=float),
-        fourier_order=fourier_order,
+        fourier_order=fourier_order if fourier_order is not None else len(modes),
         residual_rms=residual_rms,
         residual_max=residual_max,
     )
+
+
+def _value_after_prefix(lines: Sequence[str], prefix: str) -> str:
+    """Return the text following one case-insensitive solver-report prefix."""
+    expected = prefix.casefold()
+    for raw_line in lines:
+        line = _strip_comment_prefix(raw_line)
+        if line.casefold().startswith(expected):
+            return line[len(prefix) :].strip()
+    raise ValueError(f"Required solver field was not found: {prefix}")
+
+
+def _solver_float(lines: Sequence[str], prefix: str) -> float:
+    expected = prefix.casefold()
+    for raw_line in lines:
+        line = _strip_comment_prefix(raw_line)
+        if not line.casefold().startswith(expected):
+            continue
+        remainder = line[len(prefix) :].strip()
+        match = re.match(NUMBER_PATTERN, remainder, re.IGNORECASE)
+        if match:
+            return _as_float(match.group(0))
+    raise ValueError(f"Required numeric solver field was not found: {prefix}")
+
+
+def _solver_int(lines: Sequence[str], prefix: str) -> int:
+    return int(_solver_float(lines, prefix))
+
+
+def _solver_pass(lines: Sequence[str], prefix: str) -> bool:
+    text = _value_after_prefix(lines, prefix).casefold()
+    if text.startswith("pass"):
+        return True
+    if text.startswith("fail"):
+        return False
+    raise ValueError(f"Solver field {prefix!r} is neither PASS nor FAIL")
+
+
+def parse_solver(path: Path) -> SolverData:
+    """
+    Parse the current solver.res audit report.
+
+    The parser deliberately uses the report labels written by fourier.cpp rather
+    than fixed column positions for the configuration and convergence proof.
+    Continuation, residual-group and residual-vector rows have stable tabular
+    grammars and are parsed with dedicated regular expressions.
+    """
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+
+    continuation_re = re.compile(
+        rf"^\s*(\d+)\s+({NUMBER_PATTERN})\s+({NUMBER_PATTERN})\s+"
+        rf"(ACCEPT|REJECT)\s+({NUMBER_PATTERN})\s+({NUMBER_PATTERN})\s+"
+        rf"({NUMBER_PATTERN})\s+(YES|NO)\s*$",
+        re.IGNORECASE,
+    )
+    continuation: list[ContinuationStep] = []
+    for raw_line in lines:
+        match = continuation_re.match(raw_line)
+        if not match:
+            continue
+        continuation.append(
+            ContinuationStep(
+                trial=int(match.group(1)),
+                fraction=_as_float(match.group(2)),
+                increment=_as_float(match.group(3)),
+                accepted=match.group(4).casefold() == "accept",
+                residual_rms=_as_float(match.group(5)),
+                residual_max=_as_float(match.group(6)),
+                next_increment=_as_float(match.group(7)),
+                tangent_available=match.group(8).casefold() == "yes",
+            )
+        )
+
+    group_re = re.compile(
+        rf"^(.*?)\s+F\[\s*(\d+)\.\.\s*(\d+)\]\s+count=\s*(\d+)\s+"
+        rf"RMS=\s*({NUMBER_PATTERN})\s+MAX=\s*({NUMBER_PATTERN})\s+"
+        rf"at\s+F\[\s*(\d+)\]\s*$",
+        re.IGNORECASE,
+    )
+    residual_groups: list[ResidualGroup] = []
+    for raw_line in lines:
+        match = group_re.match(raw_line)
+        if not match:
+            continue
+        residual_groups.append(
+            ResidualGroup(
+                name=match.group(1).strip(),
+                first_index=int(match.group(2)),
+                last_index=int(match.group(3)),
+                count=int(match.group(4)),
+                rms=_as_float(match.group(5)),
+                maximum=_as_float(match.group(6)),
+                maximum_index=int(match.group(7)),
+            )
+        )
+
+    residual_re = re.compile(
+        rf"^F\[\s*(\d+)\]\s*=\s*({NUMBER_PATTERN})\s+"
+        rf"({NUMBER_PATTERN})\s+({NUMBER_PATTERN})\s+(.*?)\s*$",
+        re.IGNORECASE,
+    )
+    residuals: list[ResidualEntry] = []
+    state_indices: list[int] = []
+    state_re = re.compile(r"^z\[\s*(\d+)\]\s*=")
+    for raw_line in lines:
+        residual_match = residual_re.match(raw_line)
+        if residual_match:
+            residuals.append(
+                ResidualEntry(
+                    index=int(residual_match.group(1)),
+                    value=_as_float(residual_match.group(2)),
+                    absolute_value=_as_float(residual_match.group(3)),
+                    fraction_of_max_limit=_as_float(residual_match.group(4)),
+                    description=residual_match.group(5).strip(),
+                )
+            )
+            continue
+        state_match = state_re.match(raw_line)
+        if state_match:
+            state_indices.append(int(state_match.group(1)))
+
+    if not continuation:
+        raise ValueError(f"No adaptive-continuation rows were found in {path}")
+    if not residual_groups:
+        raise ValueError(f"No residual-group summary was found in {path}")
+    if not residuals:
+        raise ValueError(f"No complete residual vector was found in {path}")
+
+    fourier_order = _solver_int(lines, "Fourier order N")
+    unknown_count = _solver_int(lines, "Nonlinear unknowns")
+    equation_count = _solver_int(lines, "Nonlinear equations")
+    accepted_steps = _solver_int(lines, "Accepted continuation steps:")
+    total_trials = _solver_int(lines, "Total continuation trials:")
+
+    if [entry.index for entry in residuals] != list(range(1, equation_count + 1)):
+        raise ValueError(
+            f"Residual indices in {path} are incomplete or out of order; "
+            f"expected F[1..{equation_count}]"
+        )
+    if state_indices != list(range(1, unknown_count + 1)):
+        raise ValueError(
+            f"State indices in {path} are incomplete or out of order; "
+            f"expected z[1..{unknown_count}]"
+        )
+
+    return SolverData(
+        fourier_order=fourier_order,
+        unknown_count=unknown_count,
+        equation_count=equation_count,
+        intermediate_tolerance=_solver_float(
+            lines, "Intermediate residual tolerance"
+        ),
+        residual_rms_tolerance=_solver_float(
+            lines, "Final residual RMS tolerance"
+        ),
+        residual_max_tolerance=_solver_float(
+            lines, "Final residual max tolerance"
+        ),
+        spectral_defect_tolerance=_solver_float(
+            lines, "Off-grid spectral defect tolerance"
+        ),
+        target_height_depth=_solver_float(lines, "Target H/d"),
+        current_definition=_value_after_prefix(lines, "Current definition"),
+        prescribed_current=_solver_float(
+            lines, "Prescribed current / sqrt(gd)"
+        ),
+        continuation=tuple(continuation),
+        accepted_continuation_steps=accepted_steps,
+        total_continuation_trials=total_trials,
+        final_sum_squares=_solver_float(lines, "Final residual sum of squares"),
+        final_l2_norm=_solver_float(lines, "Final residual L2 norm"),
+        final_residual_rms=_solver_float(lines, "Final residual RMS"),
+        final_residual_max=_solver_float(
+            lines, "Final maximum absolute residual"
+        ),
+        final_newton_correction_rms=_solver_float(
+            lines, "Final scaled Newton correction RMS"
+        ),
+        final_linear_solver=_value_after_prefix(lines, "Final linear solver"),
+        spectral_defect_max=_solver_float(
+            lines, "Maximum between-node spectral defect"
+        ),
+        residual_test_passed=_solver_pass(
+            lines, "Combined residual convergence test"
+        ),
+        spectral_test_passed=_solver_pass(lines, "Spectral resolution check"),
+        overall_convergence_passed=_solver_pass(
+            lines, "Overall nonlinear convergence"
+        ),
+        residual_groups=tuple(residual_groups),
+        residuals=tuple(residuals),
+        state_count=len(state_indices),
+    )
+
+
+def merge_solver_metadata(
+    solution: SolutionData, solver: SolverData
+) -> SolutionData:
+    """Use solver.res as the authoritative source for numerical diagnostics."""
+    return replace(
+        solution,
+        fourier_order=solver.fourier_order,
+        residual_rms=solver.final_residual_rms,
+        residual_max=solver.final_residual_max,
+    )
+
+
+def validate_result_set(
+    solution: SolutionData,
+    solver: SolverData,
+    surface: SurfaceData,
+    flow: FlowFieldData,
+) -> None:
+    """Reject mixed, incomplete or internally inconsistent result files."""
+    if len(solution.modes) != solver.fourier_order:
+        raise ValueError(
+            "solution.res and solver.res disagree on Fourier order: "
+            f"{len(solution.modes)} coefficient rows versus N={solver.fourier_order}"
+        )
+    if len(solver.continuation) != solver.total_continuation_trials:
+        raise ValueError(
+            "solver.res continuation row count does not match its reported trial count"
+        )
+    if sum(step.accepted for step in solver.continuation) != solver.accepted_continuation_steps:
+        raise ValueError(
+            "solver.res accepted continuation count does not match its history"
+        )
+    if solver.unknown_count != 2 * solver.fourier_order + 10:
+        raise ValueError(
+            "solver.res has an inconsistent nonlinear unknown count: "
+            f"{solver.unknown_count} for N={solver.fourier_order}"
+        )
+    if solver.equation_count != solver.unknown_count:
+        raise ValueError("solver.res does not describe a square nonlinear system")
+    if not math.isclose(
+        solver.target_height_depth,
+        solution.height_depth if solution.height_depth is not None else math.nan,
+        rel_tol=5.0e-5,
+        abs_tol=5.0e-7,
+    ):
+        raise ValueError("solution.res and solver.res describe different H/d cases")
+    if solution.current_criterion and (
+        solution.current_criterion.casefold()
+        != solver.current_definition.casefold()
+    ):
+        raise ValueError(
+            "solution.res and solver.res use different current definitions"
+        )
+    if solution.current_value is not None and not math.isclose(
+        solution.current_value,
+        solver.prescribed_current,
+        rel_tol=5.0e-5,
+        abs_tol=5.0e-7,
+    ):
+        raise ValueError("solution.res and solver.res use different currents")
+    if len(surface.x_over_d) < 3:
+        raise ValueError("surface.res must contain at least three physical points")
+    if not np.all(np.diff(surface.x_over_d) > 0.0):
+        raise ValueError("surface.res X/d coordinates must be strictly increasing")
+    if not np.all(np.isfinite(surface.y_over_d)):
+        raise ValueError("surface.res contains non-finite free-surface elevations")
+    if not np.all(np.isfinite(flow.values)):
+        raise ValueError("flowfield.res contains non-finite numerical values")
+    phases = np.asarray([profile.phase_deg for profile in flow.profiles])
+    if not np.all(np.diff(phases) > 0.0):
+        raise ValueError("flowfield.res phases must be strictly increasing")
+    if abs(phases[0]) > 1.0e-8 or abs(phases[-1] - 180.0) > 1.0e-6:
+        raise ValueError("flowfield.res must span the crest-to-trough half-wave")
 
 
 def parse_surface(path: Path) -> SurfaceData:
@@ -314,7 +651,7 @@ def parse_surface(path: Path) -> SurfaceData:
 
     return SurfaceData(
         x_over_d=array[:, 0],
-        eta_over_d=array[:, 1],
+        y_over_d=array[:, 1],
         pressure_check=array[:, 2],
     )
 
@@ -493,36 +830,31 @@ def save_figure(
     stem: str,
     formats: Sequence[str],
     dpi: int,
+    *,
+    close: bool = True,
 ) -> list[Path]:
     output_paths: list[Path] = []
     for extension in formats:
         output_path = output_dir / f"{stem}.{extension}"
         fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
         output_paths.append(output_path)
-    plt.close(fig)
+    if close:
+        plt.close(fig)
     return output_paths
 
 
-def quantity_lookup(solution: SolutionData, symbol: str) -> IntegralQuantity | None:
-    for quantity in solution.quantities:
-        if quantity.symbol == symbol:
-            return quantity
-    return None
-
-
 def safe_log_values(values: np.ndarray) -> np.ndarray:
-    positive = np.abs(values[np.nonzero(values)])
-    floor = np.finfo(float).tiny if positive.size == 0 else max(np.min(positive) * 0.1, np.finfo(float).tiny)
-    return np.maximum(np.abs(values), floor)
-
-
-def scientific_formatter(ax: Axes, axis: str = "y") -> None:
-    formatter = ScalarFormatter(useMathText=True)
-    formatter.set_powerlimits((-3, 4))
-    if axis == "y":
-        ax.yaxis.set_major_formatter(formatter)
-    else:
-        ax.xaxis.set_major_formatter(formatter)
+    array = np.asarray(values, dtype=float)
+    finite_nonzero = np.abs(array[np.isfinite(array) & (array != 0.0)])
+    floor = (
+        np.finfo(float).tiny
+        if finite_nonzero.size == 0
+        else max(float(np.min(finite_nonzero)) * 0.1, np.finfo(float).tiny)
+    )
+    result = np.full(array.shape, np.nan, dtype=float)
+    finite = np.isfinite(array)
+    result[finite] = np.maximum(np.abs(array[finite]), floor)
+    return result
 
 
 # -----------------------------------------------------------------------------
@@ -546,16 +878,24 @@ def plot_solution_summary(solution: SolutionData) -> Figure:
     ax.axis("off")
     ax.set_title("Steady-wave solution summary", pad=24, fontweight="bold")
 
+    maximum_percentage = (
+        None
+        if solution.fraction_of_maximum is None
+        else 100.0 * solution.fraction_of_maximum
+    )
     metadata = [
         f"Method: {solution.method}",
         f"H/d: {format_optional(solution.height_depth, '.8g')}",
         f"Maximum H/d: {format_optional(solution.maximum_height_depth, '.8g')}",
-        f"Fraction of theoretical maximum: {format_optional(None if solution.fraction_of_maximum is None else 100.0 * solution.fraction_of_maximum, '.5g')}%",
+        "Fraction of theoretical maximum: "
+        f"{format_optional(maximum_percentage, '.5g')}%",
         f"L/d: {format_optional(solution.length_depth, '.9g')}",
         f"T√(g/d): {format_optional(solution.period_depth, '.9g')}",
-        f"Current: {solution.current_criterion or 'n/a'}; value={format_optional(solution.current_value, '.9g')}√(gd)",
+        f"Current: {solution.current_criterion or 'n/a'}; "
+        f"value={format_optional(solution.current_value, '.9g')}√(gd)",
         f"Stokes–Ursell number: {format_optional(solution.stokes_ursell, '.8g')}",
-        f"Fourier order: {solution.fourier_order if solution.fourier_order is not None else len(solution.modes)}",
+        "Fourier order: "
+        f"{solution.fourier_order if solution.fourier_order is not None else len(solution.modes)}",
         f"Residual RMS: {format_optional(solution.residual_rms, '.5e')}",
         f"Residual max: {format_optional(solution.residual_max, '.5e')}",
     ]
@@ -593,13 +933,192 @@ def plot_solution_summary(solution: SolutionData) -> Figure:
     return fig
 
 
+def plot_solver_summary(solution: SolutionData, solver: SolverData) -> Figure:
+    """Create a compact audit page from the authoritative solver.res values."""
+    fig, ax = plt.subplots(figsize=(12.5, 8.8))
+    ax.axis("off")
+    ax.set_title("Nonlinear solver verification summary", pad=24, fontweight="bold")
+
+    checks = [
+        ("Residual convergence", solver.residual_test_passed),
+        ("Spectral resolution", solver.spectral_test_passed),
+        ("Overall convergence", solver.overall_convergence_passed),
+    ]
+    metrics = [
+        ("Fourier order", f"{solver.fourier_order}"),
+        ("Unknowns / equations", f"{solver.unknown_count} / {solver.equation_count}"),
+        (
+            "Continuation steps / trials",
+            f"{solver.accepted_continuation_steps} / {solver.total_continuation_trials}",
+        ),
+        ("Final residual RMS", f"{solver.final_residual_rms:.6e}"),
+        ("RMS tolerance", f"{solver.residual_rms_tolerance:.6e}"),
+        ("Final maximum residual", f"{solver.final_residual_max:.6e}"),
+        ("Maximum-residual tolerance", f"{solver.residual_max_tolerance:.6e}"),
+        ("Final Newton correction RMS", f"{solver.final_newton_correction_rms:.6e}"),
+        ("Final linear solver", solver.final_linear_solver),
+        ("Maximum off-grid defect", f"{solver.spectral_defect_max:.6e}"),
+        ("Off-grid defect tolerance", f"{solver.spectral_defect_tolerance:.6e}"),
+    ]
+
+    ax.text(
+        0.0,
+        0.97,
+        "\n".join(f"{label}: {'PASS' if passed else 'FAIL'}" for label, passed in checks),
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=13,
+        linespacing=1.5,
+        bbox={"boxstyle": "round,pad=0.55", "facecolor": "white", "alpha": 0.9},
+    )
+
+    table = ax.table(
+        cellText=[[name, value] for name, value in metrics],
+        colLabels=["Verification quantity", "Reported value"],
+        colLoc="center",
+        cellLoc="left",
+        colWidths=[0.58, 0.42],
+        bbox=(0.0, 0.12, 1.0, 0.67),
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10.5)
+    table.scale(1.0, 1.35)
+    for (row, column), cell in table.get_celld().items():
+        if row == 0:
+            cell.set_text_props(fontweight="bold", ha="center")
+        elif column == 1:
+            cell.set_text_props(ha="right")
+
+    ax.text(
+        0.0,
+        0.045,
+        "Residual convergence and spectral resolution are independent checks. "
+        "The spectral tolerance is not inferred from the collocation residuals.",
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=10,
+    )
+    add_case_footer(fig, solution)
+    fig.tight_layout(rect=(0.025, 0.05, 0.975, 0.985))
+    return fig
+
+
+def plot_continuation_history(solution: SolutionData, solver: SolverData) -> Figure:
+    """Plot residual norms at the end of every continuation trial."""
+    fig, ax = plt.subplots(figsize=(11.8, 7.2))
+    trials = np.asarray([step.trial for step in solver.continuation], dtype=int)
+    rms = np.asarray([step.residual_rms for step in solver.continuation], dtype=float)
+    maximum = np.asarray([step.residual_max for step in solver.continuation], dtype=float)
+    accepted = np.asarray([step.accepted for step in solver.continuation], dtype=bool)
+
+    finite_rms = np.where(np.isfinite(rms), rms, np.nan)
+    finite_max = np.where(np.isfinite(maximum), maximum, np.nan)
+    ax.semilogy(trials, safe_log_values(finite_rms), marker="o", label="Residual RMS")
+    ax.semilogy(trials, safe_log_values(finite_max), marker="s", label="Maximum residual")
+    ax.axhline(
+        solver.intermediate_tolerance,
+        linestyle="--",
+        linewidth=1.3,
+        label="Intermediate RMS tolerance",
+    )
+    maximum_factor = (
+        solver.residual_max_tolerance / solver.residual_rms_tolerance
+    )
+    ax.axhline(
+        maximum_factor * solver.intermediate_tolerance,
+        linestyle=":",
+        linewidth=1.3,
+        label="Intermediate maximum tolerance",
+    )
+
+    rejected_trials = trials[~accepted]
+    if rejected_trials.size:
+        y_reference = np.nanmax(np.concatenate((finite_rms, finite_max)))
+        ax.scatter(
+            rejected_trials,
+            np.full(rejected_trials.shape, y_reference),
+            marker="x",
+            s=70,
+            label="Rejected continuation trial",
+            zorder=5,
+        )
+
+    add_stat_box(
+        ax,
+        [
+            f"Accepted steps: {solver.accepted_continuation_steps}",
+            f"Total trials: {solver.total_continuation_trials}",
+            "Rejected trials: "
+            f"{solver.total_continuation_trials - solver.accepted_continuation_steps}",
+            f"Final target fraction: {solver.continuation[-1].fraction:.12g}",
+        ],
+        "upper right",
+    )
+    ax.set_title("Adaptive continuation convergence history", fontweight="bold")
+    ax.set_xlabel("Continuation trial")
+    ax.set_ylabel("Residual norm")
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    ax.legend(loc="best")
+    finish_figure(fig, solution)
+    return fig
+
+
+def plot_final_residual_vector(solution: SolutionData, solver: SolverData) -> Figure:
+    """Plot every final residual relative to its configured maximum limit."""
+    fig, ax = plt.subplots(figsize=(12.0, 7.0))
+    indices = np.asarray([entry.index for entry in solver.residuals], dtype=int)
+    fractions = np.asarray(
+        [entry.fraction_of_max_limit for entry in solver.residuals], dtype=float
+    )
+    display_values = safe_log_values(fractions)
+
+    ax.semilogy(indices, display_values, marker="o", markersize=3.5, label="|F[i]| / maximum limit")
+    ax.axhline(1.0, linestyle="--", linewidth=1.4, label="Configured limit")
+
+    for group in solver.residual_groups:
+        if group.first_index > 1:
+            ax.axvline(group.first_index - 0.5, linewidth=0.9, linestyle=":")
+        center = 0.5 * (group.first_index + group.last_index)
+        ax.text(
+            center,
+            0.98,
+            group.name.replace(" surface equations", ""),
+            transform=ax.get_xaxis_transform(),
+            ha="center",
+            va="top",
+            fontsize=9,
+        )
+
+    maximum_entry = max(solver.residuals, key=lambda entry: entry.absolute_value)
+    add_stat_box(
+        ax,
+        [
+            f"Residual equations: {solver.equation_count}",
+            f"Largest |F|: {maximum_entry.absolute_value:.3e} at F[{maximum_entry.index}]",
+            f"Largest fraction of limit: {np.max(fractions):.3e}",
+            f"Residual test: {'PASS' if solver.residual_test_passed else 'FAIL'}",
+        ],
+        "lower right",
+    )
+    ax.set_title("Complete final nonlinear residual vector", fontweight="bold")
+    ax.set_xlabel("Residual equation index, i")
+    ax.set_ylabel("Absolute residual divided by configured maximum limit")
+    ax.set_xlim(1, solver.equation_count)
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True, nbins=12))
+    ax.legend(loc="lower left")
+    finish_figure(fig, solution)
+    return fig
+
+
 def plot_wave_profile(solution: SolutionData, surface: SurfaceData) -> Figure:
     fig, ax = plt.subplots()
     x = surface.x_over_d
-    eta = surface.eta_over_d
+    eta = surface.y_over_d
 
     ax.fill_between(x, 0.0, eta, alpha=0.10, label="Water domain")
-    ax.plot(x, eta, label="Free surface η/d")
+    ax.plot(x, eta, label="Free surface y/d")
     ax.axhline(1.0, linestyle="--", linewidth=1.3, label="Mean water level y/d = 1")
     ax.axhline(0.0, linewidth=1.6, label="Horizontal bed y/d = 0")
 
@@ -681,8 +1200,20 @@ def plot_fourier_coefficients(solution: SolutionData) -> Figure:
     b_values = safe_log_values(solution.stream_coefficients)
     e_values = safe_log_values(solution.surface_coefficients)
 
-    ax.semilogy(modes, b_values, marker="o", markevery=max(1, len(modes) // 20), label="|B[j]| potential/stream-function")
-    ax.semilogy(modes, e_values, marker="s", markevery=max(1, len(modes) // 20), label="|E[j]| surface elevation")
+    ax.semilogy(
+        modes,
+        b_values,
+        marker="o",
+        markevery=max(1, len(modes) // 20),
+        label="|B[j]| potential/stream-function",
+    )
+    ax.semilogy(
+        modes,
+        e_values,
+        marker="s",
+        markevery=max(1, len(modes) // 20),
+        label="|E[j]| surface elevation",
+    )
 
     b_peak = float(np.max(b_values))
     e_peak = float(np.max(e_values))
@@ -1095,10 +1626,12 @@ def normalize_formats(values: Sequence[str]) -> tuple[str, ...]:
 def write_manifest(
     output_dir: Path,
     solution_path: Path,
+    solver_path: Path,
     surface_path: Path,
     flowfield_path: Path,
     created: Sequence[Path],
     solution: SolutionData,
+    solver: SolverData,
     surface: SurfaceData,
     flow: FlowFieldData,
 ) -> Path:
@@ -1108,11 +1641,16 @@ def write_manifest(
         "========================",
         "",
         f"Solution input : {solution_path}",
+        f"Solver input   : {solver_path}",
         f"Surface input  : {surface_path}",
         f"Flowfield input: {flowfield_path}",
         "",
         case_caption(solution),
         "",
+        f"Fourier order: {solver.fourier_order}",
+        f"Nonlinear equations: {solver.equation_count}",
+        f"Overall convergence: {'PASS' if solver.overall_convergence_passed else 'FAIL'}",
+        f"Maximum off-grid defect: {solver.spectral_defect_max:.8e}",
         f"Surface points: {len(surface.x_over_d)}",
         f"Flow profiles: {len(flow.profiles)}",
         f"Vertical points per profile: {flow.profiles[0].values.shape[0]}",
@@ -1129,17 +1667,18 @@ def write_manifest(
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Read solution.res, surface.res and flowfield.res and create "
-            "publication-quality steady-wave plots."
+            "Read solution.res, solver.res, surface.res and flowfield.res and "
+            "create publication-quality steady-wave plots."
         )
     )
     parser.add_argument("--solution", default="solution.res", help="Path to solution.res")
+    parser.add_argument("--solver", default="solver.res", help="Path to solver.res")
     parser.add_argument("--surface", default="surface.res", help="Path to surface.res")
     parser.add_argument("--flowfield", default="flowfield.res", help="Path to flowfield.res")
     parser.add_argument(
         "--output-dir",
         default="plots",
-        help="Directory for generated plots (default: wave_plots)",
+        help="Directory for generated plots (default: plots)",
     )
     parser.add_argument(
         "--format",
@@ -1163,12 +1702,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError("DPI must be at least 72")
 
         solution_path = resolve_input_path(args.solution, "solution")
+        solver_path = resolve_input_path(args.solver, "solver")
         surface_path = resolve_input_path(args.surface, "surface")
         flowfield_path = resolve_input_path(args.flowfield, "flowfield")
 
         solution = parse_solution(solution_path)
+        solver = parse_solver(solver_path)
+        solution = merge_solver_metadata(solution, solver)
         surface = parse_surface(surface_path)
         flow = parse_flowfield(flowfield_path)
+        validate_result_set(solution, solver, surface, flow)
 
         output_dir = Path(args.output_dir).expanduser().resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -1177,34 +1720,55 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         plot_specs = [
             ("01_solution_summary", lambda: plot_solution_summary(solution)),
-            ("02_wave_profile", lambda: plot_wave_profile(solution, surface)),
-            ("03_surface_pressure_check", lambda: plot_surface_pressure_check(solution, surface)),
-            ("04_fourier_coefficients", lambda: plot_fourier_coefficients(solution)),
-            ("05_depth_scaled_integrals", lambda: plot_depth_scaled_integrals(solution)),
-            ("06_velocity_magnitude_vectors", lambda: plot_flow_velocity_magnitude(solution, flow)),
-            ("07_horizontal_velocity", lambda: plot_horizontal_velocity(solution, flow)),
-            ("08_vertical_velocity", lambda: plot_vertical_velocity(solution, flow)),
-            ("09_local_acceleration", lambda: plot_local_acceleration(solution, flow)),
-            ("10_potential_time_derivative", lambda: plot_potential_time_derivative(solution, flow)),
-            ("11_velocity_gradient_magnitude", lambda: plot_velocity_gradient_magnitude(solution, flow)),
-            ("12_bernoulli_check", lambda: plot_bernoulli_check(solution, flow)),
-            ("13_horizontal_velocity_profiles", lambda: plot_horizontal_velocity_profiles(solution, flow)),
-            ("14_vertical_velocity_profiles", lambda: plot_vertical_velocity_profiles(solution, flow)),
-            ("15_surface_bed_kinematics", lambda: plot_surface_and_bed_kinematics(solution, flow)),
+            ("02_solver_verification", lambda: plot_solver_summary(solution, solver)),
+            ("03_continuation_history", lambda: plot_continuation_history(solution, solver)),
+            ("04_final_residual_vector", lambda: plot_final_residual_vector(solution, solver)),
+            ("05_wave_profile", lambda: plot_wave_profile(solution, surface)),
+            ("06_surface_pressure_check", lambda: plot_surface_pressure_check(solution, surface)),
+            ("07_fourier_coefficients", lambda: plot_fourier_coefficients(solution)),
+            ("08_depth_scaled_integrals", lambda: plot_depth_scaled_integrals(solution)),
+            ("09_velocity_magnitude_vectors", lambda: plot_flow_velocity_magnitude(solution, flow)),
+            ("10_horizontal_velocity", lambda: plot_horizontal_velocity(solution, flow)),
+            ("11_vertical_velocity", lambda: plot_vertical_velocity(solution, flow)),
+            ("12_local_acceleration", lambda: plot_local_acceleration(solution, flow)),
+            (
+                "13_potential_time_derivative",
+                lambda: plot_potential_time_derivative(solution, flow),
+            ),
+            (
+                "14_velocity_gradient_magnitude",
+                lambda: plot_velocity_gradient_magnitude(solution, flow),
+            ),
+            ("15_bernoulli_check", lambda: plot_bernoulli_check(solution, flow)),
+            (
+                "16_horizontal_velocity_profiles",
+                lambda: plot_horizontal_velocity_profiles(solution, flow),
+            ),
+            (
+                "17_vertical_velocity_profiles",
+                lambda: plot_vertical_velocity_profiles(solution, flow),
+            ),
+            ("18_surface_bed_kinematics", lambda: plot_surface_and_bed_kinematics(solution, flow)),
         ]
 
         created: list[Path] = []
         for stem, factory in plot_specs:
             figure = factory()
-            created.extend(save_figure(figure, output_dir, stem, formats, args.dpi))
+            created.extend(
+                save_figure(
+                    figure, output_dir, stem, formats, args.dpi, close=not args.show
+                )
+            )
 
         manifest = write_manifest(
             output_dir,
             solution_path,
+            solver_path,
             surface_path,
             flowfield_path,
             created,
             solution,
+            solver,
             surface,
             flow,
         )
@@ -1215,7 +1779,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"  {path.name}")
 
         if args.show:
-            print("Plots were saved. Re-run without --show for non-interactive batch use.")
+            plt.show()
 
         return 0
 

@@ -8,16 +8,24 @@ PROGRAM PURPOSE
 This program computes one steady, two-dimensional, periodic, finite-amplitude
 gravity wave over a horizontal bed.  The free surface, wave celerity, mean-flow
 quantities, stream-function coefficients, pressure field, velocity field, and
-integral quantities are solved as one coupled nonlinear boundary-value problem.
-An optional collinear current is prescribed using either the Eulerian-mean or
-mass-transport definition selected in data.dat.
+integral quantities are obtained from one coupled nonlinear boundary-value
+problem.  A collinear current may be prescribed using either the Eulerian-mean
+or mass-transport definition selected in data.dat.
 
-The executable is intentionally self-contained.  When data.dat is available,
-it reads one annotated case from that file.  When data.dat is absent, it requests
-every required numerical input interactively from the console; no physical input
-is defaulted or inferred.  The program then solves the wave with a fixed 100-mode
-spectral representation and writes solution.res, surface.res, and flowfield.res.
-No command-line numerical parameters are required.
+The executable is self-contained.  It reads one annotated case from data.dat
+when that file exists; otherwise, it requests every required value from the
+console.  No physical input is silently defaulted or inferred.  The production
+spectral order is fixed at 50 Fourier modes.  A successful calculation writes:
+
+  solution.res   engineering wave summary and Fourier coefficients
+  solver.res     continuation history, full state, full residuals, and final
+                 convergence and spectral-resolution checks
+  surface.res    continuous free-surface samples and surface pressure checks
+  flowfield.res  velocity, acceleration, pressure, and Bernoulli profiles
+
+Result files are opened only after the target state has converged and passed an
+independent terminal verification.  An unconverged state is never presented as
+a valid solution.
 
 PHYSICAL MODEL
 --------------
@@ -30,38 +38,41 @@ The calculation assumes:
   * constant atmospheric pressure on the free surface;
   * no breaking, viscosity, turbulence closure, vorticity, or surface tension.
 
-The governing equations are written in a coordinate frame moving with the wave.
-In that frame the free surface is steady and the fluid domain is periodic in the
-phase coordinate X = k(x-c t), where k is the wavenumber and c is celerity.
+The equations are written in a frame moving with the wave.  In that frame the
+surface is steady and periodic in the phase coordinate
+
+  X = k(x-c t),
+
+where k is the wavenumber and c is the apparent wave celerity.
 
 DIMENSIONLESS VARIABLES
 -----------------------
-The nonlinear unknowns use wavenumber-based scaling:
+The nonlinear system uses wavenumber-based scaling:
 
   kd               dimensionless mean depth
   kH               dimensionless crest-to-trough height
   T*sqrt(gk)       dimensionless apparent period
   c*sqrt(k/g)      dimensionless celerity
-  u_E*sqrt(k/g)    Eulerian mean current
+  u_E*sqrt(k/g)    Eulerian-mean current
   u_M*sqrt(k/g)    mass-transport mean current
   U*sqrt(k/g)      mean fluid speed in the moving frame
   q*sqrt(k^3/g)    wave-volume-flux variable
   r*k/g            Bernoulli constant
 
-The input and engineering output are depth-scaled.  Conversion between the two
-systems is performed only after the nonlinear state has converged.
+Input and engineering output use depth-based scaling.  Conversion between the
+two systems is performed only after the nonlinear state has converged.
 
 SPECTRAL DISCRETIZATION
 -----------------------
-The half-wave interval is collocated at
+The crest-to-trough half-wave is collocated at
 
   X_m = m*pi/N,  m = 0,...,N,
 
-with N fixed at 100.  Wave symmetry makes the crest-to-trough half wave
-sufficient.  The free surface is represented by N+1 nodal ordinates and the
-stream function by N Fourier coefficients.
+with N fixed at 50.  Symmetry makes this half interval sufficient.  The free
+surface is represented by N+1 nodal ordinates and the stream function by N
+Fourier coefficients.
 
-The finite-depth vertical basis is evaluated in the stable exponential form
+The finite-depth vertical basis is evaluated in a scaled exponential form:
 
   S_j(eta,kd) =
       [exp(j*eta) - exp(-j*eta - 2*j*kd)] / [1 + exp(-2*j*kd)]
@@ -69,12 +80,12 @@ The finite-depth vertical basis is evaluated in the stable exponential form
   C_j(eta,kd) =
       [exp(j*eta) + exp(-j*eta - 2*j*kd)] / [1 + exp(-2*j*kd)]
 
-rather than through direct hyperbolic functions.  The scaled representation
-avoids overflow and cancellation over the admissible fluid domain.
+This is algebraically equivalent to the direct hyperbolic representation but
+avoids unnecessary overflow and cancellation over the admissible fluid domain.
 
 STATE VECTOR AND RESIDUAL SYSTEM
 --------------------------------
-For N Fourier modes, the active state contains 2*N+10 entries:
+For N Fourier modes, the state contains 2*N+10 entries:
 
    1  kd
    2  kH
@@ -85,43 +96,63 @@ For N Fourier modes, the active state contains 2*N+10 entries:
    7  mean wave-frame speed
    8  wave-volume-flux variable
    9  Bernoulli constant
-  10 ... 10+N       free-surface nodal ordinates
-  11+N ... 10+2*N   stream-function Fourier coefficients
+  10 ... 10+N       N+1 free-surface nodal ordinates
+  11+N ... 10+2*N   N stream-function Fourier coefficients
 
 The first eight residuals impose global wave, current, mean-level, and height
-constraints.  Each of the N+1 collocation nodes then contributes one kinematic
-and one dynamic free-surface equation.  The resulting system is square:
+constraints.  Each of the N+1 nodes contributes one kinematic and one dynamic
+free-surface equation:
 
   8 + (N+1) + (N+1) = 2*N+10 equations.
 
+For N=50, the solver therefore advances 110 unknowns and enforces 110 residual
+equations.
+
 NONLINEAR SOLUTION METHOD
 -------------------------
-The target wave is reached by adaptive continuation in wave height.  Each new
-continuation point is predicted from the exact tangent of the converged branch
-and corrected by a trust-region Newton iteration with an exact analytical
-Jacobian.  Powell dogleg globalization combines the Newton and scaled Cauchy
-directions.  Failed trials are rejected and the continuation step is reduced;
-accepted inexpensive solves permit controlled step growth.
+The target wave is reached by adaptive continuation in normalized wave height.
+Each branch point is predicted from an exact continuation tangent when possible,
+with a bounded secant predictor as fallback.  The predicted state is corrected
+by a trust-region Newton method using the exact analytical Jacobian.
 
-Positive state variables use logarithmic retractions, so depth, height, period,
-and celerity remain positive without clipping.  Every candidate state is checked
-for finite values, bed clearance, exponential safety, and residual decrease.
-Unconverged states are never written to result files.
+Powell dogleg globalization combines the Newton and scaled Cauchy directions.
+Positive global variables use logarithmic retractions, preserving positivity
+without clipping.  Every trial is checked for finite values, bed clearance,
+exponential safety, and sufficient residual reduction.  Failed continuation
+trials roll back exactly to the previous converged state before the step is
+reduced and retried.
 
 LINEAR ALGEBRA
 --------------
-Each Newton correction solves an equilibrated dense system.  The primary path is
-partial-pivoted LU with long-double triangular solves and iterative refinement.
-If the Jacobian is rank deficient or poorly conditioned, the solver falls back
-to column-pivoted Householder QR and then to adaptively regularized least
-squares.  The hierarchy preserves speed for normal cases while retaining a
-usable descent direction near difficult states.
+Every Newton correction solves a row- and column-equilibrated dense system.  The
+solver hierarchy is:
+
+  1. partial-pivoted LU with long-double substitutions and iterative refinement;
+  2. column-pivoted Householder QR if LU is singular or insufficiently accurate;
+  3. adaptively regularized least squares as a final descent-direction fallback.
+
+All accepted directions are checked against the original scaled linear system.
+Residual and vector norms use a scaled sum-of-squares accumulator to avoid
+intermediate overflow and reduce loss of significance.
+
+FINAL VERIFICATION
+------------------
+After continuation reaches the exact target, the program independently:
+
+  * re-evaluates all 110 nonlinear residuals;
+  * verifies state admissibility and finite Jacobian entries;
+  * checks both RMS and maximum residual tolerances;
+  * computes a final scaled Newton correction;
+  * evaluates an off-grid boundary defect on the actual kinematic streamline.
+
+The nonlinear residual test and the off-grid spectral-resolution test are kept
+separate in solver.res.  A spectral warning is never suppressed by weakening the
+configured 1.0e-9 defect tolerance.
 
 INPUT FILE
 ----------
-The program first searches for data.dat in the current working directory and
-then beside the executable.  When the file is found, it must contain these seven
-non-empty lines:
+The program searches first in the current working directory and then beside the
+executable.  data.dat must contain exactly seven non-empty lines:
 
   1. case title
   2. H/d
@@ -131,54 +162,34 @@ non-empty lines:
   6. dimensionless current magnitude u/sqrt(gd)
   7. FINISH
 
-Only the leading token of lines 2 through 6 is interpreted.  Descriptive text
-may follow values, for example:
+Only the leading token of lines 2 through 6 is interpreted, so descriptive text
+may follow each value.  Example:
 
   Test wave
   0.6        H/d
-  Period     Measure of length: "Wavelength" or "Period"
+  Period     Measure of length: Period or Wavelength
   12.6042742750227
   1          Current criterion
   0.142808698122903
   FINISH
 
-If data.dat is not found in either location, the program enters interactive
-mode and requests, in order:
-
-  1. H/d
-  2. Period or Wavelength
-  3. T*sqrt(g/d) or L/d, respectively
-  4. current criterion: 1 = Eulerian, 2 = mass transport
-  5. dimensionless current magnitude u/sqrt(gd)
-
-Every field must be entered explicitly.  Invalid entries are rejected and
-requested again; end-of-input aborts the run.  No default numerical values are
-used.
-
-The Fourier order is always 100.  The continuation step count is selected and
-adapted internally from the requested H/d and observed nonlinear convergence.
-
-OUTPUT FILES
-------------
-After successful convergence the program writes:
-
-  solution.res   wave summary, integral quantities, invariants, and coefficients
-  surface.res    free-surface samples and pressure consistency
-  flowfield.res  velocity, acceleration, pressure, and Bernoulli profiles
+When data.dat is absent, the same five numerical/keyword fields are requested
+interactively.  Invalid entries are rejected and requested again.  End-of-input
+before completion aborts the run.
 
 USAGE
 -----
-Compile the source and run without arguments:
+Compile and run without numerical command-line arguments:
 
   ./fourier
 
-On Windows the executable name is normally fourier.exe:
+On Windows the executable is normally:
 
   fourier.exe
 
-When data.dat is present in the working directory or beside the executable, it
-is used.  Otherwise the program requests all required numerical inputs from the
-console.  Pressing end-of-input before all fields are supplied aborts the run.
+Display the runtime contract with:
+
+  fourier.exe --help
 
 COMPILATION
 -----------
@@ -200,58 +211,58 @@ Recommended diagnostic build during development:
   g++ -std=c++20 fourier.cpp -O1 -g -Wall -Wextra -Wpedantic \
       -Wconversion -Wshadow -fsanitize=address,undefined -o fourier_debug
 
-PROGRAM STRUCTURE AND ROUTINE MAP
----------------------------------
-The translation unit is organized in the same order as the numerical workflow:
+PROGRAM ORGANIZATION AND ROUTINE MAP
+------------------------------------
+The translation unit follows the runtime workflow and keeps wave physics out of
+storage, parsing, and file-ownership utilities:
 
-  1. OneBasedVector and DenseMatrix
-     Small ownership types that centralize numerical indexing and contiguous
-     storage.  They contain no wave physics.
+  1. Storage and numerical utilities
+     OneBasedVector, DenseMatrix, and StableNormAccumulator centralize indexing,
+     contiguous storage, and overflow-safe norm accumulation.
 
-  2. Input and configuration
+  2. Configuration, state model, and indexing
+     ProblemDefinition, Discretization, ContinuationState, SolverStatus,
+     SolverAudit, and the state/residual index helpers define ownership and the
+     exact 110-component layout.
+
+  3. Input and normalized case configuration
      trim_line(), parse_leading_value(), ascii_iequals(), locate_data_file(),
      read_case_file(), read_case_interactively(), and configure_wave_case()
-     implement the complete file and console input contracts and commit
-     configuration only after validation succeeds.
+     validate a complete case before committing it to program state.
 
-  3. Spectral representation
-     build_spectral_tables(), cosine_at_node(), sine_at_node(), and
-     evaluate_vertical_basis() prepare the modal basis and its exact depth
+  4. Spectral representation and nonlinear equations
+     build_spectral_tables(), evaluate_vertical_basis(), evaluate_residuals(),
+     and assemble_jacobian() implement the collocation equations and exact
      derivatives.
 
-  4. Nonlinear equations
-     evaluate_residuals() assembles all global and free-surface equations.
-     assemble_jacobian() constructs their exact analytical Jacobian.
-     state_is_admissible(), residual_is_finite(), and jacobian_is_finite()
-     prevent invalid states from entering the nonlinear globalization logic.
+  5. State validation, scaling, and norms
+     state_is_admissible(), residual_is_finite(), jacobian_is_finite(),
+     build_scaled_linearization(), and the matrix-vector products protect and
+     equilibrate the nonlinear problem.
 
-  5. Scaled linear algebra
-     build_scaled_linearization() equilibrates the system.  factorize_lu() and
-     solve_lu() provide the fast path; solve_rank_revealing_qr() and
-     solve_regularized_least_squares() provide robust fallbacks.  Iterative
-     refinement checks the correction in the original scaled equations.
+  6. Dense linear algebra
+     factorize_lu(), solve_lu(), solve_rank_revealing_qr(),
+     solve_regularized_least_squares(), and solve_scaled_newton_system() provide
+     the verified linear-solver hierarchy.
 
-  6. Trust-region nonlinear correction
-     build_cauchy_direction(), build_dogleg_step(), apply_retraction(), and
-     solve_nonlinear_state() construct, constrain, test, accept, or reject each
-     candidate state according to actual residual reduction.
+  7. Nonlinear globalization and continuation
+     build_cauchy_direction(), build_dogleg_step(), trust_region_iteration(),
+     solve_nonlinear_system(), compute_continuation_tangent(), predictor routines,
+     and continue_to_target() trace and correct the physical solution branch.
 
-  7. Adaptive continuation
-     assemble_continuation_derivative(), compute_continuation_tangent(),
-     predict_from_tangent(), predict_from_secant_history(), and
-     continue_to_target() trace the physical solution branch from small wave
-     height to the requested H/d with exact rollback after failed trials.
+  8. Post-processing and result generation
+     update_output_coefficients(), surface_elevation(), update_spectral_defect(),
+     evaluate_flow_point(), compute_derived_quantities(), and the four result
+     writers transform the converged state into engineering output.
 
-  8. Post-processing and output
-     update_output_coefficients(), evaluate_flow_point(),
-     compute_derived_quantities(), and the three dedicated result writers
-     transform the converged state into engineering quantities and files.
+  9. Memory and application control
+     allocate_workspace(), solve_wave(), run(), and main() enforce
+     parse -> allocate -> solve -> verify -> write and convert failures into
+     deterministic process exit codes.
 
-  9. Application control
-     allocate_workspace(), solve_wave(), run(), and main() enforce the sequence
-     parse -> allocate -> solve -> verify -> write.  Result files are created
-     only after a converged state exists.
-
+Every nontrivial routine is preceded by a purpose/algorithm comment.  Comments
+identify mutation, numerical safeguards, failure behavior, and normalization
+where those details are not evident from the function signature.
 ================================================================================
 */
 
@@ -261,19 +272,18 @@ The translation unit is organized in the same order as the numerical workflow:
 #include <cstddef>
 #include <cstdio>
 #include <exception>
-#include <limits>
-#include <numbers>
-#include <vector>
-
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
+#include <numbers>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 
@@ -332,8 +342,6 @@ confined to one auditable location.
 template <typename Value> class OneBasedVector {
 public:
   using Storage = std::vector<Value>;
-  using iterator = typename Storage::iterator;
-  using const_iterator = typename Storage::const_iterator;
 
   // Construct an empty adapter. Storage is allocated later by assign().
   OneBasedVector() = default;
@@ -349,23 +357,8 @@ public:
   void assign(std::size_t count, const Value &value) {
     values_.assign(count, value);
   }
-  // Remove logical elements while retaining standard vector lifetime rules.
-  void clear() noexcept { values_.clear(); }
-
-  // Reserve storage before rebuilding integer pivot arrays during allocation.
-  void reserve(std::size_t count) { values_.reserve(count); }
-
   // Report physical storage size. The active numerical indices are 1..size-1.
   [[nodiscard]] std::size_t size() const noexcept { return values_.size(); }
-  // Expose the allocator limit for checked matrix extent calculations.
-  [[nodiscard]] std::size_t max_size() const noexcept {
-    return values_.max_size();
-  }
-
-  // Raw contiguous access is restricted to DenseMatrix row construction.
-  Value *data() noexcept { return values_.data(); }
-  const Value *data() const noexcept { return values_.data(); }
-
   // Access a numbered component. Assertions catch programming errors in debug
   // builds without adding bounds-check overhead to optimized numerical kernels.
   Value &operator[](int index) noexcept {
@@ -380,13 +373,6 @@ public:
     assert(static_cast<std::size_t>(index) < values_.size());
     return values_[static_cast<std::size_t>(index)];
   }
-
-  // Iterators permit standard algorithms and range-for loops over the complete
-  // allocated block, including element zero when bulk initialization is wanted.
-  iterator begin() noexcept { return values_.begin(); }
-  const_iterator begin() const noexcept { return values_.begin(); }
-  iterator end() noexcept { return values_.end(); }
-  const_iterator end() const noexcept { return values_.end(); }
 
 private:
   Storage values_;
@@ -414,9 +400,6 @@ public:
   // Default construction creates a zero-dimensional matrix for later
   // allocation.
   DenseMatrix() = default;
-
-  // Convenience construction for a known square dimension.
-  explicit DenseMatrix(int dimension) { resize(dimension); }
 
   // Allocate a (dimension+1)^2 contiguous block so rows and columns may be
   // addressed from one. Existing contents are discarded and zero-initialized.
@@ -457,7 +440,78 @@ public:
 
 private:
   int dimension_ = 0;
-  Vector values_;
+  std::vector<double> values_;
+};
+
+/*
+================================================================================
+STABLE NORM ACCUMULATOR
+================================================================================
+
+Dense nonlinear residuals and search directions can contain components with
+very different magnitudes.  Directly accumulating x*x may overflow before the
+final norm becomes large, while summing small squares after large ones can lose
+precision.  StableNormAccumulator implements the scaled sum-of-squares
+recurrence used by robust BLAS norm routines.
+
+The accumulator is deliberately independent of the wave solver.  Numerical
+routines feed it one component at a time and request either the Euclidean norm
+or its square, ensuring consistent norm evaluation throughout the solver.
+================================================================================
+*/
+class StableNormAccumulator final {
+public:
+  // Incorporate one component without forming value*value unless the scaled
+  // result is known to be representable.  Zero components require no update.
+  void add(double value) noexcept {
+    const double magnitude = std::fabs(value);
+    if (magnitude == 0.0)
+      return;
+
+    // Preserve IEEE non-finite information instead of allowing a first NaN
+    // component to be mistaken for a zero norm when scale_ is still zero.
+    if (!std::isfinite(magnitude)) {
+      scale_ = magnitude;
+      sum_squares_ = 1.0;
+      return;
+    }
+    if (!std::isfinite(scale_))
+      return;
+
+    if (scale_ < magnitude) {
+      const double ratio = scale_ / magnitude;
+      sum_squares_ = 1.0 + sum_squares_ * ratio * ratio;
+      scale_ = magnitude;
+    } else {
+      const double ratio = magnitude / scale_;
+      sum_squares_ += ratio * ratio;
+    }
+  }
+
+  // Return ||x||_2.  The scaled representation keeps the multiplication until
+  // the end and therefore tolerates a much wider dynamic range than naive code.
+  [[nodiscard]] double norm() const noexcept {
+    return scale_ == 0.0 ? 0.0 : scale_ * std::sqrt(sum_squares_);
+  }
+
+  // Return ||x||_2^2, saturating at +infinity if the mathematically valid
+  // result lies outside the finite range of double precision.
+  [[nodiscard]] double squared_norm() const noexcept {
+    if (scale_ == 0.0)
+      return 0.0;
+
+    const long double result = static_cast<long double>(scale_) *
+                               static_cast<long double>(scale_) *
+                               static_cast<long double>(sum_squares_);
+    return result >
+                   static_cast<long double>(std::numeric_limits<double>::max())
+               ? std::numeric_limits<double>::infinity()
+               : static_cast<double>(result);
+  }
+
+private:
+  double scale_ = 0.0;
+  double sum_squares_ = 1.0;
 };
 
 class SteadyWaveApplication final {
@@ -472,14 +526,26 @@ private:
   thresholds auditable without searching through algorithm bodies.
   ============================================================================
   */
+  // Mathematical and spectral configuration.  The production order is fixed so
+  // every array extent and equation count is known at compile time.
   static constexpr double kPi = std::numbers::pi_v<double>;
+  static constexpr int kFourierOrder = 50;
+
+  // Nonlinear convergence and independent spectral-resolution requirements.
   static constexpr int kConvergenceMaxIterations = 80;
   static constexpr double kConvergenceCriterion = 1.0e-10;
   static constexpr double kFinalResidualTolerance = 1.0e-12;
+  static constexpr double kResidualMaximumFactor = 10.0;
+  static constexpr double kSpectralDefectTolerance = 1.0e-9;
+  static constexpr double kContinuationFractionTolerance =
+      16.0 * std::numeric_limits<double>::epsilon();
+
+  // Adaptive continuation safeguards.
   static constexpr double kMinimumContinuationStep = 1.0e-7;
   static constexpr int kMaximumContinuationTrials = 512;
-  static constexpr int kFourierOrder = 100;
-  static constexpr double kSpectralDefectTolerance = 1.0e-9;
+
+  // Parallelization and result-sampling policy.  Output sampling counts are
+  // independent of the Fourier order and do not alter the nonlinear solution.
   static constexpr int kOpenMpMinimumOrder = 48;
   static constexpr int kSurfacePointsDefault = 50;
   static constexpr int kProfileCountDefault = 18;
@@ -538,35 +604,65 @@ private:
   ============================================================================
   */
 
+  /*
+  Immutable-for-one-run physical and input configuration.  configure_wave_case()
+  commits this structure only after all coupled fields have been validated.
+  */
   struct ProblemDefinition {
-    std::string title;
+    std::string title; // Free-text case name reproduced in all result files.
     CurrentDefinition current_definition = CurrentDefinition::Eulerian;
     WaveSpecification wave_specification = WaveSpecification::Period;
-    double current_value = 0.0;
-    double target_relative_height = 0.0;
-    double target_height_parameter = 0.0;
-    double specified_wavelength = 0.0;
-    double specified_period = 0.0;
+    double current_value = 0.0;            // Prescribed u/sqrt(gd).
+    double target_relative_height = 0.0;   // Requested H/d.
+    double target_height_parameter = 0.0;  // Continuation closure parameter.
+    double specified_measure = 0.0;        // T*sqrt(g/d) or L/d.
   };
 
-  // The nonlinear dimension is a compile-time invariant.  Keeping the order and
-  // system size out of runtime storage prevents accidental zero-initialization,
-  // stale configuration, or memory corruption from changing the discretization.
+  // Compile-time equation accounting.  Nine global state variables are followed
+  // by N+1 free-surface ordinates and N stream-function coefficients.  Eight
+  // global residuals are followed by N+1 kinematic and N+1 dynamic equations.
+  static constexpr int kGlobalStateCount = StateIndex::surface_begin - 1;
+  static constexpr int kGlobalResidualCount =
+      ResidualIndex::kinematic_begin - 1;
+  static constexpr int kSurfaceNodeCount = kFourierOrder + 1;
+  static constexpr int kCoefficientStateBegin =
+      StateIndex::surface_begin + kSurfaceNodeCount;
+  static constexpr int kDynamicResidualBegin =
+      ResidualIndex::kinematic_begin + kSurfaceNodeCount;
   static constexpr int kSystemSize =
-      2 * kFourierOrder + StateIndex::surface_begin;
+      kGlobalStateCount + kSurfaceNodeCount + kFourierOrder;
+  static_assert(kSystemSize ==
+                kGlobalResidualCount + 2 * kSurfaceNodeCount);
+  static_assert(kCoefficientStateBegin + kFourierOrder - 1 == kSystemSize);
+  static_assert(kDynamicResidualBegin + kFourierOrder == kSystemSize);
 
+  /*
+  Numerical discretization and output-grid policy.  Only the initial
+  continuation count influences branch stepping; the remaining counts control
+  post-processing density and cannot change the converged spectral solution.
+  */
   struct Discretization {
-    int continuation_steps = 0;
+    int initial_continuation_steps = 0;
     int surface_point_count = kSurfacePointsDefault;
     int profile_count = kProfileCountDefault;
     int vertical_point_count = kVerticalPointCountDefault;
   };
 
+  /*
+  Active continuation point.  Both values are advanced together by normalized
+  branch fraction, ensuring the height equation and selected period/wavelength
+  closure always describe the same intermediate target.
+  */
   struct ContinuationState {
     double relative_height = 0.0;
     double height_parameter = 0.0;
   };
 
+  /*
+  Live diagnostics for the currently accepted state.  These values are updated
+  after every residual evaluation and linear solve and are not used as hidden
+  physical inputs.
+  */
   struct SolverStatus {
     double residual_rms = std::numeric_limits<double>::infinity();
     double residual_max = std::numeric_limits<double>::infinity();
@@ -575,6 +671,46 @@ private:
     LinearSolverKind linear_solver = LinearSolverKind::LU;
   };
 
+  /*
+  One continuation-level audit row.  solver.res records accepted and rejected
+  branch advances together with the residual state at the end of each trial.
+  */
+  struct ContinuationTrace {
+    int trial = 0;
+    double target_fraction = 0.0;
+    double attempted_increment = 0.0;
+    bool accepted = false;
+    double residual_rms = std::numeric_limits<double>::infinity();
+    double residual_max = std::numeric_limits<double>::infinity();
+    double next_increment = 0.0;
+    bool tangent_available = false;
+  };
+
+  /*
+  Persistent evidence required by solver.res.  The final values are populated
+  only after an independent residual/Jacobian re-evaluation at the exact target.
+  */
+  struct SolverAudit {
+    std::vector<ContinuationTrace> continuation_trials;
+    int accepted_continuation_steps = 0;
+    int total_continuation_trials = 0;
+    double final_sum_squares = std::numeric_limits<double>::infinity();
+    double final_l2_norm = std::numeric_limits<double>::infinity();
+    double final_newton_correction_rms = std::numeric_limits<double>::infinity();
+    int maximum_residual_index = 0;
+    bool state_admissible = false;
+    bool residual_finite = false;
+    bool jacobian_finite = false;
+    bool final_linear_solve_succeeded = false;
+    bool residual_test_passed = false;
+    bool target_fraction_reached = false;
+  };
+
+  /*
+  Spectral data with two distinct lifetimes: trigonometric tables are fixed for
+  the complete run; stream/surface coefficients are populated from the final
+  converged state for continuous post-processing.
+  */
   struct SpectralStorage {
     std::vector<double> cosine_table;
     std::vector<double> sine_table;
@@ -582,12 +718,21 @@ private:
     Vector surface_coefficients;
   };
 
+  /*
+  Accepted nonlinear state plus residual buffers.  trial_residual is scratch for
+  a candidate point and never replaces residual until that point is accepted.
+  */
   struct NonlinearStorage {
     Vector state;
     Vector residual;
     Vector trial_residual;
   };
 
+  /*
+  Dense work arrays reused across Newton, tangent, and verification solves.
+  Reuse avoids per-iteration allocation and makes ownership of every mutable
+  numerical buffer explicit.
+  */
   struct SolverWorkspace {
     DenseMatrix jacobian;
     DenseMatrix linear_matrix;
@@ -603,15 +748,29 @@ private:
     std::vector<long double> predictor_coefficients;
   };
 
+  /*
+  Non-owning streams passed to the read-only output dispatcher.  FilePtr objects
+  in run() remain the sole owners and guarantee closure on every early return.
+  */
   struct OutputHandles {
-    // FilePtr objects in run() retain ownership for the entire write operation.
-    // This lightweight bundle is passed explicitly, keeping output resources
-    // out of persistent solver state and making write_outputs() referentially
-    // clear.
     std::FILE *solution = nullptr;
+    std::FILE *solver = nullptr;
     std::FILE *surface = nullptr;
     std::FILE *flowfield = nullptr;
   };
+
+  /*
+  Open one text result file using the native filesystem character type.  The
+  wide-character branch preserves non-ASCII Windows paths; POSIX platforms use
+  the ordinary narrow C runtime path representation.
+  */
+  [[nodiscard]] static FilePtr open_output_file(const fs::path &path) {
+#if defined(_WIN32)
+    return FilePtr{::_wfopen(path.c_str(), L"w")};
+#else
+    return FilePtr{std::fopen(path.c_str(), "w")};
+#endif
+  }
 
   /*
   Flush and close an owned output stream while preserving the close status.
@@ -638,9 +797,10 @@ private:
   }
 
   ProblemDefinition problem_;
-  Discretization grid_;
+  Discretization discretization_;
   ContinuationState continuation_;
   SolverStatus status_;
+  SolverAudit audit_;
   SpectralStorage spectral_;
   NonlinearStorage nonlinear_;
   SolverWorkspace workspace_;
@@ -662,29 +822,49 @@ private:
     - dynamic residuals follow the N+1 kinematic equations.
   ----------------------------------------------------------------------------
   */
-  // Map collocation node m in [0,N] to its free-surface state component.
-  int surface_state_index(int node) const noexcept {
+  /*
+  Map collocation node m in [0,N] to the corresponding free-surface state
+  component.  Centralizing this offset prevents surface equations, predictors,
+  and output descriptions from duplicating raw index arithmetic.
+  */
+  [[nodiscard]] static constexpr int
+  surface_state_index(int node) noexcept {
     return StateIndex::surface_begin + node;
   }
 
-  // Map Fourier mode j in [1,N] to its stream-function coefficient component.
-  int coefficient_state_index(int mode) const noexcept {
-    return StateIndex::surface_begin + kFourierOrder + mode;
+  /*
+  Map Fourier mode j in [1,N] to its stream-function coefficient component.
+  Coefficients follow the complete N+1-node surface block in the state vector.
+  */
+  [[nodiscard]] static constexpr int
+  coefficient_state_index(int mode) noexcept {
+    return kCoefficientStateBegin + mode - 1;
   }
 
-  // Map node m to the constant-stream-function residual row.
-  int kinematic_residual_index(int node) const noexcept {
+  /*
+  Map node m to its constant-stream-function residual row.  The first eight
+  rows are global constraints, so node zero begins at ResidualIndex::kinematic_begin.
+  */
+  [[nodiscard]] static constexpr int
+  kinematic_residual_index(int node) noexcept {
     return ResidualIndex::kinematic_begin + node;
   }
 
-  // Map node m to the Bernoulli free-surface residual row.
-  int dynamic_residual_index(int node) const noexcept {
-    return StateIndex::surface_begin + kFourierOrder + node;
+  /*
+  Map node m to its dynamic Bernoulli residual row.  Dynamic rows immediately
+  follow all N+1 kinematic rows and terminate at kSystemSize.
+  */
+  [[nodiscard]] static constexpr int
+  dynamic_residual_index(int node) noexcept {
+    return kDynamicResidualBegin + node;
   }
 
-  // Resolve the user-selected current convention once for residual/Jacobian
-  // use.
-  int selected_current_state_index() const noexcept {
+  /*
+  Map the selected current convention to its state-vector component.  Keeping
+  this branch in one helper prevents the prescribed-current residual and its
+  Jacobian row from drifting to different definitions.
+  */
+  [[nodiscard]] int selected_current_state_index() const noexcept {
     return problem_.current_definition == CurrentDefinition::Eulerian
                ? StateIndex::eulerian_current
                : StateIndex::mass_transport_current;
@@ -695,15 +875,526 @@ private:
   These functions contain presentation text only; no solver decision depends on
   the returned strings.
   */
-  std::string method_description() const {
-    return "# Solution by fixed " + std::to_string(kFourierOrder) +
-           "-mode spectral collocation";
+  [[nodiscard]] static const std::string &method_description() {
+    static const std::string description = [] {
+      std::ostringstream stream;
+      stream << "# Solution by fixed " << kFourierOrder
+             << "-mode spectral collocation";
+      return stream.str();
+    }();
+    return description;
   }
 
-  const char *current_name() const noexcept {
+  /*
+  Return the stable label used in console and result-file metadata for the
+  selected current definition.  The returned storage is a string literal.
+  */
+  [[nodiscard]] const char *current_name() const noexcept {
     return problem_.current_definition == CurrentDefinition::Eulerian
                ? "Eulerian"
                : "MassTransport";
+  }
+
+  /*
+  ============================================================================
+  INPUT, CASE CONFIGURATION, AND TEXT SUMMARIES
+  ============================================================================
+  */
+
+  /*
+  Echo the normalized interpretation of the accepted case before allocation and
+  solving.  This is a presentation routine only: it reads ProblemDefinition and
+  cannot alter continuation parameters or nonlinear state.
+  */
+  void write_input_summary(std::FILE *file) const {
+    std::fprintf(file, "# %s", problem_.title.c_str());
+    std::fprintf(file, "\n\n# Input data");
+    std::fprintf(file, "\n\n# Height/Depth:%6.8f",
+                 problem_.target_relative_height);
+    if (problem_.wave_specification != WaveSpecification::Period) {
+      std::fprintf(file, "\n# Length/Depth:%7.8f",
+                   problem_.specified_measure);
+    } else {
+      std::fprintf(file, "\n# Dimensionless Period T*sqrt(g/d):%8.8f",
+                   problem_.specified_measure);
+    }
+    std::fprintf(file, "\n# Current criterion: %s,  Dimensionless value:%6.8f",
+                 current_name(), problem_.current_value);
+    const std::string method = method_description();
+    std::fprintf(file, "\n%s\n", method.c_str());
+  }
+
+  /*
+  Remove surrounding horizontal whitespace and a possible Windows carriage
+  return. Empty or whitespace-only lines become an empty string.
+  */
+  [[nodiscard]] static std::string trim_line(std::string line) {
+    if (!line.empty() && line.back() == '\r')
+      line.pop_back();
+    const auto first = line.find_first_not_of(" \t");
+    if (first == std::string::npos)
+      return {};
+    const auto last = line.find_last_not_of(" \t");
+    return line.substr(first, last - first + 1);
+  }
+
+  /*
+  Parse the first token of a data-file line. Trailing comments are intentionally
+  accepted, allowing human-readable annotations after each value.
+  */
+  template <typename Value>
+  [[nodiscard]] static bool parse_leading_value(const std::string &line,
+                                                Value &value) {
+    std::istringstream stream(line);
+    stream >> value;
+    return !stream.fail();
+  }
+
+  /*
+  ASCII-only case-insensitive comparison for command keywords. The accepted
+  vocabulary is deliberately restricted to English protocol tokens, so locale-
+  dependent case conversion would add ambiguity without benefit.
+  */
+  [[nodiscard]] static bool ascii_iequals(std::string_view left,
+                                          std::string_view right) noexcept {
+    if (left.size() != right.size())
+      return false;
+    for (std::size_t i = 0; i < left.size(); ++i) {
+      const unsigned char a = static_cast<unsigned char>(left[i]);
+      const unsigned char b = static_cast<unsigned char>(right[i]);
+      const unsigned char lower_a =
+          (a >= 'A' && a <= 'Z') ? static_cast<unsigned char>(a + ('a' - 'A'))
+                                 : a;
+      const unsigned char lower_b =
+          (b >= 'A' && b <= 'Z') ? static_cast<unsigned char>(b + ('a' - 'A'))
+                                 : b;
+      if (lower_a != lower_b)
+        return false;
+    }
+    return true;
+  }
+
+  /*
+  Return a safe executable name for usage diagnostics.  Hosted C++ normally
+  supplies argv[0], but the standard permits null or empty argument vectors;
+  the fallback keeps error reporting valid in those environments.
+  */
+  [[nodiscard]] static const char *program_name(int argc,
+                                                char **argv) noexcept {
+    return (argc > 0 && argv && argv[0] && argv[0][0] != '\0')
+               ? argv[0]
+               : "fourier";
+  }
+
+  /*
+  Print the complete runtime contract.  The executable intentionally accepts no
+  numerical command-line parameters: one data.dat file defines one calculation.
+  A help switch is retained because it is useful in installed and scripted
+  environments and does not create a second configuration path.
+  */
+  static void print_usage(std::FILE *file, const char *executable) {
+    std::fprintf(
+        file,
+        "Usage:\n"
+        "  %s\n"
+        "      Use data.dat when available; otherwise request every required\n"
+        "      numerical value interactively. Solve one fixed %d-mode wave\n"
+        "      case and write solution.res, solver.res, surface.res, and "
+        "flowfield.res.\n\n"
+        "  %s --help\n"
+        "      Display this message.\n\n"
+        "data.dat contains seven non-empty lines:\n"
+        "  title\n"
+        "  H/d\n"
+        "  Period or Wavelength\n"
+        "  T*sqrt(g/d) or L/d\n"
+        "  current criterion: 1 or 2\n"
+        "  dimensionless current magnitude\n"
+        "  FINISH\n\n"
+        "If data.dat is absent, the same five numerical/keyword fields are\n"
+        "requested from the console. No default input values are used.\n",
+        executable, kFourierOrder, executable);
+  }
+
+  /*
+  Determine the directory containing the executable without assuming that the
+  process was launched from that directory.  Native operating-system facilities
+  are preferred.  argv[0] is used only as a portable fallback.
+  */
+  [[nodiscard]] static fs::path
+  resolve_executable_directory(const fs::path &fallback_directory, int argc,
+                               char **argv) {
+#if defined(_WIN32)
+    std::wstring buffer(32768, L'\0');
+    const DWORD length = ::GetModuleFileNameW(
+        nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length > 0 && static_cast<std::size_t>(length) < buffer.size()) {
+      buffer.resize(length);
+      return fs::path(buffer).parent_path();
+    }
+#elif defined(__linux__)
+    char buffer[PATH_MAX] = {0};
+    const ssize_t length =
+        ::readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+    if (length > 0) {
+      buffer[length] = '\0';
+      return fs::path(buffer).parent_path();
+    }
+#endif
+
+    // On other platforms, or if the native query fails, use an explicit path
+    // carried in argv[0].  A bare executable name contains no directory
+    // information and therefore falls back to the current working directory.
+    if (argc > 0 && argv && argv[0] && argv[0][0] != '\0') {
+      const fs::path invocation(argv[0]);
+      if (invocation.has_parent_path())
+        return fs::absolute(invocation).parent_path();
+    }
+    return fallback_directory;
+  }
+
+  /*
+  Search for data.dat in deterministic priority order:
+
+    1. current working directory;
+    2. directory containing the executable.
+
+  Returning an empty path is not a fatal condition.  It explicitly selects the
+  interactive input path and prevents accidental use of an unrelated file from
+  another search location.
+  */
+  [[nodiscard]] static fs::path
+  locate_data_file(const fs::path &current_directory,
+                   const fs::path &executable_directory) {
+    const fs::path local = current_directory / "data.dat";
+    if (fs::is_regular_file(local))
+      return local;
+
+    const fs::path beside_executable = executable_directory / "data.dat";
+    if (fs::is_regular_file(beside_executable))
+      return beside_executable;
+
+    return {};
+  }
+
+  /*
+  Estimate the first continuation increment from H/d.
+
+  This value is only a seed.  The continuation controller subsequently enlarges
+  or reduces the increment according to actual Newton iteration counts and rolls
+  back exactly after failed trials.  The quadratic dependence gives gentle
+  waves a short path while retaining conservative branch tracking for steep
+  waves.
+  */
+  [[nodiscard]] static int
+  choose_initial_continuation_step_count(double relative_height) noexcept {
+    const double normalized = std::clamp(relative_height / 0.70, 0.0, 1.5);
+    const double estimate = 4.0 + 12.0 * normalized * normalized;
+    return std::clamp(static_cast<int>(std::ceil(estimate)), 5, 32);
+  }
+
+  /*
+  Validate and normalize one finite-depth wave specification.
+
+  Period and wavelength are alternative closures for the same nonlinear system.
+  Both are converted to a continuation height parameter so the continuation and
+  Newton routines do not contain duplicated case logic.
+  */
+  [[nodiscard]] bool configure_wave_case(double relative_height,
+                                         WaveSpecification wave_specification,
+                                         double specified_value,
+                                         std::string &error) {
+    if (!(relative_height > 0.0) || !std::isfinite(relative_height)) {
+      error = "H/d must be a finite positive number";
+      return false;
+    }
+    if (!(specified_value > 0.0) || !std::isfinite(specified_value)) {
+      error = "specified period or wavelength must be finite and positive";
+      return false;
+    }
+
+    ProblemDefinition candidate = problem_;
+    candidate.wave_specification = wave_specification;
+    if (wave_specification == WaveSpecification::Period) {
+      candidate.specified_measure = specified_value;
+      candidate.target_height_parameter =
+          relative_height / (specified_value * specified_value);
+    } else {
+      candidate.specified_measure = specified_value;
+      candidate.target_height_parameter = relative_height / specified_value;
+    }
+
+    candidate.target_relative_height = relative_height;
+    if (!(candidate.target_height_parameter > 0.0) ||
+        !std::isfinite(candidate.target_height_parameter)) {
+      error = "normalized continuation height is not finite and positive";
+      return false;
+    }
+
+    problem_ = std::move(candidate);
+    return true;
+  }
+
+  /*
+  Read and validate one complete seven-line case from data.dat.
+
+  Blank lines are ignored.  Numeric and keyword lines may contain descriptive
+  text after the leading token.  All values are parsed into local temporaries
+  and validated before the application state is committed, so a malformed file
+  cannot leave a partially configured solver.
+  */
+  [[nodiscard]] bool read_case_file(const fs::path &path, std::string &error) {
+    std::ifstream input(path);
+    if (!input) {
+      error = "cannot open input file";
+      return false;
+    }
+
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(input, line)) {
+      line = trim_line(std::move(line));
+      if (!line.empty()) {
+        lines.push_back(std::move(line));
+      }
+    }
+
+    if (lines.size() != 7U) {
+      error = "data.dat must contain exactly seven non-empty lines";
+      return false;
+    }
+    if (ascii_iequals(lines.front(), "FINISH")) {
+      error = "FINISH appears before the wave case";
+      return false;
+    }
+    if (!ascii_iequals(lines.back(), "FINISH")) {
+      error = "the final non-empty line must be FINISH";
+      return false;
+    }
+
+    double relative_height = 0.0;
+    double specified_value = 0.0;
+    double current_value = 0.0;
+    int current_definition = 0;
+    std::string specification_token;
+    if (!parse_leading_value(lines[1], relative_height) ||
+        !parse_leading_value(lines[2], specification_token) ||
+        !parse_leading_value(lines[3], specified_value) ||
+        !parse_leading_value(lines[4], current_definition) ||
+        !parse_leading_value(lines[5], current_value)) {
+      error = "one or more numeric fields are invalid";
+      return false;
+    }
+    if (!(current_definition == 1 || current_definition == 2)) {
+      error = "current criterion must be 1 or 2";
+      return false;
+    }
+    if (!std::isfinite(current_value)) {
+      error = "current magnitude must be finite";
+      return false;
+    }
+    WaveSpecification wave_specification;
+    if (ascii_iequals(specification_token, "Period")) {
+      wave_specification = WaveSpecification::Period;
+    } else if (ascii_iequals(specification_token, "Wavelength")) {
+      wave_specification = WaveSpecification::Wavelength;
+    } else {
+      error = "measure of length must begin with Period or Wavelength";
+      return false;
+    }
+    if (!configure_wave_case(relative_height, wave_specification,
+                             specified_value, error)) {
+      return false;
+    }
+
+    problem_.title = lines[0];
+    problem_.current_definition =
+        static_cast<CurrentDefinition>(current_definition);
+    problem_.current_value = current_value;
+
+    discretization_.initial_continuation_steps =
+        choose_initial_continuation_step_count(relative_height);
+    return true;
+  }
+
+
+  /*
+  Read one non-empty line from standard input after displaying and flushing a
+  prompt.  Empty entries are not interpreted as defaults: they are returned to
+  the caller as invalid input and must be entered again.  Returning false means
+  that standard input reached end-of-file or suffered an unrecoverable read
+  failure before the requested field was supplied.
+  */
+  [[nodiscard]] static bool prompt_line(std::string_view prompt,
+                                        std::string &line) {
+    // string_view does not guarantee a trailing null byte, so write exactly the
+    // advertised character count rather than passing data() to fputs().
+    std::fwrite(prompt.data(), sizeof(char), prompt.size(), stdout);
+    std::fflush(stdout);
+    if (!std::getline(std::cin, line)) {
+      return false;
+    }
+    line = trim_line(std::move(line));
+    return true;
+  }
+
+  /*
+  Request every required case value directly from the console.
+
+  No numerical defaults are embedded in this path.  Each prompt remains active
+  until the user supplies a syntactically and physically valid value.  Parsing
+  accepts only the leading token, matching annotated data.dat lines and allowing
+  a user to paste either a bare value or a value followed by explanatory text.
+
+  The complete candidate case is committed only after all five fields have been
+  entered and configure_wave_case() has validated their coupled normalization.
+  This transaction-like behavior prevents a failed or interrupted interactive
+  session from leaving a partially configured solver.
+  */
+  [[nodiscard]] bool read_case_interactively(std::string &error) {
+    double relative_height = 0.0;
+    double specified_value = 0.0;
+    double current_value = 0.0;
+    int current_definition = 0;
+    WaveSpecification wave_specification = WaveSpecification::Period;
+    std::string line;
+
+    for (;;) {
+      if (!prompt_line("H/d: ", line)) {
+        error = "end-of-input while reading H/d";
+        return false;
+      }
+      if (parse_leading_value(line, relative_height) &&
+          relative_height > 0.0 && std::isfinite(relative_height)) {
+        break;
+      }
+      std::fprintf(stderr, "Invalid H/d. Enter a finite positive number.\n");
+    }
+
+    for (;;) {
+      if (!prompt_line(
+              "Measure of length (enter Period or Wavelength): ", line)) {
+        error = "end-of-input while reading the measure of length";
+        return false;
+      }
+
+      std::string token;
+      if (parse_leading_value(line, token) && ascii_iequals(token, "Period")) {
+        wave_specification = WaveSpecification::Period;
+        break;
+      }
+      if (parse_leading_value(line, token) &&
+          ascii_iequals(token, "Wavelength")) {
+        wave_specification = WaveSpecification::Wavelength;
+        break;
+      }
+      std::fprintf(stderr,
+                   "Invalid measure of length. Enter Period or Wavelength.\n");
+    }
+
+    const char *specified_value_prompt =
+        wave_specification == WaveSpecification::Period
+            ? "Dimensionless period T*sqrt(g/d): "
+            : "Dimensionless wavelength L/d: ";
+    for (;;) {
+      if (!prompt_line(specified_value_prompt, line)) {
+        error = "end-of-input while reading the specified period or wavelength";
+        return false;
+      }
+      if (parse_leading_value(line, specified_value) &&
+          specified_value > 0.0 && std::isfinite(specified_value)) {
+        break;
+      }
+      std::fprintf(stderr,
+                   "Invalid value. Enter a finite positive period or "
+                   "wavelength.\n");
+    }
+
+    for (;;) {
+      if (!prompt_line("Current criterion (1 for Euler, or 2 for Stokes): ", line)) {
+        error = "end-of-input while reading the current criterion";
+        return false;
+      }
+      if (parse_leading_value(line, current_definition) &&
+          (current_definition == 1 || current_definition == 2)) {
+        break;
+      }
+      std::fprintf(stderr, "Invalid current criterion. Enter 1 or 2.\n");
+    }
+
+    for (;;) {
+      if (!prompt_line(
+              "Current magnitude, dimensionless ubar/sqrt(gd): ", line)) {
+        error = "end-of-input while reading the current magnitude";
+        return false;
+      }
+      if (parse_leading_value(line, current_value) &&
+          std::isfinite(current_value)) {
+        break;
+      }
+      std::fprintf(stderr,
+                   "Invalid current magnitude. Enter a finite number.\n");
+    }
+
+    if (!configure_wave_case(relative_height, wave_specification,
+                             specified_value, error)) {
+      return false;
+    }
+
+    problem_.title = "Interactive wave case";
+    problem_.current_definition =
+        static_cast<CurrentDefinition>(current_definition);
+    problem_.current_value = current_value;
+    discretization_.initial_continuation_steps =
+        choose_initial_continuation_step_count(relative_height);
+    return true;
+  }
+
+  /*
+  Write the common converged-wave summary used by the console and result files.
+  All values are derived from the final nonlinear state; this routine performs
+  no mutation and cannot influence convergence.
+  */
+  void write_finite_summary(std::FILE *file) const {
+    const double wavelength = 2.0 * kPi / nonlinear_.state[StateIndex::depth];
+    const double maximum_relative_height =
+        (0.0077829 * wavelength * wavelength * wavelength +
+         0.0095721 * wavelength * wavelength + 0.141063 * wavelength) /
+        (0.0093407 * wavelength * wavelength * wavelength +
+         0.0317567 * wavelength * wavelength + 0.078834 * wavelength + 1.0);
+    std::fprintf(file, "# %s", problem_.title.c_str());
+    {
+      const std::string method = method_description();
+      std::fprintf(file, "\n%s\n", method.c_str());
+    }
+    std::fprintf(file,
+                 "\n# Height/Depth:%6.5f, %3.0f%% of the maximum of H/d "
+                 "=%6.5f for this length:",
+                 nonlinear_.state[StateIndex::wave_height] /
+                     nonlinear_.state[StateIndex::depth],
+                 nonlinear_.state[StateIndex::wave_height] /
+                     nonlinear_.state[StateIndex::depth] /
+                     maximum_relative_height * 100.0,
+                 maximum_relative_height);
+    std::fprintf(file, "\n# Length/Depth:%7.5f",
+                 2 * kPi / nonlinear_.state[StateIndex::depth]);
+    std::fprintf(file, "\n# Dimensionless Period T*sqrt(g/d):%7.5f",
+                 nonlinear_.state[StateIndex::period] /
+                     std::sqrt(nonlinear_.state[StateIndex::depth]));
+    std::fprintf(file,
+                 "\n# Current criterion: %s,  Dimensionless value:%6.5f\n",
+                 current_name(), problem_.current_value);
+  }
+
+  /*
+  Write one scalar row with both native wavenumber-based and depth-based values.
+  The two-column contract is fixed because every supported calculation has a
+  finite mean depth.
+  */
+  void write_result_row(std::FILE *file, const char *description,
+                        double native_value, double depth_value) const {
+    std::fprintf(file, "\n%s % .16e % .16e", description, native_value,
+                 depth_value);
   }
 
   /*
@@ -713,19 +1404,20 @@ private:
   */
 
   /*
-  Precompute cos(m*j*pi/N) and sin(m*j*pi/N) for every collocation node m and
-  Fourier mode j. The nonlinear residual and Jacobian evaluate these values
-  O(N^2) times per iteration, so a contiguous lookup table avoids repeated
-  transcendental calls in the dominant kernels.
+  Fill the preallocated cos(m*j*pi/N) and sin(m*j*pi/N) tables for every
+  collocation node m and Fourier mode j.  These values depend only on the fixed
+  spectral order, so allocate_workspace() invokes this routine exactly once.
+  Residual and Jacobian assembly then perform O(N^2) table lookups without
+  repeating transcendental evaluations in the dominant kernels.
 
   Long-double arithmetic is used for the angle before the result is stored as a
   double. This preserves accurate special values near crest and trough while
   keeping the hot table compact and cache-friendly.
   */
   void build_spectral_tables() {
-    const std::size_t side = static_cast<std::size_t>(kFourierOrder + 1);
-    spectral_.cosine_table.resize(side * side);
-    spectral_.sine_table.resize(side * side);
+    const std::size_t side = static_cast<std::size_t>(kSurfaceNodeCount);
+    assert(spectral_.cosine_table.size() == side * side);
+    assert(spectral_.sine_table.size() == side * side);
 
     for (int node = 0; node <= kFourierOrder; ++node) {
       for (int mode = 0; mode <= kFourierOrder; ++mode) {
@@ -741,20 +1433,25 @@ private:
     }
   }
 
-  // Return cos(j*X_m) from the row-major table. Arguments are trusted internal
-  // indices and are therefore not revalidated in this hot accessor.
+  /*
+  Return cos(j*X_m) from the row-major table.  node and mode are validated by
+  their enclosing loops, so this hot accessor performs no repeated range checks.
+  */
   [[nodiscard]] inline double cosine_at_node(int node,
                                              int mode) const noexcept {
     return spectral_
         .cosine_table[static_cast<std::size_t>(node) *
-                          static_cast<std::size_t>(kFourierOrder + 1) +
+                          static_cast<std::size_t>(kSurfaceNodeCount) +
                       static_cast<std::size_t>(mode)];
   }
 
-  // Return sin(j*X_m) using the same table layout as cosine_at_node().
+  /*
+  Return sin(j*X_m) from the table using the same row-major addressing as the
+  cosine accessor.  Keeping both accessors symmetric simplifies modal kernels.
+  */
   [[nodiscard]] inline double sine_at_node(int node, int mode) const noexcept {
     return spectral_.sine_table[static_cast<std::size_t>(node) *
-                                    static_cast<std::size_t>(kFourierOrder + 1) +
+                                    static_cast<std::size_t>(kSurfaceNodeCount) +
                                 static_cast<std::size_t>(mode)];
   }
 
@@ -839,11 +1536,11 @@ private:
 
     The first free-surface profile is a cosine with crest-to-trough height kH.
     All stream-function modes begin at zero except the fundamental coefficient,
-    whose linear estimate supplies the required first-order motion.  The exact
-    nonlinear solve immediately corrects these values.
+    whose linear estimate supplies the required first-order motion.  The fixed
+    trigonometric tables were already built during workspace allocation; this
+    routine initializes only case-dependent state.  The exact nonlinear solve
+    immediately corrects these estimates.
     */
-    build_spectral_tables();
-
     nonlinear_.state[surface_state_index(0)] =
         0.5 * nonlinear_.state[StateIndex::wave_height];
     for (int node = 1; node <= kFourierOrder; ++node) {
@@ -929,37 +1626,18 @@ private:
   }
 
   /*
-  Compute sum(residual_i^2) using a scaled sum-of-squares algorithm.
+  Return the squared Euclidean norm of a complete active vector.
 
-  A naive sum can overflow even when the final norm is representable, or lose
-  small components when magnitudes differ greatly. The scale/ssq recurrence is
-  algebraically equivalent to the Euclidean norm calculation used in robust BLAS
-  implementations.
+  StableNormAccumulator prevents intermediate overflow and reduces loss of
+  significance when the nonlinear equations have widely separated scales.
+  Index zero is intentionally excluded because it is storage padding for the
+  one-based mathematical numbering.
   */
-  [[nodiscard]] double stable_sum_squares(const Vector &residual) const {
-    double scale = 0.0;
-    double ssq = 1.0;
-    for (int i = 1; i <= kSystemSize; ++i) {
-      const double value = std::fabs(residual[i]);
-      if (value == 0.0)
-        continue;
-      if (scale < value) {
-        const double ratio = scale / value;
-        ssq = 1.0 + ssq * ratio * ratio;
-        scale = value;
-      } else {
-        const double ratio = value / scale;
-        ssq += ratio * ratio;
-      }
-    }
-    if (scale == 0.0)
-      return 0.0;
-    const long double result = static_cast<long double>(scale) *
-                               static_cast<long double>(scale) *
-                               static_cast<long double>(ssq);
-    return result > static_cast<long double>(std::numeric_limits<double>::max())
-               ? std::numeric_limits<double>::infinity()
-               : static_cast<double>(result);
+  [[nodiscard]] double stable_sum_squares(const Vector &vector) const {
+    StableNormAccumulator accumulator;
+    for (int i = 1; i <= kSystemSize; ++i)
+      accumulator.add(vector[i]);
+    return accumulator.squared_norm();
   }
 
   /*
@@ -1220,6 +1898,7 @@ private:
       long double dv_dkd_acc = 0.0L;
       long double du_deta_acc = 0.0L;
       long double dv_deta_acc = 0.0L;
+      bool basis_ok = true;
 
       for (int j = 1; j <= kFourierOrder; ++j) {
         const int coeff_index = coefficient_state_index(j);
@@ -1232,9 +1911,8 @@ private:
         VerticalBasisValues basis;
         if (!evaluate_vertical_basis(
                 j, eta, nonlinear_.state[StateIndex::depth], basis)) {
-          jac[row_psi][eta_index] = std::numeric_limits<double>::quiet_NaN();
-          jac[row_dyn][eta_index] = std::numeric_limits<double>::quiet_NaN();
-          continue;
+          basis_ok = false;
+          break;
         }
 
         const double u_basis = jj * basis.c * cjx;
@@ -1264,6 +1942,14 @@ private:
         */
         jac[row_psi][coeff_index] = basis.s;
         jac[row_dyn][coeff_index] = u_basis;
+      }
+
+      if (!basis_ok) {
+        // A non-finite row causes jacobian_is_finite() to reject the complete
+        // trial before it can enter any linear factorization.
+        jac[row_psi][eta_index] = std::numeric_limits<double>::quiet_NaN();
+        jac[row_dyn][eta_index] = std::numeric_limits<double>::quiet_NaN();
+        continue;
       }
 
       const double u_ = static_cast<double>(u_acc);
@@ -1312,7 +1998,11 @@ private:
   ============================================================================
   */
 
-  // Return true only when every active residual is finite.
+  /*
+  Confirm that every active residual component is finite.  This gate is applied
+  before norm-based acceptance because a NaN can otherwise evade ordinary
+  comparisons and an infinity can corrupt merit-reduction calculations.
+  */
   [[nodiscard]] bool residual_is_finite(const Vector &residual) const {
     for (int i = 1; i <= kSystemSize; ++i) {
       if (!std::isfinite(residual[i]))
@@ -1342,12 +2032,14 @@ private:
     }
   }
 
-  // Require both aggregate and worst-equation convergence. The maximum bound
-  // prevents a single poorly satisfied boundary equation from being hidden by
-  // an otherwise small RMS residual.
+  /*
+  Require both aggregate and worst-equation convergence.  The maximum bound is
+  ten times the requested RMS tolerance and prevents one poorly satisfied
+  boundary equation from being hidden by many nearly exact equations.
+  */
   [[nodiscard]] bool residual_converged(double tolerance) const noexcept {
     return status_.residual_rms <= tolerance &&
-           status_.residual_max <= 10.0 * tolerance;
+           status_.residual_max <= kResidualMaximumFactor * tolerance;
   }
 
   /*
@@ -1396,7 +2088,11 @@ private:
     return true;
   }
 
-  // Reject a Jacobian immediately if any active entry is NaN or infinite.
+  /*
+  Verify every active Jacobian entry before factorization.  Rejecting non-finite
+  matrices here keeps LU, QR, and regularized solvers free of special-case NaN
+  handling and ensures a failed basis evaluation follows normal rollback logic.
+  */
   [[nodiscard]] bool jacobian_is_finite(const DenseMatrix &jac) const {
     for (int i = 1; i <= kSystemSize; ++i) {
       for (int j = 1; j <= kSystemSize; ++j) {
@@ -1408,36 +2104,34 @@ private:
   }
 
   /*
-  Stable Euclidean norm of the active one-based vector. The implementation uses
-  the same scale/ssq recurrence as stable_sum_squares and therefore remains safe
-  for highly disparate component magnitudes.
+  Return the Euclidean norm of the active one-based vector.
+
+  This routine shares the same overflow-safe accumulator as
+  stable_sum_squares(), ensuring that trust-region lengths and residual merit
+  values use consistent floating-point treatment.
   */
   [[nodiscard]] double euclidean_norm(const Vector &vector) const {
-    double scale = 0.0;
-    double ssq = 1.0;
-    for (int i = 1; i <= kSystemSize; ++i) {
-      const double value = std::fabs(vector[i]);
-      if (value == 0.0)
-        continue;
-      if (scale < value) {
-        const double ratio = scale / value;
-        ssq = 1.0 + ssq * ratio * ratio;
-        scale = value;
-      } else {
-        const double ratio = value / scale;
-        ssq += ratio * ratio;
-      }
-    }
-    return scale == 0.0 ? 0.0 : scale * std::sqrt(ssq);
+    StableNormAccumulator accumulator;
+    for (int i = 1; i <= kSystemSize; ++i)
+      accumulator.add(vector[i]);
+    return accumulator.norm();
   }
 
-  // Root-mean-square norm used for dimension-independent step diagnostics.
+  /*
+  Convert the stable Euclidean norm to a root-mean-square value.  Dividing by
+  sqrt(kSystemSize) makes trust-region step diagnostics comparable if the fixed
+  spectral order is changed in a future build.
+  */
   [[nodiscard]] double rms_norm(const Vector &vector) const {
     return euclidean_norm(vector) /
            std::sqrt(static_cast<double>(kSystemSize));
   }
 
-  // Long-double accumulated dot product for trust-region model calculations.
+  /*
+  Form an active-vector dot product with long-double accumulation.  The result
+  is returned as double because all stored vectors and trust-region thresholds
+  use double precision, while the wider accumulator reduces cancellation.
+  */
   [[nodiscard]] double dot_product(const Vector &a, const Vector &b) const {
     long double sum_ = 0.0L;
     for (int i = 1; i <= kSystemSize; ++i) {
@@ -1446,8 +2140,12 @@ private:
     return static_cast<double>(sum_);
   }
 
-  // Identify strictly positive global variables updated in logarithmic rather
-  // than additive coordinates by apply_retraction().
+  /*
+  Identify the strictly positive global variables represented through a local
+  logarithmic retraction.  Depth, height, period, and celerity must remain
+  positive; currents, flux, Bernoulli constant, ordinates, and coefficients may
+  legitimately change sign and therefore use additive coordinates.
+  */
   [[nodiscard]] static bool uses_log_coordinate(int index) noexcept {
     return index >= StateIndex::depth && index <= StateIndex::celerity;
   }
@@ -1483,9 +2181,12 @@ private:
     return true;
   }
 
-  // Advance one positive state component along a continuation tangent using a
-  // multiplicative predictor. Invalid or excessive exponents safely retain the
-  // previous value, allowing the nonlinear corrector to recover.
+  /*
+  Advance one positive state component along a continuation tangent in
+  logarithmic coordinates.  Invalid bases or excessive exponents retain the
+  previous value, allowing the safeguarded nonlinear corrector or secant
+  fallback to recover without creating a negative physical quantity.
+  */
   [[nodiscard]] static double log_predict(double previous, double tangent,
                                           double delta) noexcept {
     if (!(previous > 0.0) || !std::isfinite(previous))
@@ -1581,9 +2282,11 @@ private:
     }
   }
 
-  // Multiply by the fully row- and column-scaled Jacobian. This operation is
-  // used for Cauchy directions and scaled linear residual verification; long-
-  // double accumulation reduces cancellation without changing stored precision.
+  /*
+  Multiply a vector by the fully row- and column-scaled Jacobian.  This operation
+  verifies linear-solver residuals and supports iterative refinement.  Each row
+  is accumulated in long double before conversion to stored precision.
+  */
   void scaled_matrix_vector_product(const Vector &x, Vector &result) const {
     for (int i = 1; i <= kSystemSize; ++i) {
       long double sum_ = 0.0L;
@@ -1633,7 +2336,8 @@ private:
   right-hand sides and iterative-refinement corrections.
   */
   [[nodiscard]] bool factorize_lu(DenseMatrix &matrix, IndexVector &pivot) {
-    pivot.assign(static_cast<std::size_t>(kSystemSize + 1), 0);
+    for (int i = 0; i <= kSystemSize; ++i)
+      pivot[i] = 0;
     double matrix_max = 0.0;
     for (int i = 1; i <= kSystemSize; ++i) {
       for (int j = 1; j <= kSystemSize; ++j) {
@@ -1724,8 +2428,11 @@ private:
     return true;
   }
 
-  // Validate every active component of a linear-system solution or search
-  // direction before it participates in trust-region model arithmetic.
+  /*
+  Validate every active component of a linear-system solution or search
+  direction before it participates in trust-region model arithmetic.  Index
+  zero is padding and is deliberately ignored.
+  */
   [[nodiscard]] bool vector_is_finite(const Vector &vector) const {
     for (int i = 1; i <= kSystemSize; ++i) {
       if (!std::isfinite(vector[i]))
@@ -1753,10 +2460,11 @@ private:
 
   Column pivoting orders directions by remaining norm and exposes numerical
   rank. Reflectors and transformed right-hand sides are accumulated in long
-  double. Rank-deficient trailing directions are assigned zero, producing a
-  stable minimum-norm correction in the resolved subspace without forming J^T J.
+  double. Rank-deficient trailing pivoted directions are assigned zero, yielding
+  a stable basic solution in the numerically resolved subspace without forming
+  J^T J.
   */
-  [[nodiscard]] bool solve_rank_revealing_qr(DenseMatrix &matrix,
+  [[nodiscard]] bool solve_rank_revealing_qr(const DenseMatrix &matrix,
                                              const Vector &right_hand_side,
                                              Vector &solution) {
     const int dimension = kSystemSize;
@@ -1927,7 +2635,8 @@ private:
   used only when both LU and rank-revealing QR are inadequate.
   */
   [[nodiscard]] bool solve_regularized_least_squares(
-      DenseMatrix &matrix, const Vector &right_hand_side, Vector &solution) {
+      const DenseMatrix &matrix, const Vector &right_hand_side,
+      Vector &solution) {
     const int dimension = kSystemSize;
     const std::size_t stride = static_cast<std::size_t>(dimension);
     std::vector<long double> normal(stride * stride, 0.0L);
@@ -2044,7 +2753,9 @@ private:
   3. Column-pivoted QR if LU is singular or insufficiently accurate.
   4. Regularized least squares as a last-resort descent direction.
 
-  Every accepted direction is checked by its relative linear residual.
+  LU and QR directions are checked by their relative linear residual.
+  The regularized fallback is accepted only when it is finite and is a strict
+  descent direction for the scaled least-squares model.
   */
   [[nodiscard]] bool solve_scaled_newton_system() {
     status_.linear_solver = LinearSolverKind::LU;
@@ -2140,7 +2851,8 @@ private:
 
     derivative[ResidualIndex::depth] =
         -nonlinear_.state[StateIndex::depth] * problem_.target_relative_height;
-    derivative[2] = problem_.wave_specification == WaveSpecification::Period
+    derivative[ResidualIndex::wave_specification] =
+        problem_.wave_specification == WaveSpecification::Period
                         ? -problem_.target_height_parameter *
                               nonlinear_.state[StateIndex::period] *
                               nonlinear_.state[StateIndex::period]
@@ -2317,20 +3029,22 @@ private:
     double scaled_step_rms = std::numeric_limits<double>::infinity();
   };
 
-  TrustRegionStepResult trust_region_iteration(int iteration) {
+  [[nodiscard]] TrustRegionStepResult trust_region_iteration() {
     constexpr double kMinimumTrustRadius = 1.0e-12;
     constexpr double kMaximumTrustRadius = 100.0;
     constexpr double kAcceptanceRatio = 1.0e-4;
     constexpr int kMaximumTrustTrials = 18;
 
-    if (iteration <= 1)
-      status_.trust_radius = 1.0;
+    TrustRegionStepResult result;
 
     const double base_sum_squares = evaluate_residuals(nonlinear_.residual);
+    const double base_residual_rms =
+        std::sqrt(std::max(0.0, base_sum_squares) /
+                  static_cast<double>(kSystemSize));
     if (!std::isfinite(base_sum_squares) ||
         !residual_is_finite(nonlinear_.residual)) {
       update_residual_diagnostics(nonlinear_.residual, base_sum_squares);
-      return {};
+      return result;
     }
 
     // Preserve an exact rollback point before any trial state is formed.
@@ -2340,13 +3054,13 @@ private:
     assemble_jacobian(workspace_.jacobian);
     if (!jacobian_is_finite(workspace_.jacobian)) {
       update_residual_diagnostics(nonlinear_.residual, base_sum_squares);
-      return {};
+      return result;
     }
 
     build_scaled_linearization(workspace_.jacobian, nonlinear_.residual);
     if (!solve_scaled_newton_system() || !build_cauchy_direction()) {
       update_residual_diagnostics(nonlinear_.residual, base_sum_squares);
-      return {};
+      return result;
     }
 
     const double base_merit = 0.5 * base_sum_squares;
@@ -2364,8 +3078,6 @@ private:
     already moderate. The trial still passes the same admissibility and merit
     checks used by the general trust-region path.
     */
-    const double base_residual_rms =
-        std::sqrt(base_sum_squares / static_cast<double>(kSystemSize));
     const double full_newton_rms = rms_norm(workspace_.newton_direction);
     if (base_residual_rms < 1.0e-7 && std::isfinite(full_newton_rms) &&
         full_newton_rms < 2.0) {
@@ -2377,15 +3089,18 @@ private:
         const double trial_sum_squares =
             evaluate_residuals(nonlinear_.trial_residual);
         if (std::isfinite(trial_sum_squares) &&
-            residual_is_finite(nonlinear_.trial_residual) &&
-            trial_sum_squares < 0.8 * base_sum_squares) {
-          accepted_sum_squares = trial_sum_squares;
-          status_.trust_radius =
-              std::clamp(std::max(status_.trust_radius, 1.25 * full_newton_rms),
-                         kMinimumTrustRadius, kMaximumTrustRadius);
-          update_residual_diagnostics(nonlinear_.trial_residual,
-                                      accepted_sum_squares);
-          return {true, full_newton_rms};
+            residual_is_finite(nonlinear_.trial_residual)) {
+          if (trial_sum_squares < 0.8 * base_sum_squares) {
+            accepted_sum_squares = trial_sum_squares;
+            status_.trust_radius = std::clamp(
+                std::max(status_.trust_radius, 1.25 * full_newton_rms),
+                kMinimumTrustRadius, kMaximumTrustRadius);
+            update_residual_diagnostics(nonlinear_.trial_residual,
+                                        accepted_sum_squares);
+            result.accepted = true;
+            result.scaled_step_rms = full_newton_rms;
+            return result;
+          }
         }
       }
       restore_base_state();
@@ -2394,7 +3109,8 @@ private:
     /*
     General dogleg globalization. Rejected trials never modify the accepted
     state: every attempt starts from base_state and failure contracts the
-    radius.
+    radius.  Model-reduction quantities are local to each candidate and are
+    discarded immediately after the acceptance decision.
     */
     for (int trial = 0; trial < kMaximumTrustTrials; ++trial) {
       restore_base_state();
@@ -2422,11 +3138,6 @@ private:
         continue;
       }
 
-      /*
-      The model residual is F + J*step in physical residual coordinates.
-      Comparing its predicted reduction with the actual nonlinear reduction is
-      the standard trust-region quality measure.
-      */
       physical_matrix_vector_product(workspace_.candidate_step,
                                      workspace_.model_residual);
       for (int i = 1; i <= kSystemSize; ++i)
@@ -2434,20 +3145,25 @@ private:
 
       const double model_sum_squares =
           stable_sum_squares(workspace_.model_residual);
-      const double actual_reduction = base_merit - 0.5 * trial_sum_squares;
-      const double predicted_reduction = base_merit - 0.5 * model_sum_squares;
-      const double ratio = predicted_reduction > 0.0
-                               ? actual_reduction / predicted_reduction
-                               : -std::numeric_limits<double>::infinity();
+      const double actual_reduction =
+          base_merit - 0.5 * trial_sum_squares;
+      const double predicted_reduction =
+          base_merit - 0.5 * model_sum_squares;
+      const double reduction_ratio =
+          predicted_reduction > 0.0
+              ? actual_reduction / predicted_reduction
+              : -std::numeric_limits<double>::infinity();
 
-      if (actual_reduction > 0.0 && ratio > kAcceptanceRatio) {
+      if (actual_reduction > 0.0 && reduction_ratio > kAcceptanceRatio) {
         accepted = true;
         accepted_sum_squares = trial_sum_squares;
+        result.scaled_step_rms = step_norm;
 
-        if (ratio < 0.25) {
+        if (reduction_ratio < 0.25) {
           status_.trust_radius =
               std::max(kMinimumTrustRadius, 0.25 * status_.trust_radius);
-        } else if (ratio > 0.75 && step_norm >= 0.8 * status_.trust_radius) {
+        } else if (reduction_ratio > 0.75 &&
+                   step_norm >= 0.8 * status_.trust_radius) {
           status_.trust_radius =
               std::min(kMaximumTrustRadius, 2.0 * status_.trust_radius);
         }
@@ -2461,12 +3177,13 @@ private:
     if (!accepted) {
       restore_base_state();
       update_residual_diagnostics(nonlinear_.residual, base_sum_squares);
-      return {};
+      return result;
     }
 
     update_residual_diagnostics(nonlinear_.trial_residual,
                                 accepted_sum_squares);
-    return {true, rms_norm(workspace_.candidate_step)};
+    result.accepted = true;
+    return result;
   }
 
   /*
@@ -2479,16 +3196,23 @@ private:
     int iterations = 0;
   };
 
-  [[nodiscard]] const char *linear_solver_name() const noexcept {
-    switch (status_.linear_solver) {
+  /*
+  Convert the internal linear-solver enumeration to the compact label printed
+  in console diagnostics and solver.res.  The default branch terminates because
+  an out-of-range enum indicates memory corruption or a programming defect.
+  */
+  [[nodiscard]] static const char *
+  linear_solver_name(LinearSolverKind solver) noexcept {
+    switch (solver) {
     case LinearSolverKind::LU:
       return "LU";
     case LinearSolverKind::QR:
       return "QR";
     case LinearSolverKind::Regularized:
       return "REG";
+    default:
+      std::terminate();
     }
-    return "?";
   }
 
   /*
@@ -2502,6 +3226,7 @@ private:
   [[nodiscard]] NonlinearSolveResult
   solve_nonlinear_system(double tolerance, const char *stage_name) {
     NonlinearSolveResult result;
+    status_.trust_radius = 1.0;
 
     /*
     A predictor can occasionally satisfy the target equations immediately.
@@ -2522,13 +3247,13 @@ private:
       result.iterations = iter;
       std::fprintf(stdout, "\n%s iteration %3d:", stage_name, iter);
 
-      const TrustRegionStepResult step = trust_region_iteration(iter);
+      const TrustRegionStepResult step = trust_region_iteration();
       std::fprintf(
           stdout,
           " Scaled step RMS: %8.1e  Residual RMS: %8.1e  Residual max: %8.1e"
           "  Trust radius: %8.1e  Linear: %s",
           step.scaled_step_rms, status_.residual_rms, status_.residual_max,
-          status_.trust_radius, linear_solver_name());
+          status_.trust_radius, linear_solver_name(status_.linear_solver));
 
       if (!step.accepted || !std::isfinite(step.scaled_step_rms) ||
           !std::isfinite(status_.residual_rms) ||
@@ -2559,35 +3284,6 @@ private:
   }
 
   /*
-  Transform nodal surface elevations to cosine coefficients and copy the solved
-  stream coefficients into dedicated post-processing storage.
-
-  Long-double summation is used for the discrete cosine transform. Separating
-  post-processing coefficients from nonlinear workspace prevents output routines
-  from depending on transient trial states.
-  */
-  void update_output_coefficients() {
-    spectral_.surface_coefficients[0] = 0.0;
-    for (int mode = 1; mode <= kFourierOrder; ++mode) {
-      spectral_.stream_coefficients[mode] =
-          nonlinear_.state[coefficient_state_index(mode)];
-      long double surface_sum =
-          0.5L *
-          (static_cast<long double>(nonlinear_.state[surface_state_index(0)]) +
-           static_cast<long double>(
-               nonlinear_.state[surface_state_index(kFourierOrder)]) *
-               ((mode & 1) ? -1.0L : 1.0L));
-      for (int node = 1; node <= kFourierOrder - 1; ++node) {
-        surface_sum += static_cast<long double>(
-                           nonlinear_.state[surface_state_index(node)]) *
-                       static_cast<long double>(cosine_at_node(node, mode));
-      }
-      spectral_.surface_coefficients[mode] = static_cast<double>(
-          2.0L * surface_sum / static_cast<long double>(kFourierOrder));
-    }
-  }
-
-  /*
   Apply a smooth high-mode filter to continuation predictors only.
 
   Extrapolation can amplify small unresolved tail coefficients before Newton has
@@ -2604,8 +3300,7 @@ private:
     const double denominator =
         static_cast<double>(std::max(1, kFourierOrder - cutoff));
     auto &cosine_coefficients = workspace_.predictor_coefficients;
-    std::fill(cosine_coefficients.begin(),
-              cosine_coefficients.begin() + kFourierOrder + 1, 0.0L);
+    std::fill(cosine_coefficients.begin(), cosine_coefficients.end(), 0.0L);
 
     for (int mode = 0; mode <= kFourierOrder; ++mode) {
       long double sum_ = 0.5L * static_cast<long double>(
@@ -2742,12 +3437,11 @@ private:
   All history states are converged states. Rejected iterates are never inserted
   into the predictor.
   */
-  [[nodiscard]] ContinuationResult continue_to_target(int initial_step_count,
-                                                      const char *stage_name,
-                                                      bool report_trials) {
+  [[nodiscard]] ContinuationResult continue_to_target() {
     ContinuationResult result;
     const double initial_step =
-        1.0 / static_cast<double>(std::max(1, initial_step_count));
+        1.0 / static_cast<double>(
+                  std::max(1, discretization_.initial_continuation_steps));
     double step = initial_step;
     double fraction = 0.0;
     double previous_previous_fraction = 0.0;
@@ -2759,7 +3453,7 @@ private:
     bool have_previous_previous_state = false;
     bool have_tangent = false;
 
-    while (fraction < 1.0 - 16.0 * std::numeric_limits<double>::epsilon()) {
+    while (fraction < 1.0 - kContinuationFractionTolerance) {
       if (++result.trials > kMaximumContinuationTrials)
         return result;
 
@@ -2770,12 +3464,10 @@ private:
       continuation_.relative_height =
           trial_fraction * problem_.target_relative_height;
 
-      if (report_trials) {
-        std::fprintf(stdout,
-                     "\n\nContinuation trial %d: target fraction %.10f, "
-                     "increment %.3e\n",
-                     result.trials, trial_fraction, step);
-      }
+      std::fprintf(stdout,
+                   "\n\nContinuation trial %d: target fraction %.10f, "
+                   "increment %.3e\n",
+                   result.trials, trial_fraction, step);
 
       if (!have_previous_state) {
         initialize_state();
@@ -2792,34 +3484,34 @@ private:
                                     fraction, previous_previous_fraction,
                                     trial_fraction);
       } else {
-        std::copy(previous_state.begin(), previous_state.end(),
-                  nonlinear_.state.begin());
+        nonlinear_.state = previous_state;
       }
 
       if (have_previous_state)
         filter_predictor_spectrum();
 
       const bool final_target =
-          trial_fraction >= 1.0 - 16.0 * std::numeric_limits<double>::epsilon();
+          trial_fraction >= 1.0 - kContinuationFractionTolerance;
       const double tolerance =
           final_target ? kFinalResidualTolerance : kConvergenceCriterion;
       const NonlinearSolveResult nonlinear =
-          solve_nonlinear_system(tolerance, stage_name);
+          solve_nonlinear_system(tolerance, "spectral continuation");
 
       if (!nonlinear.converged) {
         if (have_previous_state) {
-          std::copy(previous_state.begin(), previous_state.end(),
-                    nonlinear_.state.begin());
+          nonlinear_.state = previous_state;
         }
+        const double attempted_increment = step;
         step *= 0.5;
+        audit_.continuation_trials.push_back(
+            {result.trials, trial_fraction, attempted_increment, false,
+             status_.residual_rms, status_.residual_max, step, have_tangent});
         if (step < kMinimumContinuationStep)
           return result;
-        if (report_trials) {
-          std::fprintf(stderr,
-                       "\nContinuation rollback at fraction %.10f; retrying "
-                       "with increment %.3e.\n",
-                       trial_fraction, step);
-        }
+        std::fprintf(stderr,
+                     "\nContinuation rollback at fraction %.10f; retrying "
+                     "with increment %.3e.\n",
+                     trial_fraction, step);
         continue;
       }
 
@@ -2835,13 +3527,17 @@ private:
       have_tangent = compute_continuation_tangent(tangent);
 
       const double growth = continuation_growth(nonlinear.iterations);
+      const double attempted_increment = step;
 
-      if (fraction < 1.0 - 16.0 * std::numeric_limits<double>::epsilon()) {
+      if (fraction < 1.0 - kContinuationFractionTolerance) {
         const double remaining = 1.0 - fraction;
         const double maximum_step = std::min(1.5 * initial_step, remaining);
         step = std::min(std::max(step * growth, kMinimumContinuationStep),
                         maximum_step);
       }
+      audit_.continuation_trials.push_back(
+          {result.trials, trial_fraction, attempted_increment, true,
+           status_.residual_rms, status_.residual_max, step, have_tangent});
     }
 
     continuation_.height_parameter = problem_.target_height_parameter;
@@ -2853,497 +3549,38 @@ private:
 
   /*
   ============================================================================
-  INPUT, CASE CONFIGURATION, AND TEXT SUMMARIES
-  ============================================================================
-  */
-
-  // Write the normalized interpretation of the input before numerical work
-  // starts.
-  void write_input_summary(std::FILE *file) const {
-    std::fprintf(file, "# %s", problem_.title.c_str());
-    std::fprintf(file, "\n\n# Input data");
-    std::fprintf(file, "\n\n# Height/Depth:%6.8f",
-                 problem_.target_relative_height);
-    if (problem_.wave_specification != WaveSpecification::Period) {
-      std::fprintf(file, "\n# Length/Depth:%7.8f",
-                   problem_.specified_wavelength);
-    } else {
-      std::fprintf(file, "\n# Dimensionless Period T*sqrt(g/d):%8.8f",
-                   problem_.specified_period);
-    }
-    std::fprintf(file, "\n# Current criterion: %s,  Dimensionless value:%6.8lf",
-                 current_name(), problem_.current_value);
-    const std::string method = method_description();
-    std::fprintf(file, "\n%s\n", method.c_str());
-  }
-
-  /*
-  Remove surrounding horizontal whitespace and a possible Windows carriage
-  return. Empty or whitespace-only lines become an empty string.
-  */
-  [[nodiscard]] static std::string trim_line(std::string line) {
-    if (!line.empty() && line.back() == '\r')
-      line.pop_back();
-    const auto first = line.find_first_not_of(" \t");
-    if (first == std::string::npos)
-      return {};
-    const auto last = line.find_last_not_of(" \t");
-    return line.substr(first, last - first + 1);
-  }
-
-  /*
-  Parse the first token of a data-file line. Trailing comments are intentionally
-  accepted, allowing human-readable annotations after each value.
-  */
-  template <typename Value>
-  [[nodiscard]] static bool parse_leading_value(const std::string &line,
-                                                Value &value) {
-    std::istringstream stream(line);
-    stream >> value;
-    return !stream.fail();
-  }
-
-  /*
-  ASCII-only case-insensitive comparison for command keywords. The accepted
-  vocabulary is deliberately restricted to English protocol tokens, so locale-
-  dependent case conversion would add ambiguity without benefit.
-  */
-  [[nodiscard]] static bool ascii_iequals(std::string_view left,
-                                          std::string_view right) noexcept {
-    if (left.size() != right.size())
-      return false;
-    for (std::size_t i = 0; i < left.size(); ++i) {
-      const unsigned char a = static_cast<unsigned char>(left[i]);
-      const unsigned char b = static_cast<unsigned char>(right[i]);
-      const unsigned char lower_a =
-          (a >= 'A' && a <= 'Z') ? static_cast<unsigned char>(a + ('a' - 'A'))
-                                 : a;
-      const unsigned char lower_b =
-          (b >= 'A' && b <= 'Z') ? static_cast<unsigned char>(b + ('a' - 'A'))
-                                 : b;
-      if (lower_a != lower_b)
-        return false;
-    }
-    return true;
-  }
-
-  [[nodiscard]] static const char *program_name(int argc,
-                                                char **argv) noexcept {
-    return (argc > 0 && argv && argv[0]) ? argv[0] : "fourier";
-  }
-
-  /*
-  Print the complete runtime contract.  The executable intentionally accepts no
-  numerical command-line parameters: one data.dat file defines one calculation.
-  A help switch is retained because it is useful in installed and scripted
-  environments and does not create a second configuration path.
-  */
-  static void print_usage(std::FILE *file, const char *executable) {
-    std::fprintf(
-        file,
-        "Usage:\n"
-        "  %s\n"
-        "      Use data.dat when available; otherwise request every required\n"
-        "      numerical value interactively. Solve one fixed 100-mode wave\n"
-        "      case and write solution.res, surface.res, and flowfield.res.\n\n"
-        "  %s --help\n"
-        "      Display this message.\n\n"
-        "data.dat contains seven non-empty lines:\n"
-        "  title\n"
-        "  H/d\n"
-        "  Period or Wavelength\n"
-        "  T*sqrt(g/d) or L/d\n"
-        "  current criterion: 1 or 2\n"
-        "  dimensionless current magnitude\n"
-        "  FINISH\n\n"
-        "If data.dat is absent, the same five numerical/keyword fields are\n"
-        "requested from the console. No default input values are used.\n",
-        executable, executable);
-  }
-
-  /*
-  Determine the directory containing the executable without assuming that the
-  process was launched from that directory.  Native operating-system facilities
-  are preferred.  argv[0] is used only as a portable fallback.
-  */
-  [[nodiscard]] static fs::path
-  resolve_executable_directory(const fs::path &fallback_directory, int argc,
-                               char **argv) {
-    fs::path directory = fallback_directory;
-#if defined(_WIN32)
-    std::wstring buffer(32768, L'\0');
-    const DWORD length = ::GetModuleFileNameW(
-        nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-    if (length > 0 && static_cast<std::size_t>(length) < buffer.size()) {
-      buffer.resize(length);
-      directory = fs::path(buffer).parent_path();
-    }
-#elif defined(__linux__)
-    char buffer[PATH_MAX] = {0};
-    const ssize_t length =
-        ::readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
-    if (length > 0) {
-      buffer[length] = '\0';
-      directory = fs::path(buffer).parent_path();
-    }
-#endif
-    if (directory.empty() && argc > 0 && argv && argv[0]) {
-      directory = fs::path(argv[0]).parent_path();
-    }
-    return directory;
-  }
-
-  /*
-  Search for data.dat in deterministic priority order:
-
-    1. current working directory;
-    2. directory containing the executable.
-
-  Returning an empty path is not a fatal condition.  It explicitly selects the
-  interactive input path and prevents accidental use of an unrelated file from
-  another search location.
-  */
-  [[nodiscard]] static fs::path
-  locate_data_file(const fs::path &current_directory,
-                   const fs::path &executable_directory) {
-    const fs::path local = current_directory / "data.dat";
-    if (fs::exists(local)) {
-      return local;
-    }
-
-    const fs::path beside_executable = executable_directory / "data.dat";
-    if (fs::exists(beside_executable)) {
-      return beside_executable;
-    }
-
-    return {};
-  }
-
-  /*
-  Estimate the first continuation increment from H/d.
-
-  This value is only a seed.  The continuation controller subsequently enlarges
-  or reduces the increment according to actual Newton iteration counts and rolls
-  back exactly after failed trials.  The quadratic dependence gives gentle
-  waves a short path while retaining conservative branch tracking for steep
-  waves.
-  */
-  [[nodiscard]] static int
-  choose_initial_continuation_step_count(double relative_height) noexcept {
-    const double normalized = std::clamp(relative_height / 0.70, 0.0, 1.5);
-    const double estimate = 4.0 + 12.0 * normalized * normalized;
-    return std::clamp(static_cast<int>(std::ceil(estimate)), 5, 32);
-  }
-
-  /*
-  Validate and normalize one finite-depth wave specification.
-
-  Period and wavelength are alternative closures for the same nonlinear system.
-  Both are converted to a continuation height parameter so the continuation and
-  Newton routines do not contain duplicated case logic.
-  */
-  [[nodiscard]] bool configure_wave_case(double relative_height,
-                                         WaveSpecification wave_specification,
-                                         double specified_value,
-                                         std::string &error) {
-    if (!(relative_height > 0.0) || !std::isfinite(relative_height)) {
-      error = "H/d must be a finite positive number";
-      return false;
-    }
-    if (!(specified_value > 0.0) || !std::isfinite(specified_value)) {
-      error = "specified period or wavelength must be finite and positive";
-      return false;
-    }
-
-    ProblemDefinition candidate = problem_;
-    candidate.wave_specification = wave_specification;
-    if (wave_specification == WaveSpecification::Period) {
-      candidate.specified_period = specified_value;
-      candidate.specified_wavelength = 0.0;
-      candidate.target_height_parameter =
-          relative_height / (specified_value * specified_value);
-    } else {
-      candidate.specified_wavelength = specified_value;
-      candidate.specified_period = 0.0;
-      candidate.target_height_parameter = relative_height / specified_value;
-    }
-
-    candidate.target_relative_height = relative_height;
-    if (!(candidate.target_height_parameter > 0.0) ||
-        !std::isfinite(candidate.target_height_parameter)) {
-      error = "normalized continuation height is not finite and positive";
-      return false;
-    }
-
-    problem_ = std::move(candidate);
-    return true;
-  }
-
-  /*
-  Read and validate one complete seven-line case from data.dat.
-
-  Blank lines are ignored.  Numeric and keyword lines may contain descriptive
-  text after the leading token.  All values are parsed into local temporaries
-  and validated before the application state is committed, so a malformed file
-  cannot leave a partially configured solver.
-  */
-  [[nodiscard]] bool read_case_file(const fs::path &path, std::string &error) {
-    std::ifstream input(path);
-    if (!input) {
-      error = "cannot open input file";
-      return false;
-    }
-
-    std::vector<std::string> lines;
-    std::string line;
-    while (std::getline(input, line)) {
-      line = trim_line(std::move(line));
-      if (!line.empty()) {
-        lines.push_back(std::move(line));
-      }
-    }
-
-    if (lines.size() != 7U) {
-      error = "data.dat must contain exactly seven non-empty lines";
-      return false;
-    }
-    if (ascii_iequals(lines.front(), "FINISH")) {
-      error = "FINISH appears before the wave case";
-      return false;
-    }
-    if (!ascii_iequals(lines.back(), "FINISH")) {
-      error = "the final non-empty line must be FINISH";
-      return false;
-    }
-
-    double relative_height = 0.0;
-    double specified_value = 0.0;
-    double current_value = 0.0;
-    int current_definition = 0;
-    std::string specification_token;
-    if (!parse_leading_value(lines[1], relative_height) ||
-        !parse_leading_value(lines[2], specification_token) ||
-        !parse_leading_value(lines[3], specified_value) ||
-        !parse_leading_value(lines[4], current_definition) ||
-        !parse_leading_value(lines[5], current_value)) {
-      error = "one or more numeric fields are invalid";
-      return false;
-    }
-    if (!(current_definition == 1 || current_definition == 2)) {
-      error = "current criterion must be 1 or 2";
-      return false;
-    }
-    if (!std::isfinite(current_value)) {
-      error = "current magnitude must be finite";
-      return false;
-    }
-    WaveSpecification wave_specification;
-    if (ascii_iequals(specification_token, "Period")) {
-      wave_specification = WaveSpecification::Period;
-    } else if (ascii_iequals(specification_token, "Wavelength")) {
-      wave_specification = WaveSpecification::Wavelength;
-    } else {
-      error = "measure of length must begin with Period or Wavelength";
-      return false;
-    }
-    if (!configure_wave_case(relative_height, wave_specification,
-                             specified_value, error)) {
-      return false;
-    }
-
-    problem_.title = lines[0];
-    problem_.current_definition =
-        static_cast<CurrentDefinition>(current_definition);
-    problem_.current_value = current_value;
-
-    grid_.continuation_steps =
-        choose_initial_continuation_step_count(relative_height);
-    return true;
-  }
-
-
-  /*
-  Read one non-empty line from standard input after displaying and flushing a
-  prompt.  Empty entries are not interpreted as defaults: they are returned to
-  the caller as invalid input and must be entered again.  Returning false means
-  that standard input reached end-of-file or suffered an unrecoverable read
-  failure before the requested field was supplied.
-  */
-  [[nodiscard]] static bool prompt_line(std::string_view prompt,
-                                        std::string &line) {
-    std::fputs(prompt.data(), stdout);
-    std::fflush(stdout);
-    if (!std::getline(std::cin, line)) {
-      return false;
-    }
-    line = trim_line(std::move(line));
-    return true;
-  }
-
-  /*
-  Request every required case value directly from the console.
-
-  No numerical defaults are embedded in this path.  Each prompt remains active
-  until the user supplies a syntactically and physically valid value.  Parsing
-  accepts only the leading token, matching annotated data.dat lines and allowing
-  a user to paste either a bare value or a value followed by explanatory text.
-
-  The complete candidate case is committed only after all five fields have been
-  entered and configure_wave_case() has validated their coupled normalization.
-  This transaction-like behavior prevents a failed or interrupted interactive
-  session from leaving a partially configured solver.
-  */
-  [[nodiscard]] bool read_case_interactively(std::string &error) {
-    double relative_height = 0.0;
-    double specified_value = 0.0;
-    double current_value = 0.0;
-    int current_definition = 0;
-    WaveSpecification wave_specification = WaveSpecification::Period;
-    std::string line;
-
-    for (;;) {
-      if (!prompt_line("H/d: ", line)) {
-        error = "end-of-input while reading H/d";
-        return false;
-      }
-      if (parse_leading_value(line, relative_height) &&
-          relative_height > 0.0 && std::isfinite(relative_height)) {
-        break;
-      }
-      std::fprintf(stderr, "Invalid H/d. Enter a finite positive number.\n");
-    }
-
-    for (;;) {
-      if (!prompt_line(
-              "Measure of length (enter Period or Wavelength): ", line)) {
-        error = "end-of-input while reading the measure of length";
-        return false;
-      }
-
-      std::string token;
-      if (parse_leading_value(line, token) && ascii_iequals(token, "Period")) {
-        wave_specification = WaveSpecification::Period;
-        break;
-      }
-      if (parse_leading_value(line, token) &&
-          ascii_iequals(token, "Wavelength")) {
-        wave_specification = WaveSpecification::Wavelength;
-        break;
-      }
-      std::fprintf(stderr,
-                   "Invalid measure of length. Enter Period or Wavelength.\n");
-    }
-
-    const char *specified_value_prompt =
-        wave_specification == WaveSpecification::Period
-            ? "Dimensionless period T*sqrt(g/d): "
-            : "Dimensionless wavelength L/d: ";
-    for (;;) {
-      if (!prompt_line(specified_value_prompt, line)) {
-        error = "end-of-input while reading the specified period or wavelength";
-        return false;
-      }
-      if (parse_leading_value(line, specified_value) &&
-          specified_value > 0.0 && std::isfinite(specified_value)) {
-        break;
-      }
-      std::fprintf(stderr,
-                   "Invalid value. Enter a finite positive period or "
-                   "wavelength.\n");
-    }
-
-    for (;;) {
-      if (!prompt_line("Current criterion (1 for Euler, or 2 for Stokes): ", line)) {
-        error = "end-of-input while reading the current criterion";
-        return false;
-      }
-      if (parse_leading_value(line, current_definition) &&
-          (current_definition == 1 || current_definition == 2)) {
-        break;
-      }
-      std::fprintf(stderr, "Invalid current criterion. Enter 1 or 2.\n");
-    }
-
-    for (;;) {
-      if (!prompt_line(
-              "Current magnitude, dimensionless ubar/sqrt(gd): ", line)) {
-        error = "end-of-input while reading the current magnitude";
-        return false;
-      }
-      if (parse_leading_value(line, current_value) &&
-          std::isfinite(current_value)) {
-        break;
-      }
-      std::fprintf(stderr,
-                   "Invalid current magnitude. Enter a finite number.\n");
-    }
-
-    if (!configure_wave_case(relative_height, wave_specification,
-                             specified_value, error)) {
-      return false;
-    }
-
-    problem_.title = "Interactive wave case";
-    problem_.current_definition =
-        static_cast<CurrentDefinition>(current_definition);
-    problem_.current_value = current_value;
-    grid_.continuation_steps =
-        choose_initial_continuation_step_count(relative_height);
-    return true;
-  }
-
-  /*
-  Write the common converged-wave summary used by the console and result files.
-  All values are derived from the final nonlinear state; this routine performs
-  no mutation and cannot influence convergence.
-  */
-  void write_finite_summary(std::FILE *file) const {
-    const double wavelength = 2.0 * kPi / nonlinear_.state[StateIndex::depth];
-    const double maximum_relative_height =
-        (0.0077829 * wavelength * wavelength * wavelength +
-         0.0095721 * wavelength * wavelength + 0.141063 * wavelength) /
-        (0.0093407 * wavelength * wavelength * wavelength +
-         0.0317567 * wavelength * wavelength + 0.078834 * wavelength + 1.0);
-    std::fprintf(file, "# %s", problem_.title.c_str());
-    {
-      const std::string method = method_description();
-      std::fprintf(file, "\n%s\n", method.c_str());
-    }
-    std::fprintf(file,
-                 "\n# Height/Depth:%6.5f, %3.0lf%% of the maximum of H/d "
-                 "=%6.5f for this length:",
-                 nonlinear_.state[StateIndex::wave_height] /
-                     nonlinear_.state[StateIndex::depth],
-                 nonlinear_.state[StateIndex::wave_height] /
-                     nonlinear_.state[StateIndex::depth] /
-                     maximum_relative_height * 100.0,
-                 maximum_relative_height);
-    std::fprintf(file, "\n# Length/Depth:%7.5f",
-                 2 * kPi / nonlinear_.state[StateIndex::depth]);
-    std::fprintf(file, "\n# Dimensionless Period T*sqrt(g/d):%7.5f",
-                 nonlinear_.state[StateIndex::period] /
-                     std::sqrt(nonlinear_.state[StateIndex::depth]));
-    std::fprintf(file,
-                 "\n# Current criterion: %s,  Dimensionless value:%6.5lf\n",
-                 current_name(), problem_.current_value);
-  }
-
-  /*
-  Write one scalar row with both native wavenumber-based and depth-based values.
-  The two-column contract is fixed because every supported calculation has a
-  finite mean depth.
-  */
-  void write_result_row(std::FILE *file, const char *description,
-                        double native_value, double depth_value) const {
-    std::fprintf(file, "\n%s % .16e % .16e", description, native_value,
-                 depth_value);
-  }
-
-  /*
-  ============================================================================
   POST-PROCESSING AND OUTPUT
   ============================================================================
   */
+
+  /*
+  Transform nodal surface elevations to cosine coefficients and copy the solved
+  stream coefficients into dedicated post-processing storage.
+
+  Long-double summation is used for the discrete cosine transform. Separating
+  post-processing coefficients from nonlinear workspace prevents output routines
+  from depending on transient trial states.
+  */
+  void update_output_coefficients() {
+    spectral_.surface_coefficients[0] = 0.0;
+    for (int mode = 1; mode <= kFourierOrder; ++mode) {
+      spectral_.stream_coefficients[mode] =
+          nonlinear_.state[coefficient_state_index(mode)];
+      long double surface_sum =
+          0.5L *
+          (static_cast<long double>(nonlinear_.state[surface_state_index(0)]) +
+           static_cast<long double>(
+               nonlinear_.state[surface_state_index(kFourierOrder)]) *
+               ((mode & 1) ? -1.0L : 1.0L));
+      for (int node = 1; node <= kFourierOrder - 1; ++node) {
+        surface_sum += static_cast<long double>(
+                           nonlinear_.state[surface_state_index(node)]) *
+                       static_cast<long double>(cosine_at_node(node, mode));
+      }
+      spectral_.surface_coefficients[mode] = static_cast<double>(
+          2.0L * surface_sum / static_cast<long double>(kFourierOrder));
+    }
+  }
 
   /*
   Evaluate the smooth cosine interpolant of the converged nodal free surface at
@@ -3372,64 +3609,105 @@ private:
 
   Collocation residuals can be extremely small even when the fixed spectrum is
   under-resolved. Half-shifted verification points therefore provide an
-  independent internal defect estimate. The check never changes the prescribed
-  100-mode order and is intentionally omitted from result files.
+  independent internal defect estimate.  The check never changes the fixed
+  production order.  solver.res records the maximum scalar defect, while the
+  individual off-grid samples remain internal diagnostics.
   */
   void update_spectral_defect() {
     const int sample_count = std::max(2 * kFourierOrder, 32);
     long double maximum = 0.0L;
 
+    /*
+    At an off-grid phase the physical free surface is the streamline satisfying
+    the kinematic condition, not merely the cosine interpolation of the nodal
+    ordinates.  The cosine interpolant supplies an accurate initial estimate;
+    safeguarded Newton correction then locates the streamline before the
+    independent Bernoulli defect is evaluated.  This avoids counting surface-
+    interpolation error twice while retaining both boundary-equation checks.
+    */
     for (int sample = 0; sample < sample_count; ++sample) {
       const long double x = (static_cast<long double>(sample) + 0.5L) *
                             static_cast<long double>(kPi) /
                             static_cast<long double>(sample_count);
-      const double eta = surface_elevation(static_cast<double>(x));
-      long double psi_acc = 0.0L;
-      long double u_acc = 0.0L;
-      long double v_acc = 0.0L;
+      double eta = surface_elevation(static_cast<double>(x));
+      long double final_kinematic = 0.0L;
+      long double final_dynamic = 0.0L;
       bool valid = true;
+      bool surface_converged = false;
 
-      for (int mode = 1; mode <= kFourierOrder; ++mode) {
-        VerticalBasisValues basis;
-        if (!evaluate_vertical_basis(
-                mode, eta, nonlinear_.state[StateIndex::depth], basis)) {
+      for (int correction = 0; correction < 20; ++correction) {
+        long double psi_acc = 0.0L;
+        long double u_acc = 0.0L;
+        long double v_acc = 0.0L;
+
+        for (int mode = 1; mode <= kFourierOrder; ++mode) {
+          VerticalBasisValues basis;
+          if (!evaluate_vertical_basis(
+                  mode, eta, nonlinear_.state[StateIndex::depth], basis)) {
+            valid = false;
+            break;
+          }
+          const long double phase = static_cast<long double>(mode) * x;
+          const long double cosine = std::cos(phase);
+          const long double sine = std::sin(phase);
+          const long double coefficient =
+              static_cast<long double>(spectral_.stream_coefficients[mode]);
+          psi_acc += coefficient * static_cast<long double>(basis.s) * cosine;
+          u_acc += static_cast<long double>(mode) * coefficient *
+                   static_cast<long double>(basis.c) * cosine;
+          v_acc += static_cast<long double>(mode) * coefficient *
+                   static_cast<long double>(basis.s) * sine;
+        }
+
+        if (!valid)
+          break;
+
+        const long double eta_ld = static_cast<long double>(eta);
+        const long double kinematic =
+            psi_acc -
+            static_cast<long double>(nonlinear_.state[StateIndex::flux]) -
+            static_cast<long double>(
+                nonlinear_.state[StateIndex::wave_frame_speed]) *
+                eta_ld;
+        const long double relative_u =
+            -static_cast<long double>(
+                nonlinear_.state[StateIndex::wave_frame_speed]) +
+            u_acc;
+        const long double dynamic =
+            0.5L * (relative_u * relative_u + v_acc * v_acc) + eta_ld -
+            static_cast<long double>(nonlinear_.state[StateIndex::bernoulli]);
+
+        final_kinematic = kinematic;
+        final_dynamic = dynamic;
+        if (std::fabs(kinematic) <= 1.0e-14L) {
+          surface_converged = true;
+          break;
+        }
+        if (!std::isfinite(static_cast<double>(relative_u)) ||
+            std::fabs(relative_u) <= 1.0e-14L) {
           valid = false;
           break;
         }
-        const long double phase = static_cast<long double>(mode) * x;
-        const long double cosine = std::cos(phase);
-        const long double sine = std::sin(phase);
-        const long double coefficient =
-            static_cast<long double>(spectral_.stream_coefficients[mode]);
-        psi_acc += coefficient * static_cast<long double>(basis.s) * cosine;
-        u_acc += static_cast<long double>(mode) * coefficient *
-                 static_cast<long double>(basis.c) * cosine;
-        v_acc += static_cast<long double>(mode) * coefficient *
-                 static_cast<long double>(basis.s) * sine;
+
+        long double correction_step = -kinematic / relative_u;
+        const long double clearance =
+            static_cast<long double>(nonlinear_.state[StateIndex::depth]) +
+            static_cast<long double>(eta);
+        const long double maximum_step =
+            std::max(1.0e-6L, 0.25L * std::max(clearance, 1.0e-6L));
+        correction_step =
+            std::clamp(correction_step, -maximum_step, maximum_step);
+        eta = static_cast<double>(static_cast<long double>(eta) +
+                                  correction_step);
       }
 
-      if (!valid) {
+      if (!valid || !surface_converged || !std::isfinite(eta)) {
         status_.spectral_defect_max = std::numeric_limits<double>::infinity();
         return;
       }
 
-      const long double eta_ld = static_cast<long double>(eta);
-      const long double kinematic =
-          psi_acc -
-          static_cast<long double>(nonlinear_.state[StateIndex::flux]) -
-          static_cast<long double>(
-              nonlinear_.state[StateIndex::wave_frame_speed]) *
-              eta_ld;
-      const long double relative_u =
-          -static_cast<long double>(
-              nonlinear_.state[StateIndex::wave_frame_speed]) +
-          u_acc;
-      const long double dynamic =
-          0.5L * (relative_u * relative_u + v_acc * v_acc) + eta_ld -
-          static_cast<long double>(nonlinear_.state[StateIndex::bernoulli]);
-
-      maximum = std::max(maximum, std::fabs(kinematic));
-      maximum = std::max(maximum, std::fabs(dynamic));
+      maximum = std::max(maximum, std::fabs(final_kinematic));
+      maximum = std::max(maximum, std::fabs(final_dynamic));
     }
 
     status_.spectral_defect_max = static_cast<double>(maximum);
@@ -3446,8 +3724,8 @@ private:
     bool valid = true;
     double horizontal_velocity = 0.0;
     double vertical_velocity = 0.0;
-    double horizontal_gradient = 0.0;
-    double vertical_gradient = 0.0;
+    double du_dx = 0.0;
+    double du_dy = 0.0;
     double potential_time_derivative = 0.0;
     double horizontal_time_derivative = 0.0;
     double vertical_time_derivative = 0.0;
@@ -3456,8 +3734,9 @@ private:
   };
 
   /*
-  Evaluate potential, stream function, velocity gradients, accelerations,
-  pressure, and a Bernoulli consistency residual from the converged spectrum.
+  Evaluate velocity components, velocity gradients, travelling-wave time
+  derivatives, pressure, and a Bernoulli consistency residual from the
+  converged spectrum.
 
   Modal sums are accumulated in long double and then converted to depth-based
   nondimensionalization. Time derivatives follow from
@@ -3468,8 +3747,8 @@ private:
     FlowPoint point;
     long double horizontal_velocity = 0.0L;
     long double vertical_velocity = 0.0L;
-    long double horizontal_gradient = 0.0L;
-    long double vertical_gradient = 0.0L;
+    long double du_dphase = 0.0L;
+    long double dv_dphase = 0.0L;
 
     /*
     Evaluate the native k-scaled spectral field.  The basis satisfies the bed
@@ -3497,9 +3776,9 @@ private:
           mode_value * coefficient * static_cast<long double>(basis.c) * cosine;
       vertical_velocity +=
           mode_value * coefficient * static_cast<long double>(basis.s) * sine;
-      horizontal_gradient -= mode_value * mode_value * coefficient *
+      du_dphase -= mode_value * mode_value * coefficient *
                              static_cast<long double>(basis.c) * sine;
-      vertical_gradient += mode_value * mode_value * coefficient *
+      dv_dphase += mode_value * mode_value * coefficient *
                            static_cast<long double>(basis.s) * cosine;
     }
 
@@ -3527,10 +3806,10 @@ private:
         static_cast<double>(horizontal_velocity) / sqrt_depth;
     point.vertical_velocity =
         static_cast<double>(vertical_velocity) / sqrt_depth;
-    point.horizontal_gradient =
-        static_cast<double>(horizontal_gradient) * sqrt_depth;
-    point.vertical_gradient =
-        static_cast<double>(vertical_gradient) * sqrt_depth;
+    point.du_dx = static_cast<double>(du_dphase) * sqrt_depth;
+    // Irrotationality gives du/dy = dv/dx, so the modal derivative of v with
+    // respect to phase supplies the second velocity-gradient component.
+    point.du_dy = static_cast<double>(dv_dphase) * sqrt_depth;
 
     /*
     A permanent travelling wave satisfies d/dt = -c*d/dx.  This identity gives
@@ -3539,8 +3818,8 @@ private:
     terms.  Irrotationality and incompressibility provide the cross derivatives.
     */
     point.potential_time_derivative = -celerity * point.horizontal_velocity;
-    point.horizontal_time_derivative = -celerity * point.horizontal_gradient;
-    point.vertical_time_derivative = -celerity * point.vertical_gradient;
+    point.horizontal_time_derivative = -celerity * point.du_dx;
+    point.vertical_time_derivative = -celerity * point.du_dy;
     /*
     Pressure is recovered from Bernoulli's equation in the moving frame.  The
     final residual recomputes the same constant in the stationary frame and is
@@ -3556,7 +3835,13 @@ private:
                point.vertical_velocity * point.vertical_velocity) -
         (bernoulli_constant - 0.5 * celerity * celerity);
 
-    point.valid = std::isfinite(point.pressure) &&
+    point.valid = std::isfinite(point.horizontal_velocity) &&
+                  std::isfinite(point.vertical_velocity) &&
+                  std::isfinite(point.du_dx) && std::isfinite(point.du_dy) &&
+                  std::isfinite(point.potential_time_derivative) &&
+                  std::isfinite(point.horizontal_time_derivative) &&
+                  std::isfinite(point.vertical_time_derivative) &&
+                  std::isfinite(point.pressure) &&
                   std::isfinite(point.bernoulli_residual);
     return point;
   }
@@ -3773,7 +4058,7 @@ private:
                      quantities.wave_power / std::pow(quantities.depth, 2.5));
 
     /*
-    Both coefficient sets are emitted with all 100 modes.  B_j describes the
+    Both coefficient sets are emitted with all N modes.  B_j describes the
     stream-function representation and E_j the cosine representation of the
     free surface used for continuous post-processing.
     */
@@ -3786,12 +4071,269 @@ private:
                    spectral_.surface_coefficients[mode]);
     }
 
+  }
+
+  /*
+  Describe one valid state-vector index for solver.res.  Global components use
+  their physical symbols; nodal and modal components include their mathematical
+  node/mode number.  The caller iterates only over 1..kSystemSize.
+  */
+  [[nodiscard]] std::string state_variable_description(int index) const {
+    assert(index >= 1 && index <= kSystemSize);
+    switch (index) {
+    case StateIndex::depth:
+      return "kd: mean water depth scaled by wavenumber";
+    case StateIndex::wave_height:
+      return "kH: crest-to-trough wave height scaled by wavenumber";
+    case StateIndex::period:
+      return "T*sqrt(gk): apparent wave period in native scaling";
+    case StateIndex::celerity:
+      return "c*sqrt(k/g): wave celerity in native scaling";
+    case StateIndex::eulerian_current:
+      return "u_E*sqrt(k/g): Eulerian-mean current";
+    case StateIndex::mass_transport_current:
+      return "u_M*sqrt(k/g): mass-transport mean current";
+    case StateIndex::wave_frame_speed:
+      return "U*sqrt(k/g): mean fluid speed relative to the wave";
+    case StateIndex::flux:
+      return "q*sqrt(k^3/g): wave-volume-flux variable";
+    case StateIndex::bernoulli:
+      return "r*k/g: Bernoulli constant";
+    default:
+      break;
+    }
+
+    if (index >= StateIndex::surface_begin &&
+        index <= surface_state_index(kFourierOrder)) {
+      const int node = index - StateIndex::surface_begin;
+      return "eta[" + std::to_string(node) +
+             "]: free-surface ordinate at X=" + std::to_string(node) +
+             "*pi/N";
+    }
+
+    const int mode = index - surface_state_index(kFourierOrder);
+    return "B[" + std::to_string(mode) +
+           "]: stream-function Fourier coefficient";
+  }
+
+  /*
+  Describe one valid residual row for the convergence audit.  The text mirrors
+  evaluate_residuals() and distinguishes the selected period/wavelength and
+  Eulerian/mass-transport closures at runtime.
+  */
+  [[nodiscard]] std::string residual_equation_description(int index) const {
+    assert(index >= 1 && index <= kSystemSize);
+    switch (index) {
+    case ResidualIndex::depth:
+      return "kH - kd*(H/d)";
+    case ResidualIndex::wave_specification:
+      return problem_.wave_specification == WaveSpecification::Period
+                 ? "kH - height_parameter*T^2"
+                 : "kH - 2*pi*height_parameter";
+    case ResidualIndex::dispersion:
+      return "c*T - 2*pi";
+    case ResidualIndex::eulerian_current:
+      return "u_E + U - c";
+    case ResidualIndex::mass_transport_current:
+      return "kd*(u_M + U - c) - q";
+    case ResidualIndex::prescribed_current:
+      return problem_.current_definition == CurrentDefinition::Eulerian
+                 ? "u_E - prescribed_current*sqrt(kd)"
+                 : "u_M - prescribed_current*sqrt(kd)";
+    case ResidualIndex::mean_surface:
+      return "trapezoidal zero-mean free-surface constraint";
+    case ResidualIndex::wave_height:
+      return "eta[0] - eta[N] - kH";
+    default:
+      break;
+    }
+
+    if (index >= kinematic_residual_index(0) &&
+        index <= kinematic_residual_index(kFourierOrder)) {
+      const int node = index - ResidualIndex::kinematic_begin;
+      return "kinematic free-surface equation at node m=" +
+             std::to_string(node);
+    }
+
+    const int node = index - dynamic_residual_index(0);
+    return "dynamic Bernoulli free-surface equation at node m=" +
+           std::to_string(node);
+  }
+
+  /*
+  Convert a verified Boolean condition to the fixed vocabulary used by
+  solver.res.  Returning string literals avoids allocation and guarantees that
+  every audit line uses exactly the same PASS/FAIL spelling.
+  */
+  [[nodiscard]] static const char *pass_fail(bool passed) noexcept {
+    return passed ? "PASS" : "FAIL";
+  }
+
+  /*
+  Write the solver-centric numerical audit: continuation history, independent
+  terminal verification, all state variables z[1..2N+10], and all residuals
+  F[1..2N+10].  The report is intentionally organized by continuation trial and
+  final equation group so it remains compact at fixed spectral order.
+  */
+  void write_solver_file(std::FILE *file) const {
+    std::fprintf(file, "# SOLVER AUDIT REPORT\n");
+    std::fprintf(file, "# Case: %s\n", problem_.title.c_str());
+    std::fprintf(file, "%s\n", method_description().c_str());
     std::fprintf(file,
-                 "\n\n# Numerical verification"
-                 "\n# Final Fourier order: %d"
-                 "\n# Collocation residual RMS: %.16e"
-                 "\n# Collocation residual max: %.16e\n",
-                 kFourierOrder, status_.residual_rms, status_.residual_max);
+                 "# This file records the complete nonlinear state, complete "
+                 "residual vector, continuation history, and independent final "
+                 "convergence checks.\n");
+
+    std::fprintf(file, "\n# Solver configuration\n");
+    std::fprintf(file, "Fourier order N                         %d\n",
+                 kFourierOrder);
+    std::fprintf(file, "Nonlinear unknowns                     %d\n",
+                 kSystemSize);
+    std::fprintf(file, "Nonlinear equations                    %d\n",
+                 kSystemSize);
+    std::fprintf(file, "Intermediate residual tolerance        %.16e\n",
+                 kConvergenceCriterion);
+    std::fprintf(file, "Final residual RMS tolerance           %.16e\n",
+                 kFinalResidualTolerance);
+    std::fprintf(file, "Final residual max tolerance           %.16e\n",
+                 kResidualMaximumFactor * kFinalResidualTolerance);
+    std::fprintf(file, "Off-grid spectral defect tolerance     %.16e\n",
+                 kSpectralDefectTolerance);
+    std::fprintf(file, "Target H/d                             %.16e\n",
+                 problem_.target_relative_height);
+    std::fprintf(file, "Current definition                     %s\n",
+                 current_name());
+    std::fprintf(file, "Prescribed current / sqrt(gd)          %.16e\n",
+                 problem_.current_value);
+
+    std::fprintf(file, "\n# Adaptive continuation history\n");
+    std::fprintf(file,
+                 "# trial       fraction       increment status  "
+                 "      residual_rms       residual_max    next_increment tangent\n");
+    for (const ContinuationTrace &trace : audit_.continuation_trials) {
+      std::fprintf(file,
+                   "%7d % .12e % .12e %-8s % .12e % .12e % .12e %s\n",
+                   trace.trial, trace.target_fraction,
+                   trace.attempted_increment,
+                   trace.accepted ? "ACCEPT" : "REJECT",
+                   trace.residual_rms, trace.residual_max,
+                   trace.next_increment,
+                   trace.tangent_available ? "YES" : "NO");
+    }
+    std::fprintf(file, "# Accepted continuation steps: %d\n",
+                 audit_.accepted_continuation_steps);
+    std::fprintf(file, "# Total continuation trials:   %d\n",
+                 audit_.total_continuation_trials);
+
+    std::fprintf(file, "\n# Independent final convergence proof\n");
+    std::fprintf(file,
+                 "Target continuation fraction reached       %s\n",
+                 pass_fail(audit_.target_fraction_reached));
+    std::fprintf(file, "Final state admissible                  %s\n",
+                 pass_fail(audit_.state_admissible));
+    std::fprintf(file, "All final residuals finite              %s\n",
+                 pass_fail(audit_.residual_finite));
+    std::fprintf(file, "All final Jacobian entries finite       %s\n",
+                 pass_fail(audit_.jacobian_finite));
+    std::fprintf(file, "Final residual sum of squares           %.16e\n",
+                 audit_.final_sum_squares);
+    std::fprintf(file, "Final residual L2 norm                  %.16e\n",
+                 audit_.final_l2_norm);
+    std::fprintf(file, "Final residual RMS                      %.16e\n",
+                 status_.residual_rms);
+    std::fprintf(file, "Required residual RMS <=                %.16e  %s\n",
+                 kFinalResidualTolerance,
+                 pass_fail(status_.residual_rms <= kFinalResidualTolerance));
+    std::fprintf(file, "Final maximum absolute residual         %.16e\n",
+                 status_.residual_max);
+    std::fprintf(file, "Required residual max <=                %.16e  %s\n",
+                 kResidualMaximumFactor * kFinalResidualTolerance,
+                 pass_fail(status_.residual_max <=
+                           kResidualMaximumFactor * kFinalResidualTolerance));
+    std::fprintf(file, "Index of maximum absolute residual      F[%d]\n",
+                 audit_.maximum_residual_index);
+    std::fprintf(file, "Equation with maximum residual          %s\n",
+                 residual_equation_description(
+                     audit_.maximum_residual_index).c_str());
+    std::fprintf(file, "Combined residual convergence test      %s\n",
+                 pass_fail(audit_.residual_test_passed));
+    std::fprintf(file, "Final scaled Newton correction solved   %s\n",
+                 pass_fail(audit_.final_linear_solve_succeeded));
+    std::fprintf(file, "Final scaled Newton correction RMS      %.16e\n",
+                 audit_.final_newton_correction_rms);
+    std::fprintf(file, "Final linear solver                     %s\n",
+                 linear_solver_name(status_.linear_solver));
+    std::fprintf(file, "Maximum between-node spectral defect    %.16e\n",
+                 status_.spectral_defect_max);
+    const bool spectral_pass =
+        std::isfinite(status_.spectral_defect_max) &&
+        status_.spectral_defect_max <= kSpectralDefectTolerance;
+    std::fprintf(file, "Spectral resolution check               %s\n",
+                 pass_fail(spectral_pass));
+    std::fprintf(file,
+                 "Overall nonlinear convergence            %s\n",
+                 pass_fail(audit_.target_fraction_reached &&
+                           audit_.state_admissible && audit_.residual_finite &&
+                           audit_.jacobian_finite &&
+                           audit_.residual_test_passed));
+    std::fprintf(file,
+                 "# The nonlinear convergence result is based on an independent "
+                 "re-evaluation of all %d equations at the final state. The "
+                 "spectral defect is a separate truncation-resolution check.\n",
+                 kSystemSize);
+
+    auto write_group = [&](const char *name, int first, int last) {
+      long double sum_squares = 0.0L;
+      double maximum = 0.0;
+      int maximum_index = first;
+      for (int i = first; i <= last; ++i) {
+        const double absolute = std::fabs(nonlinear_.residual[i]);
+        sum_squares += static_cast<long double>(absolute) *
+                       static_cast<long double>(absolute);
+        if (absolute > maximum) {
+          maximum = absolute;
+          maximum_index = i;
+        }
+      }
+      const int count = last - first + 1;
+      const double rms =
+          std::sqrt(static_cast<double>(sum_squares /
+                                        static_cast<long double>(count)));
+      std::fprintf(file,
+                   "%-34s F[%3d..%3d] count=%3d RMS=% .16e MAX=% .16e "
+                   "at F[%d]\n",
+                   name, first, last, count, rms, maximum, maximum_index);
+    };
+
+    std::fprintf(file, "\n# Residual groups\n");
+    write_group("Global constraints", 1, 8);
+    write_group("Kinematic surface equations",
+                kinematic_residual_index(0),
+                kinematic_residual_index(kFourierOrder));
+    write_group("Dynamic surface equations", dynamic_residual_index(0),
+                dynamic_residual_index(kFourierOrder));
+
+    std::fprintf(file, "\n# Complete final nonlinear state vector z[1..%d]\n",
+                 kSystemSize);
+    std::fprintf(file, "# index              value  variable and definition\n");
+    for (int i = 1; i <= kSystemSize; ++i) {
+      std::fprintf(file, "z[%3d] = % .17e  %s\n", i,
+                   nonlinear_.state[i], state_variable_description(i).c_str());
+    }
+
+    std::fprintf(file, "\n# Complete final residual vector F[1..%d]\n",
+                 kSystemSize);
+    std::fprintf(file,
+                 "# index             residual       absolute_value  "
+                 "fraction_of_max_limit  equation\n");
+    const double maximum_limit = kResidualMaximumFactor * kFinalResidualTolerance;
+    for (int i = 1; i <= kSystemSize; ++i) {
+      const double absolute = std::fabs(nonlinear_.residual[i]);
+      std::fprintf(file, "F[%3d] = % .17e  % .17e  % .9e  %s\n", i,
+                   nonlinear_.residual[i], absolute,
+                   absolute / maximum_limit,
+                   residual_equation_description(i).c_str());
+    }
   }
 
   /*
@@ -3810,15 +4352,20 @@ private:
     std::fprintf(file, "\n# X/d, eta/d, & check of surface pressure\n");
     std::fprintf(file, "\n0.\t0.\t0. # Dummy point to scale plot\n");
 
-    for (int sample = -grid_.surface_point_count / 2;
-         sample <= grid_.surface_point_count / 2; ++sample) {
+    for (int sample = -discretization_.surface_point_count / 2;
+         sample <= discretization_.surface_point_count / 2; ++sample) {
       const double sample_value = static_cast<double>(sample);
-      const double point_count = static_cast<double>(grid_.surface_point_count);
+      const double point_count =
+          static_cast<double>(discretization_.surface_point_count);
       const double phase = 4.0 * kPi * sample_value * std::fabs(sample_value) /
                            (point_count * point_count);
       const double eta = surface_elevation(phase);
       const FlowPoint point = evaluate_flow_point(phase, eta);
-      std::fprintf(file, "\n%8.4lf\t%7.4f\t%7.0e", phase / quantities.depth,
+      if (!point.valid) {
+        throw std::runtime_error(
+            "non-finite free-surface post-processing state");
+      }
+      std::fprintf(file, "\n%8.4f\t%7.4f\t%7.0e", phase / quantities.depth,
                    1.0 + eta / quantities.depth, point.pressure);
     }
     std::fprintf(file, "\n\n");
@@ -3856,37 +4403,43 @@ private:
         file,
         "\n# At a fixed physical x, X=x-c*t decreases as time increases.\n");
 
-    for (int profile = 0; profile <= grid_.profile_count; ++profile) {
+    for (int profile = 0; profile <= discretization_.profile_count;
+         ++profile) {
       const double phase = kPi * static_cast<double>(profile) /
-                           static_cast<double>(grid_.profile_count);
+                           static_cast<double>(discretization_.profile_count);
       const double eta = surface_elevation(phase);
       std::fprintf(file, "\n\n# X/d = %8.7f, Phase = %6.1f\n",
                    phase / quantities.depth, phase * 180.0 / kPi);
 
-      for (int point_index = 0; point_index <= grid_.vertical_point_count;
+      for (int point_index = 0;
+           point_index <= discretization_.vertical_point_count;
            ++point_index) {
         const double vertical_output =
             static_cast<double>(point_index) * (1.0 + eta / quantities.depth) /
-            static_cast<double>(grid_.vertical_point_count);
+            static_cast<double>(discretization_.vertical_point_count);
         const FlowPoint point = evaluate_flow_point(
             phase, quantities.depth * (vertical_output - 1.0));
+        if (!point.valid) {
+          throw std::runtime_error(
+              "non-finite flow-field post-processing state");
+        }
         std::fprintf(file,
                      "\n% 10.6f % 10.6f % 10.6f % 10.6f % 10.6f % 10.6f % "
                      "10.6f % 10.6f % 10.6f",
                      vertical_output, point.horizontal_velocity,
                      point.vertical_velocity, point.potential_time_derivative,
                      point.horizontal_time_derivative,
-                     point.vertical_time_derivative, point.horizontal_gradient,
-                     point.vertical_gradient, point.bernoulli_residual);
+                     point.vertical_time_derivative, point.du_dx,
+                     point.du_dy, point.bernoulli_residual);
       }
     }
     std::fprintf(file, "\n\n");
   }
 
   /*
-  Generate solution.res, surface.res, and flowfield.res from the verified state.
+  Generate all four result files from the verified state.
 
-  Numerical solving is complete before this routine begins. Output generation is
+  Numerical solving is complete before this routine begins.  Output generation is
   therefore read-only and cannot alter convergence state or spectral resolution.
   */
   void write_outputs(const OutputHandles &output) const {
@@ -3895,6 +4448,7 @@ private:
     std::fprintf(stdout, "\n\n# Solution summary:\n\n");
     write_finite_summary(stdout);
     write_solution_file(output.solution, quantities);
+    write_solver_file(output.solver);
     write_surface_file(output.surface, quantities);
     write_flowfield_file(output.flowfield, quantities);
   }
@@ -3906,25 +4460,28 @@ private:
   */
 
   /*
-  Allocate every persistent numerical array exactly once for the fixed 100-mode
-  system.  No dynamic allocation occurs inside continuation, Newton iteration,
-  residual evaluation, Jacobian assembly, or output sampling.
+  Allocate persistent numerical storage for the fixed-order system before the
+  solve begins.  Core state, residual, Jacobian, scaling, and predictor arrays
+  are then reused throughout continuation.  The continuation audit vector is
+  reserved for its configured maximum number of trials.  Rare QR and regularized
+  fallback paths retain their own short-lived high-precision scratch buffers.
 
   One extra element is retained because the mathematical state and residual
   numbering begin at one.  Dense matrices use the corresponding one-based row
   and column convention through DenseMatrix.
   */
   void allocate_workspace() {
-
     const std::size_t vector_size =
         static_cast<std::size_t>(kSystemSize + 1);
-    const std::size_t spectral_size = static_cast<std::size_t>(kFourierOrder + 1);
-    const std::size_t table_side = spectral_size;
+    const std::size_t spectral_size =
+        static_cast<std::size_t>(kSurfaceNodeCount);
+    const std::size_t table_size = spectral_size * spectral_size;
 
     spectral_.surface_coefficients.assign(spectral_size, 0.0);
     spectral_.stream_coefficients.assign(spectral_size, 0.0);
-    spectral_.cosine_table.reserve(table_side * table_side);
-    spectral_.sine_table.reserve(table_side * table_side);
+    spectral_.cosine_table.assign(table_size, 0.0);
+    spectral_.sine_table.assign(table_size, 0.0);
+    build_spectral_tables();
 
     nonlinear_.state.assign(vector_size, 0.0);
     nonlinear_.residual.assign(vector_size, 0.0);
@@ -3940,20 +4497,25 @@ private:
     workspace_.row_scale.assign(vector_size, 0.0);
     workspace_.column_scale.assign(vector_size, 0.0);
     workspace_.model_residual.assign(vector_size, 0.0);
-    workspace_.pivot.clear();
-    workspace_.pivot.reserve(vector_size);
+    workspace_.pivot.assign(vector_size, 0);
     workspace_.predictor_coefficients.assign(spectral_size, 0.0L);
+
+    audit_ = SolverAudit{};
+    audit_.continuation_trials.reserve(kMaximumContinuationTrials);
   }
 
   /*
   Execute adaptive continuation to the exact target H/d.  The fixed spectral
   order never changes.  After convergence, the off-grid defect is evaluated as
   an internal resolution check; an elevated defect produces a warning but does
-  not alter the user-specified production discretization.
+  not alter the fixed production discretization.
   */
   [[nodiscard]] bool solve_wave() {
-    const ContinuationResult continuation = continue_to_target(
-        grid_.continuation_steps, "spectral continuation", true);
+    const ContinuationResult continuation = continue_to_target();
+    audit_.accepted_continuation_steps = continuation.accepted_steps;
+    audit_.total_continuation_trials = continuation.trials;
+    audit_.target_fraction_reached = continuation.converged;
+
     if (!continuation.converged) {
       std::fprintf(stderr,
                    "\nFatal: adaptive continuation failed before reaching "
@@ -3967,12 +4529,55 @@ private:
                  "%d total trials.\n",
                  continuation.accepted_steps, continuation.trials);
 
+    /*
+    Re-evaluate the complete residual system at the immutable final state. This
+    independent final pass is the source of the residual vector printed in
+    solver.res and prevents the audit from reporting the previous Newton base
+    residual after an accepted terminal correction.
+    */
+    audit_.final_sum_squares = evaluate_residuals(nonlinear_.residual);
+    update_residual_diagnostics(nonlinear_.residual, audit_.final_sum_squares);
+    audit_.final_l2_norm = std::sqrt(std::max(0.0, audit_.final_sum_squares));
+    audit_.state_admissible = state_is_admissible();
+    audit_.residual_finite = residual_is_finite(nonlinear_.residual);
+    audit_.residual_test_passed = residual_converged(kFinalResidualTolerance);
+
+    audit_.maximum_residual_index = 1;
+    for (int i = 2; i <= kSystemSize; ++i) {
+      if (std::fabs(nonlinear_.residual[i]) >
+          std::fabs(nonlinear_.residual[audit_.maximum_residual_index])) {
+        audit_.maximum_residual_index = i;
+      }
+    }
+
+    for (int i = 1; i <= kSystemSize; ++i)
+      workspace_.base_state[i] = nonlinear_.state[i];
+    assemble_jacobian(workspace_.jacobian);
+    audit_.jacobian_finite = jacobian_is_finite(workspace_.jacobian);
+    if (audit_.jacobian_finite && audit_.residual_finite) {
+      build_scaled_linearization(workspace_.jacobian, nonlinear_.residual);
+      audit_.final_linear_solve_succeeded = solve_scaled_newton_system();
+      if (audit_.final_linear_solve_succeeded) {
+        audit_.final_newton_correction_rms =
+            rms_norm(workspace_.newton_direction);
+      }
+    }
+
+    if (!(audit_.state_admissible && audit_.residual_finite &&
+          audit_.jacobian_finite && audit_.residual_test_passed)) {
+      std::fprintf(stderr,
+                   "Fatal: final independent convergence verification failed. "
+                   "No result files were written.\n");
+      return false;
+    }
+
     update_spectral_defect();
     if (!std::isfinite(status_.spectral_defect_max) ||
         status_.spectral_defect_max > kSpectralDefectTolerance) {
       std::fprintf(stderr,
-                   "Warning: the fixed 100-mode solution has an elevated "
-                   "internal between-node boundary defect.\n");
+                   "Warning: the fixed %d-mode solution has an elevated "
+                   "internal between-node boundary defect.\n",
+                   kFourierOrder);
     }
     return true;
   }
@@ -4047,7 +4652,7 @@ public:
     std::fprintf(stdout,
                  "Fixed Fourier order: %d\n"
                  "Adaptive continuation seed: %d increments\n",
-                 kFourierOrder, grid_.continuation_steps);
+                 kFourierOrder, discretization_.initial_continuation_steps);
 
     /*
     Allocate, solve, and verify before creating any result file.  This ordering
@@ -4060,19 +4665,21 @@ public:
     }
 
     const fs::path solution_path = io_directory / "solution.res";
+    const fs::path solver_path = io_directory / "solver.res";
     const fs::path surface_path = io_directory / "surface.res";
     const fs::path flowfield_path = io_directory / "flowfield.res";
 
-    FilePtr solution_file{std::fopen(solution_path.string().c_str(), "w")};
-    FilePtr surface_file{std::fopen(surface_path.string().c_str(), "w")};
-    FilePtr flowfield_file{std::fopen(flowfield_path.string().c_str(), "w")};
-    if (!solution_file || !surface_file || !flowfield_file) {
+    FilePtr solution_file = open_output_file(solution_path);
+    FilePtr solver_file = open_output_file(solver_path);
+    FilePtr surface_file = open_output_file(surface_path);
+    FilePtr flowfield_file = open_output_file(flowfield_path);
+    if (!solution_file || !solver_file || !surface_file || !flowfield_file) {
       std::perror("output file");
       return 4;
     }
 
-    const OutputHandles output{solution_file.get(), surface_file.get(),
-                               flowfield_file.get()};
+    const OutputHandles output{solution_file.get(), solver_file.get(),
+                               surface_file.get(), flowfield_file.get()};
     write_outputs(output);
 
     /*
@@ -4081,10 +4688,12 @@ public:
     */
     const bool solution_closed =
         close_output_file(solution_file, "solution.res");
+    const bool solver_closed = close_output_file(solver_file, "solver.res");
     const bool surface_closed = close_output_file(surface_file, "surface.res");
     const bool flowfield_closed =
         close_output_file(flowfield_file, "flowfield.res");
-    if (!(solution_closed && surface_closed && flowfield_closed)) {
+    if (!(solution_closed && solver_closed && surface_closed &&
+          flowfield_closed)) {
       return 4;
     }
 
@@ -4092,8 +4701,10 @@ public:
                  "\nFinished. Output files:\n"
                  "  %s\n"
                  "  %s\n"
+                 "  %s\n"
                  "  %s\n",
                  fs::absolute(solution_path).string().c_str(),
+                 fs::absolute(solver_path).string().c_str(),
                  fs::absolute(surface_path).string().c_str(),
                  fs::absolute(flowfield_path).string().c_str());
     return 0;
