@@ -1225,7 +1225,13 @@ The nonlinear solver is therefore the preferred method when free-surface shape, 
 
 ***
 
-## 13. References
+## 13. Dedication
+
+This work is dedicated to **Dr John D. Fenton** (1945-), Australian civil engineer, hydraulic engineer, and applied mathematician, in recognition of his distinguished and continuing scientific contributions to mathematical hydraulics, computational fluid mechanics, and nonlinear water-wave theory. Further information, publications, technical resources, and software by Dr Fenton are available on his official website: [https://johndfenton.com](https://johndfenton.com).
+
+***
+
+## 14. References
 
 1. **Fenton, J. D. (1999).** *Numerical methods for nonlinear waves.* In P. L.-F. Liu (ed.), *Advances in Coastal and Ocean Engineering*, Vol. 5, World Scientific, Singapore, pp. 241–324.  
    **Relevance:** Review of numerical methods for nonlinear waves, including the Fourier approximation method for steadily propagating periodic waves and more general propagation methods.  
