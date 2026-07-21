@@ -1179,9 +1179,10 @@ Numba is optional. If Numba is unavailable, the solver falls back to the pure-Nu
 ### 11.2 Build the C++ GUI executable
 
 ```bash
-g++ fenton_gui.cpp -o fenton_gui.exe -O3 -std=c++20 -march=native ^
-  -lgdi32 -luser32 -lkernel32 -lcomctl32 ^
-  -static-libgcc -static-libstdc++ -mwindows -pthread
+g++ fenton_gui.cpp -o fenton_gui.exe -O3 -std=c++20 ^
+   -march=native -flto=auto -fopenmp -static -static-libgcc ^
+   -static-libstdc++ -mwindows -pthread ^
+   -lgdi32 -luser32 -lkernel32 -lcomctl32
 ```
 
 For reproducible no-current and current-case comparisons, keep the same CPU family, compiler family and optimization flags.
