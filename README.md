@@ -27,6 +27,7 @@ where $H$ is wave height, $T$ is the apparent period in the fixed frame, $d$ is 
 | --- | --- | --- |
 | Main GUI solver | `fenton_gui.py` | Python GUI nonlinear solver and report writer. |
 | Native GUI solver | `fenton_gui.cpp` | Windows C++ GUI implementation. |
+| Android app | `fenton.apk` | Fenton App for Android. |
 | Wavelength API | `function.py` | Callable wavelength function `L(H,T,d,Uc)`. |
 | Reference-style solver | `fourier.cpp` | Fenton-style standalone output files. |
 | Tables | `tables.py` | Batch wavelength-table generation. |
@@ -1157,6 +1158,7 @@ $$
 | Wavelength API | Provides callable `L(H,T,d,Uc)` for scripts and tables. |
 | Surrogates | Provides Pade, neural, symbolic-regression and effective-variable approximations. |
 | Excel/VBA support | Allows spreadsheet deployment of linear, nonlinear and surrogate methods. |
+| Android availability | Fenton App is also available as the installable package `fenton.apk`. |
 | Nomograms | Generates design charts for rapid engineering use. |
 
 ***
@@ -1204,6 +1206,41 @@ Use `function.py` when only the wavelength is required by another program or tab
 L(H, T, d, Uc)
 ```
 
+### 11.5 Fenton App for Android
+
+The **Fenton App for Android** is distributed as the universal release package `fenton.apk`. It supports Android 6.0 (API 23) and newer and includes ARM64, ARM32, x86 and x86-64 native libraries.
+
+#### Install `fenton.apk`
+
+1. **Obtain the complete APK.** Download `fenton.apk` directly to the phone, or copy it from a computer into the phone's **Download** folder. Make sure the filename still ends in `.apk`; some messaging and cloud-storage apps rename or incompletely transfer executable files.
+2. **Authorize the app that will open the APK.** Android grants local-install permission separately to each source application. Search Android Settings for **Install unknown apps**, **Install unknown applications** or **Installation sources**, select the browser or file manager that will open `fenton.apk`, and enable **Allow from this source**.
+3. **Use that same authorized application.** If permission was granted to the file manager, open the phone's file manager, navigate to **Download**, and tap `fenton.apk`. If permission was granted to the browser, open the completed download from that browser. Authorizing a browser does not authorize a file manager, and vice versa.
+4. **Approve the Android installer.** Tap **Install** and allow any device security scan to finish. When Android reports that installation is complete, tap **Open** or launch **Fenton Wave Solver** from the app list.
+5. **Optionally revoke the source permission.** After installation, **Allow from this source** can be disabled again without affecting the installed application.
+
+Disabling Google Play Protect is normally unnecessary and is not a substitute for the per-source **Allow from this source** permission. Keep Play Protect enabled unless the device administrator or Android itself provides a specific reason to change it.
+
+#### Troubleshooting installation
+
+| Message or symptom | Recommended action |
+| --- | --- |
+| **Installation canceled**, **Not allowed** or the installer immediately closes | Confirm that **Allow from this source** is enabled for the exact app currently opening the APK. File Manager, Files, Downloads, Chrome and other browsers each have separate permission settings. Return to the APK and try again after enabling it. |
+| The APK is visible but does not open | Move it to the local **Download** folder and open it with the system file manager. Confirm that its name is `fenton.apk`, not `fenton.apk.zip`, and that the transfer completed. |
+| **App not installed** while an older Fenton build is present | The installed copy may use another signing certificate or may be newer than the APK. Install a newer signed release, or uninstall the old copy before installing. Uninstalling removes that app's locally stored data. |
+| **Invalid package**, **Problem parsing the package** or a zero-byte/partial file | Delete the phone copy, download or transfer it again, and compare its size or SHA-256 checksum with the value published for that release. |
+| Installation is blocked on a work, school or supervised phone | A device-administrator policy may prohibit sideloading. Only the administrator can change that policy. |
+| Installation still fails | Check that the device runs Android 6.0 or newer, has adequate free storage, restart it, and retry from the system file manager. |
+
+Menu names vary between Android versions and manufacturers. A common path is **Settings > Apps > Special app access > Install unknown apps**, but using Settings search is usually faster.
+
+For advanced diagnosis with Android Platform Tools and USB debugging enabled, run:
+
+```bash
+adb install -r fenton.apk
+```
+
+This command prints the precise Android package-manager error when a graphical installer shows only a generic failure message. It is not required for normal installation.
+
 ***
 
 ## 12. Validity and numerical cautions
@@ -1228,7 +1265,7 @@ The nonlinear solver is therefore the preferred method when free-surface shape, 
 
 ## 13. Dedication
 
-This work is dedicated to **Dr John D. Fenton** (1945-), Australian civil engineer, hydraulic engineer, and applied mathematician, in recognition of his distinguished and continuing scientific contributions to mathematical hydraulics, computational fluid mechanics, and nonlinear water-wave theory. Further information, publications, technical resources, and software by Dr Fenton are available on his official website: [https://johndfenton.com](https://johndfenton.com).
+This work is dedicated to **Dr John D. Fenton** (1945-), Australian civil engineer, hydraulic engineer, and applied mathematician, in recognition of his distinguished and continuing scientific contributions to mathematical hydraulics, computational fluid mechanics, and nonlinear water-wave theory. Further information, publications, technical resources, and software by Dr Fenton are available on his official website: [www.johndfenton.com](https://www.johndfenton.com).
 
 ***
 
