@@ -1,0 +1,26 @@
+Running file: /workspace/scratch/37bd3159cdf5/final_production/fenton_gui.py
+SHA256: 397a8a90047eee52dd64175004c002b3c7a0e199d006de06b839fc67c57d0abb
+Python: 3.12.14; NumPy: 2.3.5; Numba active: True
+NumPy: H=3, T=9, d=5, Uc=0; N=50; PASS; verified_numerically; max|F|=2.914335e-16
+NumPy: H=3, T=9, d=5, Uc=1; N=50; PASS; verified_numerically; max|F|=1.387779e-16
+NumPy: H=1, T=3, d=5, Uc=0; N=50; PASS; verified_numerically; max|F|=8.881784e-16
+NumPy: H=1, T=3, d=5, Uc=1; N=50; PASS; verified_numerically; max|F|=9.992007e-16
+NumPy: H=1, T=4, d=5, Uc=0; N=50; PASS; verified_numerically; max|F|=2.775558e-16
+NumPy: H=1, T=4, d=5, Uc=1; N=50; PASS; verified_numerically; max|F|=1.249001e-15
+NumPy: H=2, T=3, d=5, Uc=0; N=32; PASS; resolution_failure; max|F|=8.881784e-16
+NumPy: H=2, T=3, d=5, Uc=1; N=40; PASS; verified_numerically; max|F|=2.053913e-15
+NumPy: H=2, T=4, d=5, Uc=0; N=40; PASS; verified_numerically; max|F|=1.776357e-15
+NumPy: H=2, T=4, d=5, Uc=1; N=50; PASS; verified_numerically; max|F|=4.440892e-15
+NumPy: H=3, T=4, d=5, Uc=1; N=40; PASS; resolution_failure; max|F|=8.881784e-16
+Numba: H=3, T=9, d=5, Uc=0; N=50; PASS; verified_numerically; max|F|=3.885781e-16
+Numba: H=3, T=9, d=5, Uc=1; N=50; PASS; verified_numerically; max|F|=8.881784e-16
+Numba: H=1, T=3, d=5, Uc=0; N=50; PASS; verified_numerically; max|F|=1.609823e-15
+Numba: H=1, T=3, d=5, Uc=1; N=50; PASS; verified_numerically; max|F|=8.881784e-16
+Numba: H=1, T=4, d=5, Uc=0; N=50; PASS; verified_numerically; max|F|=8.881784e-16
+Numba: H=1, T=4, d=5, Uc=1; N=50; PASS; verified_numerically; max|F|=1.360023e-15
+Numba: H=2, T=3, d=5, Uc=0; N=32; PASS; resolution_failure; max|F|=1.443290e-15
+Numba: H=2, T=3, d=5, Uc=1; N=40; PASS; verified_numerically; max|F|=1.387779e-15
+Numba: H=2, T=4, d=5, Uc=0; N=40; PASS; verified_numerically; max|F|=8.881784e-16
+Numba: H=2, T=4, d=5, Uc=1; N=50; PASS; verified_numerically; max|F|=9.992007e-16
+Numba: H=3, T=4, d=5, Uc=1; N=40; PASS; resolution_failure; max|F|=8.326673e-16
+ALL SOLVER TESTS PASSED

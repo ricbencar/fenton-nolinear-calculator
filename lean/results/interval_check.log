@@ -1,0 +1,2 @@
+Signed interval arithmetic: 250 exact-rational sample families passed.
+Finite-state and output perturbations rejected; restored state accepted.

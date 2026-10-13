@@ -1,0 +1,443 @@
+{
+  "source_sha256": "397a8a90047eee52dd64175004c002b3c7a0e199d006de06b839fc67c57d0abb",
+  "functions": [
+    {
+      "name": "_collocation_intervals",
+      "line_start": 330,
+      "line_end": 349,
+      "sha256": "f502a6762684c93afa105375791e6635850a267065dfc039009bef455c69f877"
+    },
+    {
+      "name": "_np_trapz",
+      "line_start": 352,
+      "line_end": 365,
+      "sha256": "fab099fff8850a6343c5da9daf8cbaa131e5320fa6e7fb43268de65e760566cf"
+    },
+    {
+      "name": "_eqns_numba",
+      "line_start": 411,
+      "line_end": 485,
+      "sha256": "5fcc712eccedfa87619ada4de1404ca82179fa103dc3f0e867a2dcef81c2a5fe"
+    },
+    {
+      "name": "_compute_Y_and_B_numba",
+      "line_start": 489,
+      "line_end": 508,
+      "sha256": "fe3e701801aa37d2d5b3a4a380a6f4f5f70eeb8032f1f06ba8f45b432a0e4627"
+    },
+    {
+      "name": "_surface_keta_numba",
+      "line_start": 512,
+      "line_end": 518,
+      "sha256": "2129dcf851d4bc86ab3b190fd9158e1ae0f7f98c0c812ecd76a778bc05cddc49"
+    },
+    {
+      "name": "_point_numba",
+      "line_start": 522,
+      "line_end": 576,
+      "sha256": "602afb081e9130803cd3c552f2ac9ba1de5debe652f9fdd016cd74b6729ef3d4"
+    },
+    {
+      "name": "_runtime_diagnostics",
+      "line_start": 2374,
+      "line_end": 2385,
+      "sha256": "b98626008da709de6e4ce6b8b62adfb0630b7bda9d32a775f2391c7be0af25df"
+    },
+    {
+      "name": "_self_test",
+      "line_start": 2388,
+      "line_end": 2424,
+      "sha256": "735d6d32d44f09fdf29b3b894c95911b1b97a766ba03484f2509f801b25d1394"
+    },
+    {
+      "name": "__init__",
+      "line_start": 248,
+      "line_end": 254,
+      "sha256": "38c1b48437b63df3b8b61badabbdb49df9439a828aaf383680b80bb35cd199d0"
+    },
+    {
+      "name": "coerce",
+      "line_start": 257,
+      "line_end": 258,
+      "sha256": "d1970fd55249ca1ed3fb24d0a9e236160e3429b5c178c56f7debe28b7a93a2df"
+    },
+    {
+      "name": "__add__",
+      "line_start": 260,
+      "line_end": 262,
+      "sha256": "1bd1ab3078e9f7094c019bdab6fdd8cff442b332160e354ef5bfa0f36566bd6b"
+    },
+    {
+      "name": "__neg__",
+      "line_start": 266,
+      "line_end": 267,
+      "sha256": "f2ed624de4d1532f3d2043ae380f62a6d7c3a5e29f57f0bc870a8657ed013f27"
+    },
+    {
+      "name": "__sub__",
+      "line_start": 269,
+      "line_end": 270,
+      "sha256": "0adc5604aa0b0a5ef51f5b529918767741133785b0a29d80f245a2d0549cdad0"
+    },
+    {
+      "name": "__rsub__",
+      "line_start": 272,
+      "line_end": 273,
+      "sha256": "1c2b73e94965f6f7129bfa0f93d49d7d8d0468d0ecda0f218cc3c43877f037b6"
+    },
+    {
+      "name": "__mul__",
+      "line_start": 275,
+      "line_end": 279,
+      "sha256": "f093125fcf64281bb0e29b06114fa6731d7fa6868f3fb7c5f617d5bec4846bf8"
+    },
+    {
+      "name": "__truediv__",
+      "line_start": 283,
+      "line_end": 288,
+      "sha256": "5f6c9f118cef385aa8ea873b2cd9231bee103ef1caa24a7f3dc77443bb801a6b"
+    },
+    {
+      "name": "__rtruediv__",
+      "line_start": 290,
+      "line_end": 291,
+      "sha256": "9e580a4726a97e617fbb6f0e4e5f3bc04703a0eb1bc5cb79e62c95c60b5bbbcf"
+    },
+    {
+      "name": "square",
+      "line_start": 293,
+      "line_end": 296,
+      "sha256": "e22184946714f05003eff1f904066a9b7341ce52ffe1d9acc0d244e01a61a3f0"
+    },
+    {
+      "name": "__pow__",
+      "line_start": 298,
+      "line_end": 307,
+      "sha256": "69f2ebbdfedac240934fdc0c822fe673c63efe3bb04ab26c645df114c6be5279"
+    },
+    {
+      "name": "exp",
+      "line_start": 309,
+      "line_end": 311,
+      "sha256": "87194adc72b995966b6e308ef7b62ad122dd358ae0d61e5af4a16f59aa8e3a82"
+    },
+    {
+      "name": "sqrt",
+      "line_start": 313,
+      "line_end": 317,
+      "sha256": "62af05bd2a707d8d098ed8432455e63bc132ca8c31d0d1cf596a97a5f6222c87"
+    },
+    {
+      "name": "magnitude",
+      "line_start": 319,
+      "line_end": 320,
+      "sha256": "094523191246ca712c36634b8fe44b8678f892625b9b299fc5e76e8af6f6c126"
+    },
+    {
+      "name": "record",
+      "line_start": 322,
+      "line_end": 323,
+      "sha256": "6473dad2c9d030c31515ce869fdea170256c261db7c1129835a2570cfd89a81c"
+    },
+    {
+      "name": "__init__",
+      "line_start": 608,
+      "line_end": 731,
+      "sha256": "76d3579ab0568a80ea9ccf675163faa069ac9bbfcb9ad9dfb6971979f76d5858"
+    },
+    {
+      "name": "_init_linear",
+      "line_start": 735,
+      "line_end": 781,
+      "sha256": "f709a83123a477addd94976510c98fd1556fcb2d837795ef0dd8f11643522d89"
+    },
+    {
+      "name": "_eqns",
+      "line_start": 783,
+      "line_end": 864,
+      "sha256": "f01cbf59c87c690c1e871f7af9c4430d38d2db5ad7e5729230c2c79ba1db2d57"
+    },
+    {
+      "name": "_jacobian",
+      "line_start": 865,
+      "line_end": 908,
+      "sha256": "9b3437ffab649b4c19197f5dee4579316563d8f987064836bf230d0b10448fe5"
+    },
+    {
+      "name": "_svd_solve",
+      "line_start": 910,
+      "line_end": 940,
+      "sha256": "afb4a9f14b0ae2c6135211976ae042c75cdf28874131a5be2a20466d3275f139"
+    },
+    {
+      "name": "_newton",
+      "line_start": 944,
+      "line_end": 999,
+      "sha256": "07dc9d2897a69c770d5b8410f5311391ca19afe59c3d3446c53fc22d9187723d"
+    },
+    {
+      "name": "_residual_max",
+      "line_start": 1001,
+      "line_end": 1008,
+      "sha256": "6815fb236fa625c468c9197208ce4e58898e145fc79b08725a50ba0cdaa73c32"
+    },
+    {
+      "name": "_compute_Y_and_B",
+      "line_start": 1011,
+      "line_end": 1031,
+      "sha256": "e3d8e2e2562617efd18bbf26c151cd9026979bad8d0c4805e7f9b122943f6bd5"
+    },
+    {
+      "name": "_surface_keta",
+      "line_start": 1033,
+      "line_end": 1046,
+      "sha256": "f16a62aeae8e9c5fbcf502deb0177f80bbcc0df169e53462f99700a24f72a73c"
+    },
+    {
+      "name": "_point",
+      "line_start": 1048,
+      "line_end": 1120,
+      "sha256": "65ec901d3237de88485ca5cf941360892a79ad8c22ea9e40b7f889fb84156784"
+    },
+    {
+      "name": "solve",
+      "line_start": 1124,
+      "line_end": 1167,
+      "sha256": "c963d8e3cc24491a848d392fd4f6dd9f5598cf8ffdf90ee2447247c0f0329637"
+    },
+    {
+      "name": "_solve_at_order",
+      "line_start": 1169,
+      "line_end": 1370,
+      "sha256": "9cd15ac2457cca32edfe2f7832a35bad193d20d00a606a7c6dda82e35cb0c60c"
+    },
+    {
+      "name": "_phase_quantity",
+      "line_start": 1372,
+      "line_end": 1383,
+      "sha256": "fddf32e953cf7bc4408f7027a049dae4538fc56673ef1905f40ebfceb0648257"
+    },
+    {
+      "name": "_phase_maximum",
+      "line_start": 1385,
+      "line_end": 1414,
+      "sha256": "27cb0fff325bf7fb255c5571a0013d64dd2307f6d173f28437deaf26930a31b9"
+    },
+    {
+      "name": "_compute_extrema",
+      "line_start": 1416,
+      "line_end": 1422,
+      "sha256": "e358e6bc24eb117a9fe848589539ad809b4c09207e70fb5328001489290fcfc4"
+    },
+    {
+      "name": "_defining_integrals",
+      "line_start": 1424,
+      "line_end": 1453,
+      "sha256": "e086a8c72c53bd0ab36a1bae032d466c65e829fced5d40d0c8f78628b5860f75"
+    },
+    {
+      "name": "_verify_finite_system",
+      "line_start": 1455,
+      "line_end": 1535,
+      "sha256": "6f491dbd913b7894972958ef6cdf83796e741d15ddb2a1539265a003921b710c"
+    },
+    {
+      "name": "_verify_accuracy",
+      "line_start": 1537,
+      "line_end": 1604,
+      "sha256": "a4634242ab229635be63ee1389a321cd0248afe3c07e36f4d69fbed84821bb4e"
+    },
+    {
+      "name": "get_kinematics",
+      "line_start": 1606,
+      "line_end": 1637,
+      "sha256": "dd49879ab879613c6e08dabde9a7bfa71c2e0347bb9c97ad677415b74581db6a"
+    },
+    {
+      "name": "_mean_square_bed_orbital_velocity",
+      "line_start": 1639,
+      "line_end": 1666,
+      "sha256": "a9a4f4ab5d5f5fbbc25e28d250bf618ab1e8914822845d3f320b3039c28098a9"
+    },
+    {
+      "name": "_momentum_flux_S_depth",
+      "line_start": 1671,
+      "line_end": 1705,
+      "sha256": "cc60b4743cd033262ecc08544e2c5fc30e5eeba3c71f3219df9849b1997697ba"
+    },
+    {
+      "name": "_calc_integral_props_cpp",
+      "line_start": 1707,
+      "line_end": 1795,
+      "sha256": "a086eb621c33065e68820c75577a25cce7f21a349db360fb279c15b3b3f00dda"
+    },
+    {
+      "name": "__init__",
+      "line_start": 1803,
+      "line_end": 1858,
+      "sha256": "043814af9601e7a29257f64ae614da05bd59e00c2d9bf3cd4455426f4c3af0bc"
+    },
+    {
+      "name": "show_context_menu",
+      "line_start": 1860,
+      "line_end": 1861,
+      "sha256": "5d2bbd2fc8807cbdf9f077ed7fe91c1dea34c47f5f33ccb926047c7236f9645a"
+    },
+    {
+      "name": "copy_to_clipboard",
+      "line_start": 1863,
+      "line_end": 1869,
+      "sha256": "cabcae40e17b4fa996029ce2246db45593c9411d9e84ae3f448ca7b5548d31b0"
+    },
+    {
+      "name": "select_all",
+      "line_start": 1871,
+      "line_end": 1872,
+      "sha256": "67eff58d46a249dfefcb880a450612d1b783669568a767c022ee311a7f58da1c"
+    },
+    {
+      "name": "log",
+      "line_start": 1874,
+      "line_end": 1889,
+      "sha256": "b352eaa82c028621bd86963ea73a1dfc703bf8da80c0bb3278cb1dbfbd12075b"
+    },
+    {
+      "name": "_finalize_error",
+      "line_start": 1891,
+      "line_end": 1914,
+      "sha256": "a35028233f8a9630564309f038b1f376105a68ca5df8edafcff7f9cc5f4c1749"
+    },
+    {
+      "name": "run_calculation",
+      "line_start": 1916,
+      "line_end": 1945,
+      "sha256": "04ba8b744e29321cc0e3d5e6fc7386a7ed2ceda78d905010890db2170c3cdcfb"
+    },
+    {
+      "name": "_solve_in_background",
+      "line_start": 1948,
+      "line_end": 1964,
+      "sha256": "6ea1464814b4ca4fcb0eae1c22e93a652bf6b163fca43a6767d0eea1ca584bf3"
+    },
+    {
+      "name": "_finalize_output",
+      "line_start": 1967,
+      "line_end": 2373,
+      "sha256": "9a02210ae256d28e76f2a28a79b8c81dbaa301d7e76aad44141e4c41405d9d29"
+    },
+    {
+      "name": "exact",
+      "line_start": 249,
+      "line_end": 250,
+      "sha256": "a01100dfdfbd48f8f42bddccfa5ee33b6eeae4a65ef32793b9c2f4ef818fc1aa"
+    },
+    {
+      "name": "njit",
+      "line_start": 386,
+      "line_end": 389,
+      "sha256": "e02e2cd3a7f9cbc9b987605459b200f344a97131acce4aae3ab8fae41a509214"
+    },
+    {
+      "name": "average_integral",
+      "line_start": 1445,
+      "line_end": 1446,
+      "sha256": "8f0498f5f423379d870de86ce87c2090ee5322b3c0ef4e6bcffb218753077998"
+    },
+    {
+      "name": "log_wrapper",
+      "line_start": 1981,
+      "line_end": 1982,
+      "sha256": "f69782ac2e79574da8a0f495af3b6c9624e82b5a6d637e3c5b736c4e57367e3c"
+    },
+    {
+      "name": "_solver_status",
+      "line_start": 1988,
+      "line_end": 2000,
+      "sha256": "07d50b118fd731e4647a8f1b5adbb99ff47c0fce4c4bd36aa3bef4e76ca8d283"
+    },
+    {
+      "name": "hline",
+      "line_start": 2033,
+      "line_end": 2034,
+      "sha256": "691ca45348a25bdb418d191fd406a4e308370e59899d0ec59d73c70ba092dbe5"
+    },
+    {
+      "name": "box_title",
+      "line_start": 2036,
+      "line_end": 2039,
+      "sha256": "9fbcd331f0c325a6cb8b5240bb2681c2f170894da8adadddd445b5ce3eadcd97"
+    },
+    {
+      "name": "box_text",
+      "line_start": 2041,
+      "line_end": 2045,
+      "sha256": "85b88285b8cdf1830c0343716007a9d148ffa6287b9b086e99db36e5c15837cc"
+    },
+    {
+      "name": "fmt_float",
+      "line_start": 2047,
+      "line_end": 2068,
+      "sha256": "165e522d95b6766747dda3efbdaf6d4952e554a3701b12ecd7185dea6ca2b378"
+    },
+    {
+      "name": "fmt_cell",
+      "line_start": 2070,
+      "line_end": 2084,
+      "sha256": "70342282a6e71f608c1b195ca00144acbcfec4a2f50bf9cae144388b960413e2"
+    },
+    {
+      "name": "table_sep",
+      "line_start": 2086,
+      "line_end": 2091,
+      "sha256": "1d348473cb011c84285a7255ec64da8fdaca3e1ae4478c1f5e325d9ebe78bba6"
+    },
+    {
+      "name": "print_table",
+      "line_start": 2093,
+      "line_end": 2142,
+      "sha256": "235682714be629215ad6a7f2ccb4db646989f1f7debadb5b659fd35c3a787f02"
+    },
+    {
+      "name": "wc",
+      "line_start": 2177,
+      "line_end": 2178,
+      "sha256": "30cfbe8804491911f24a31ef038f200076160b5ef1b4ad4c71be013697fe866b"
+    },
+    {
+      "name": "report_celerity",
+      "line_start": 2196,
+      "line_end": 2199,
+      "sha256": "0ae781454a758f40d5dfb3495ea15230999f08a0727abdab67082725c44c02b7"
+    },
+    {
+      "name": "print_solution_flat",
+      "line_start": 2270,
+      "line_end": 2315,
+      "sha256": "ab1f51bd17e57123ef6c3d45d3373c2ee1de4eaaef84637286036b49d113409f"
+    },
+    {
+      "name": "_wrap",
+      "line_start": 387,
+      "line_end": 388,
+      "sha256": "58d5fe858c35043e3b1f22b47bcb253f535873e981d5bc065f542dd04cd032ec"
+    },
+    {
+      "name": "kJ",
+      "line_start": 2286,
+      "line_end": 2286,
+      "sha256": "65538dfbac2aac9626fcf3f1ae947ceaaad7e43bc5eea2d2cb703b50bd9ecc95"
+    },
+    {
+      "name": "kN",
+      "line_start": 2287,
+      "line_end": 2287,
+      "sha256": "2ea5bf8c180f9a5c8cf262423c804ec0ccfc7bf142a25993a23e580b29ecbea0"
+    },
+    {
+      "name": "kW",
+      "line_start": 2288,
+      "line_end": 2288,
+      "sha256": "b8691eaf7c5f7c4ee90b139c32fc2f0aab2059e9e1ec771d06e8b6befcffdbff"
+    }
+  ]
+}

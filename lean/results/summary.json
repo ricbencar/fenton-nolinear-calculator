@@ -1,0 +1,29 @@
+{
+  "source_sha256": "397a8a90047eee52dd64175004c002b3c7a0e199d006de06b839fc67c57d0abb",
+  "formal_theorems": {
+    "FentonProduction.lean": 62,
+    "NumericalCertificates.lean": 314,
+    "FiniteSystem.lean": 29,
+    "FiniteCertificates.lean": 420,
+    "ProductionAcceptance.lean": 13
+  },
+  "accepted_runs": 38,
+  "accuracy_rejected_runs": 4,
+  "physical_cases": 21,
+  "accepted_physical_cases": 19,
+  "interval_equations": 4348,
+  "interval_output_enclosures": 378,
+  "maximum_interval_residual": 2.177511643219887e-15,
+  "numerical_audit_exit_code": 0,
+  "report_check_exit_code": 0,
+  "interval_check_exit_code": 0,
+  "self_test_exit_code": 0,
+  "scope": "Lean model and recorded-bound proofs; independent runtime interval verification with a documented Python/Decimal implementation boundary.",
+  "lean_exit_codes": {
+    "formulas": 0,
+    "acceptance": 0,
+    "finite_model": 0,
+    "certificates": 0,
+    "finite_certificates": 0
+  }
+}

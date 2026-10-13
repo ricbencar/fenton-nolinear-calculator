@@ -1,0 +1,166 @@
++---------------------------------------------------------------------------------------------------------+
+|                               NONLINEAR WAVE HYDRODYNAMICS SOLVER (FENTON)                              |
++---------------------------------------------------------------------------------------------------------+
+|Wave height (H)             : 1 m                                                                        |
+|Wave period (τ)             : 9 s                                                                        |
+|Water depth (d)             : 10 m                                                                       |
+|Eulerian current ū₁         : -0.5 m/s (positive with wave propagation)                                  |
++---------------------------------------------------------------------------------------------------------+
+|Status: Finite-system and output accuracy checks passed.                                                 |
+|No current: N=50; max|F|=3.192e-16                                                                       |
+|Finite-system interval residual bound: 2.225e-16; nine output bounds checked.                            |
+|With current: N=50; max|F|=8.882e-16                                                                     |
+|Finite-system interval residual bound: 5.457e-16; nine output bounds checked.                            |
++---------------------------------------------------------------------------------------------------------+
+
++---------------------------------------------------------------------------------------------------------+
+|                                    CALCULATED HYDRODYNAMIC PARAMETERS                                   |
++---------------------------------------------------------------------------------------------------------+
+| PARAMETER                                  |       NO CURRENT |     WITH CURRENT | UNIT                 |
+|--------------------------------------------+------------------+------------------+----------------------|
+|--------------------------------------- INPUTS & REFERENCE SCALES ---------------------------------------|
+| Water depth (d)                            |         10.00000 |         10.00000 | m                    |
+| Wave height (H)                            |          1.00000 |          1.00000 | m                    |
+| Wave period (τ)                            |          9.00000 |          9.00000 | s                    |
+| H/d                                        |          0.10000 |          0.10000 | -                    |
+| τ√(g/d)                                    |          8.91257 |          8.91257 | -                    |
+|------------------------------------- DISPERSION & PHASE (GEOMETRY) -------------------------------------|
+| Wavelength (L)                             |         82.03538 |         76.62330 | m                    |
+| Wave number (k)                            |          0.07659 |          0.08200 | rad/m                |
+| kd                                         |          0.76591 |          0.82001 | -                    |
+| Angular frequency (ω)                      |          0.69813 |          0.69813 | rad/s                |
+| Celerity / phase speed (c)                 |          9.11504 |          8.51370 | m/s                  |
+| c/√(gd)                                    |          0.92045 |          0.85972 | -                    |
+| Crest elevation (ηc)                       |          0.54577 |          0.54210 | m                    |
+| Trough elevation (ηt)                      |         -0.45423 |         -0.45790 | m                    |
+|----------------------------------- MEAN FLOWS (FENTON SOLUTION-FLAT) -----------------------------------|
+| Eulerian current (ū₁)                      |          0.00000 |         -0.50000 | m/s                  |
+| Stokes current (ū₂)                        |          0.01340 |         -0.48644 | m/s                  |
+| Mean fluid speed (Ū)                       |          9.11504 |          9.01370 | m/s                  |
+|-------------------------------------- FLUXES & BERNOULLI CONSTANTS -------------------------------------|
+| Wave volume flux (q)                       |          0.13398 |          0.13556 | m²/s                 |
+| Volume flux (Q)                            |         91.01645 |         90.00144 | m²/s                 |
+| Bernoulli constant (R)                     |        139.65030 |        138.72974 | m²/s²                |
+| Reduced Bernoulli (r = R−g d)              |         41.58380 |         40.66324 | m²/s²                |
+|------------------------------- INTEGRAL QUANTITIES (PER UNIT CREST WIDTH) ------------------------------|
+| Kinetic energy (T)                         |          0.62586 |          1.83799 | kJ/m²                |
+| Potential energy (V)                       |          0.62376 |          0.62423 | kJ/m²                |
+| Total energy (E = T+V)                     |          1.24963 |          2.46222 | kJ/m²                |
+| Momentum flux (S)                          |       1353.18741 |       1334.31458 | kN/m                 |
+| Radiation stress (Sₓₓ)                     |          1.48910 |          3.87263 | kN/m                 |
+| Impulse (I)                                |          0.13733 |         -4.98605 | 10³ kg/(m·s)         |
+| Wave power (F)                             |          9.65432 |          7.42920 | kW/m                 |
+| Energy-flux velocity (F/E)ㅤ                |          7.72576 |          3.01727 | m/s                  |
+|------------------------------- KINEMATICS (EXTREMES / BED ORBITAL MOTION) ------------------------------|
+| Surface max |u| (estimated)                |          0.60251 |          0.98932 | m/s                  |
+| Bed max |u| (estimated)                    |          0.42831 |          0.88334 | m/s                  |
+| Surface max |aₓ| (estimated)               |          0.38820 |          0.41320 | m/s²                 |
+| Velocity asymmetry |uc|/|ut|               |          1.25363 |          0.10686 | -                    |
+| Mean square bed orbital vel ub²            |          0.08360 |          0.07970 | m²/s²                |
+| Bed orbital RMS velocity ub,rms            |          0.28914 |          0.28231 | m/s                  |
+|---------------------------------- NONLINEARITY / BREAKING DIAGNOSTICS ----------------------------------|
+| Miche breaking limit (Hmax)                |          7.50833 |          7.34516 | m                    |
+| Saturation (H/Hmax)                        |          0.13319 |          0.13614 | -                    |
+| Breaking status                            |      BELOW MICHE |      BELOW MICHE | -                    |
+| Ursell number (U)                          |          6.72980 |          5.87113 | -                    |
+| Regime (by d/L)                            |     Intermediate |     Intermediate | -                    |
++---------------------------------------------------------------------------------------------------------+
+
++---------------------------------------------------------------------------------------------------------+
+|                                        SOLUTION.RES (NO CURRENT)                                        |
++---------------------------------------------------------------------------------------------------------+
+|  # | PARAMETER                             |         value | adim param                |     adim value |
+|----+---------------------------------------+---------------+---------------------------+----------------|
+|  1 | Water depth                           |      10.00000 | d/d = 1                   |        1.00000 |
+|  2 | Wave length                           |      82.03538 | λ/d                       |        8.20354 |
+|  3 | Wave height                           |       1.00000 | H/d                       |        0.10000 |
+|  4 | Wave period                           |       9.00000 | τ√(g/d)                   |        8.91257 |
+|  5 | Wave speed                            |       9.11504 | c/√(gd)                   |        0.92045 |
+|  6 | Eulerian current                      |       0.00000 | ū₁/√(gd)                  |        0.00000 |
+|  7 | Stokes current                        |       0.01340 | ū₂/√(gd)                  |        0.00135 |
+|  8 | Mean fluid speed                      |       9.11504 | Ū/√(gd)                   |        0.92045 |
+|  9 | Wave volume flux, q = Ū d − Q         |       0.13398 | q/√(gd³)                  |        0.00135 |
+| 10 | Bernoulli constant, r = R − gd        |      41.58380 | r/gd                      |        0.42404 |
+| 11 | Volume flux                           |      91.01645 | Q/√(gd³)                  |        0.91909 |
+| 12 | Bernoulli constant                    |     139.65030 | R/gd                      |        1.42404 |
+| 13 | Momentum flux                         |    1353.18741 | S/ρgd²                    |        1.34621 |
+| 14 | Impulse                               |       0.13733 | I/(ρ√(gd³))               |        0.00135 |
+| 15 | Kinetic energy                        |       0.62586 | T/ρgd²                    |        0.00062 |
+| 16 | Potential energy                      |       0.62376 | V/ρgd²                    |        0.00062 |
+| 17 | Mean square of bed velocity           |       0.08360 | ub²/gd                    |        0.00085 |
+|    | (absolute)                            |               |                           |                |
+| 18 | Radiation stress                      |       1.48910 | S_xx/ρgd²                 |        0.00148 |
+| 19 | Wave power                            |       9.65432 | F/(ρg³ᐟ²d⁵ᐟ²)ㅤㅤ           |        0.00097 |
++---------------------------------------------------------------------------------------------------------+
+
++---------------------------------------------------------------------------------------------------------+
+|                                       SOLUTION.RES (WITH CURRENT)                                       |
++---------------------------------------------------------------------------------------------------------+
+|  # | PARAMETER                             |         value | adim param                |     adim value |
+|----+---------------------------------------+---------------+---------------------------+----------------|
+|  1 | Water depth                           |      10.00000 | d/d = 1                   |        1.00000 |
+|  2 | Wave length                           |      76.62330 | λ/d                       |        7.66233 |
+|  3 | Wave height                           |       1.00000 | H/d                       |        0.10000 |
+|  4 | Wave period                           |       9.00000 | τ√(g/d)                   |        8.91257 |
+|  5 | Wave speed                            |       8.51370 | c/√(gd)                   |        0.85972 |
+|  6 | Eulerian current                      |      -0.50000 | ū₁/√(gd)                  |       -0.05049 |
+|  7 | Stokes current                        |      -0.48644 | ū₂/√(gd)                  |       -0.04912 |
+|  8 | Mean fluid speed                      |       9.01370 | Ū/√(gd)                   |        0.91021 |
+|  9 | Wave volume flux, q = Ū d − Q         |       0.13556 | q/√(gd³)                  |        0.00137 |
+| 10 | Bernoulli constant, r = R − gd        |      40.66324 | r/gd                      |        0.41465 |
+| 11 | Volume flux                           |      90.00144 | Q/√(gd³)                  |        0.90884 |
+| 12 | Bernoulli constant                    |     138.72974 | R/gd                      |        1.41465 |
+| 13 | Momentum flux                         |    1334.31458 | S/ρgd²                    |        1.32744 |
+| 14 | Impulse                               |      -4.98605 | I/(ρ√(gd³))               |       -0.04912 |
+| 15 | Kinetic energy                        |       1.83799 | T/ρgd²                    |        0.00183 |
+| 16 | Potential energy                      |       0.62423 | V/ρgd²                    |        0.00062 |
+| 17 | Mean square of bed velocity           |       0.32970 | ub²/gd                    |        0.00336 |
+|    | (absolute)                            |               |                           |                |
+| 18 | Radiation stress                      |       3.87263 | S_xx/ρgd²                 |        0.00385 |
+| 19 | Wave power                            |       7.42920 | F/(ρg³ᐟ²d⁵ᐟ²)ㅤㅤ           |        0.00075 |
++---------------------------------------------------------------------------------------------------------+
+
++---------------------------------------------------------------------------------------------------------+
+|                                     PARAMETER DEFINITIONS & GLOSSARY                                    |
++---------------------------------------------------------------------------------------------------------+
+| TERM / SYMBOL  | MEANING                                                          | UNITS / NONDIM      |
+|----------------+------------------------------------------------------------------+---------------------|
+| d              | Still-water depth (bed to mean water level). Reference length    | m ; d/d=1           |
+|                | scale.                                                           |                     |
+| H              | Wave height (crest-to-trough).                                   | m ; H/d             |
+| τ              | Wave period.                                                     | s ; τ√(g/d)         |
+| L              | Wavelength (crest-to-crest).                                     | m ; L/d             |
+| k              | Wave number, k = 2π/L.                                           | rad/m               |
+| ω              | Angular frequency, ω = 2π/τ.                                     | rad/s               |
+| c              | Phase speed (celerity).                                          | m/s ; c/√(gd)       |
+| ηc, ηt         | Crest and trough elevations relative to still-water level.       | m                   |
+| ū₁             | Eulerian (depth-mean) current; ū₁ = Uc.                          | m/s ; ū₁/√(gd)      |
+| ū₂             | Stokes / mass-transport current from nonlinear solution.         | m/s ; ū₂/√(gd)      |
+| Ū              | Mean fluid speed (depth-mean).                                   | m/s ; Ū/√(gd)       |
+| Q              | Volume flux (depth-integrated).                                  | m²/s ; Q/√(gd³)     |
+| q              | Wave volume flux, q = Ū d − Q.                                   | m²/s ; q/√(gd³)     |
+| R              | Bernoulli constant.                                              | m²/s² ; R/(gd)      |
+| r              | Reduced Bernoulli constant r = R − g d.                          | m²/s² ; r/(gd)      |
+| S              | Momentum flux (moving frame).                                    | kN/m ; S/(ρgd²)     |
+| I              | Wave impulse per unit width.                                     | 10³ kg/(m·s) ;      |
+|                |                                                                  | I/(ρ√(gd³))         |
+| T              | Kinetic energy density.                                          | kJ/m² ; T/(ρgd²)    |
+| V              | Potential energy density.                                        | kJ/m² ; V/(ρgd²)    |
+| E              | Total energy density E = T + V.                                  | kJ/m²               |
+| F              | Wave power (energy flux).                                        | kW/m ;              |
+|                |                                                                  | F/(ρg³ᐟ²d⁵ᐟ²)ㅤ      |
+| Cg             | Energy-flux / energy-density ratio F/E.                          | m/s                 |
+| Sₓₓ            | Radiation stress component in wave direction.                    | kN/m ; Sₓₓ/(ρgd²)   |
+| ub²            | Mean square *orbital* bed velocity: ub² = <(ub(t) − ū₁)²>.       | m²/s² ; /gd         |
+|                | Non-negative by definition; computed by phase averaging.         |                     |
+| ub,rms         | Root-mean-square orbital bed velocity: ub,rms = √(ub²).          | m/s                 |
+| usurf,max      | Estimated maximum absolute surface horizontal velocity over      | m/s                 |
+|                | phase.                                                           |                     |
+| ubed,max       | Estimated maximum absolute bed horizontal velocity over phase.   | m/s                 |
+| a_x,max        | Maximum horizontal acceleration magnitude.                       | m/s²                |
+| Asymmetry      | Velocity asymmetry indicator |uc|/|ut|.                          | -                   |
+| Hmax           | Miche breaking limit used as stability diagnostic.               | m                   |
+| Ursell         | Ursell number, a shallow-water nonlinearity measure.             | -                   |
+| Regime         | Depth regime based on d/L (deep/intermediate/shallow).           | -                   |
++---------------------------------------------------------------------------------------------------------+
+

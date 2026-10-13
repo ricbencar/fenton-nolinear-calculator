@@ -1,0 +1,27 @@
+{
+  "python": {
+    "filename": "inputs/fenton_gui.py",
+    "sha256": "397a8a90047eee52dd64175004c002b3c7a0e199d006de06b839fc67c57d0abb"
+  },
+  "readme": {
+    "filename": "inputs/README.md",
+    "sha256": "59c9fc8bd679423c6be5db6272f8aa301a80fda8a64f73e9b926dde1ce186d68"
+  },
+  "references": [
+    {
+      "title": "Fenton (1988), The numerical solution of steady water wave problems",
+      "url": "https://www.johndfenton.com/Papers/Fenton88-The-numerical-solution-of-steady-water-wave-problems.pdf",
+      "scope": "Governing equations and Fourier collocation"
+    },
+    {
+      "title": "Fenton (1990), Nonlinear wave theories, online edition, section 7",
+      "url": "https://www.johndfenton.com/Papers/Fenton90b-Nonlinear-wave-theories.pdf",
+      "scope": "Integral properties with current"
+    },
+    {
+      "title": "Fenton, Instructions for FOURIER, CNOIDAL and STOKES, 31 October 2022",
+      "url": "https://www.johndfenton.com/Steady-waves/Instructions.pdf",
+      "scope": "Appendices A, B.3, B.4, B.6; conventions, kinematics and surface transform"
+    }
+  ]
+}

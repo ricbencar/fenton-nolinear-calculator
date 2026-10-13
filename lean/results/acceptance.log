@@ -1,0 +1,15 @@
+'ProductionAcceptance.budget_positive' depends on axioms: [propext, Classical.choice, Quot.sound]
+'ProductionAcceptance.budget_rejects_excess' depends on axioms: [propext, Classical.choice, Quot.sound]
+'ProductionAcceptance.verification_requires_residual' depends on axioms: [propext, Classical.choice, Quot.sound]
+'ProductionAcceptance.verification_requires_condition' depends on axioms: [propext, Classical.choice, Quot.sound]
+'ProductionAcceptance.verification_requires_surface' depends on axioms: [propext, Classical.choice, Quot.sound]
+'ProductionAcceptance.verification_requires_every_comparison' depends on axioms: [propext, Classical.choice, Quot.sound]
+'ProductionAcceptance.failed_comparison_rejects' depends on axioms: [propext, Classical.choice, Quot.sound]
+'ProductionAcceptance.small_collocation_residual_does_not_override_resolution' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'ProductionAcceptance.evaluated_peak_nonnegative' depends on axioms: [propext, Classical.choice, Quot.sound]
+'ProductionAcceptance.evaluated_peak_dominates' depends on axioms: [propext, Classical.choice, Quot.sound]
+'ProductionAcceptance.refining_peak_cannot_decrease' depends on axioms: [propext, Classical.choice, Quot.sound]
+'ProductionAcceptance.refined_peak_dominates_candidate' depends on axioms: [propext, Classical.choice, Quot.sound]
+'ProductionAcceptance.evaluated_peak_is_not_signed_crest' depends on axioms: [propext, Classical.choice, Quot.sound]
