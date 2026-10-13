@@ -126,18 +126,18 @@ The legacy redundant flat table is intentionally not written by this build.
 INPUT FILES AND EMBEDDED CONTROLS
 ---------------------------------
 The optional input file is data.dat.  If it is absent, the command-line interface
-solves a finite-depth period-specified case.  The historical Points.dat and
+accepts finite-depth or deep-water cases with period or wavelength closure.  The historical Points.dat and
 Convergence.dat controls are embedded as constants in this source.
 
 COMPILATION
 -----------
 Windows / MSYS2 / MinGW:
 
-    g++ -std=c++20 fourier.cpp -o fourier.exe -O3 -march=native -fopenmp -static-libgcc -static-libstdc++
+    g++ -std=c++20 fourier.cpp -o fourier.exe -O3 -fno-fast-math -ffp-contract=off -fopenmp -static-libgcc -static-libstdc++
 
 Linux / macOS:
 
-    g++ -std=c++20 -Wall -Wextra -pedantic fourier.cpp -O3 -march=native -fopenmp -o fourier
+    g++ -std=c++20 -Wall -Wextra -pedantic fourier.cpp -O3 -fno-fast-math -ffp-contract=off -fopenmp -o fourier
 
 ATTRIBUTION
 -----------
@@ -162,6 +162,11 @@ set.
 #include <string>
 #include <system_error>
 #include <vector>
+#include <limits>
+#include <map>
+#include <stdexcept>
+#include <cfenv>
+#include <utility>
 
 #if defined(_OPENMP)
   #include <omp.h>
@@ -186,6 +191,129 @@ set.
 #endif
 
 
+namespace Phys {
+    using Real = double;
+    constexpr Real PI    = 3.141592653589793238462643383279502884;
+}
+using Phys::Real;
+
+// Enclosures use IEEE binary64 arithmetic in round-to-nearest mode.
+// Compile without fast-math or floating-point reassociation.
+#if defined(__FAST_MATH__)
+#error "Finite-system interval verification requires compilation without fast-math."
+#endif
+namespace Verified {
+struct Interval {
+    Real lo, hi;
+    Interval(Real value = 0.0) : Interval(value, value) {}
+    Interval(Real lower, Real upper) : lo(lower), hi(upper) {
+        if (!std::isfinite(lo) || !std::isfinite(hi) || lo > hi)
+            throw std::runtime_error("Invalid interval endpoints.");
+    }
+    static Real down(Real x) { return std::nextafter(x, -std::numeric_limits<Real>::infinity()); }
+    static Real up(Real x) { return std::nextafter(x, std::numeric_limits<Real>::infinity()); }
+    friend Interval operator+(const Interval& a, const Interval& b) {
+        return {down(a.lo+b.lo), up(a.hi+b.hi)};
+    }
+    friend Interval operator-(const Interval& a) { return {-a.hi, -a.lo}; }
+    friend Interval operator-(const Interval& a, const Interval& b) { return a+(-b); }
+    friend Interval operator*(const Interval& a, const Interval& b) {
+        const Real products[] = {a.lo*b.lo,a.lo*b.hi,a.hi*b.lo,a.hi*b.hi};
+        for (Real p : products) if (!std::isfinite(p)) throw std::runtime_error("Interval product overflow.");
+        return {down(*std::min_element(products,products+4)), up(*std::max_element(products,products+4))};
+    }
+    friend Interval operator/(const Interval& a, const Interval& b) {
+        if (b.lo <= 0.0 && b.hi >= 0.0) throw std::runtime_error("Interval divisor contains zero.");
+        return a*Interval(down(1.0/b.hi),up(1.0/b.lo));
+    }
+    Interval square() const {
+        const Real lower = lo <= 0.0 && hi >= 0.0 ? 0.0 : std::min(std::abs(lo),std::abs(hi));
+        const Real upper = magnitude();
+        return {std::max(0.0,down(lower*lower)),up(upper*upper)};
+    }
+    Interval power(unsigned n) const {
+        Interval value(1.0), base(*this);
+        while (n) {
+            if (n & 1U) value=value*base;
+            n >>= 1U;
+            if (n) base=base.square();
+        }
+        return value;
+    }
+    Real magnitude() const { return std::max(std::abs(lo),std::abs(hi)); }
+    static Interval exponential_point(Real x) {
+        if (x==0.0) return Interval(1.0);
+        Real reduced=std::abs(x);
+        unsigned halvings=0;
+        while (reduced>0.125) { reduced*=0.5; ++halvings; }
+        const Interval r(std::max(0.0,down(reduced)),up(reduced));
+        Interval sum(1.0), term(1.0);
+        for (unsigned j=1;j<=32;++j) { term=term*r/Interval(j); sum=sum+term; }
+        // For 0 <= r <= 1/4, exp(r) < 2 bounds the Taylor remainder.
+        Interval remainder=r.power(33)*Interval(2.0);
+        for (unsigned j=2;j<=33;++j) remainder=remainder/Interval(j);
+        sum=Interval(sum.lo,up(sum.hi+remainder.hi));
+        if (x<0.0) sum=Interval(1.0)/sum;
+        for (unsigned j=0;j<halvings;++j) sum=sum.square();
+        return sum;
+    }
+    Interval exp() const {
+        return {exponential_point(lo).lo,exponential_point(hi).hi};
+    }
+    Interval sqrt() const {
+        if (lo<0.0) throw std::runtime_error("Negative square-root interval.");
+        if (hi==0.0) return Interval(0.0);
+        Real lower=lo==0.0 ? 0.0 : std::max(0.0,down(std::sqrt(lo)));
+        Real upper=up(std::sqrt(hi));
+        // Squared endpoint tests enclose the root independently of the initial estimate.
+        for (int i=0;i<16 && lower>0.0 && up(lower*lower)>lo;++i) lower=std::max(0.0,down(lower));
+        for (int i=0;i<16 && down(upper*upper)<hi;++i) upper=up(upper);
+        if ((lower>0.0 && up(lower*lower)>lo) || down(upper*upper)<hi)
+            throw std::runtime_error("Square-root enclosure failed.");
+        return {lower,upper};
+    }
+};
+
+inline Interval pi() { return {Interval::down(Phys::PI),Interval::up(Phys::PI)}; }
+
+inline std::vector<std::pair<Interval,Interval>> collocation(int n) {
+    std::vector<std::pair<Interval,Interval>> table;
+    table.reserve((size_t)2*n);
+    for (int index=0;index<2*n;++index) {
+        const int q=index<=n ? index : index-2*n;
+        const Interval x=pi()*Interval(q)/Interval(n), square=x.square();
+        Interval sine(0.0),cosine(0.0),st=x,ct(1.0);
+        for (int m=0;m<32;++m) {
+            sine=sine+st;cosine=cosine+ct;
+            st=-st*square/Interval((2*m+2)*(2*m+3));
+            ct=-ct*square/Interval((2*m+1)*(2*m+2));
+        }
+        Interval sin_error=Interval(x.magnitude()).power(65);
+        Interval cos_error=Interval(x.magnitude()).power(64);
+        for (int j=2;j<=65;++j) sin_error=sin_error/Interval(j);
+        for (int j=2;j<=64;++j) cos_error=cos_error/Interval(j);
+        table.emplace_back(sine+Interval(-sin_error.hi,sin_error.hi),
+                           cosine+Interval(-cos_error.hi,cos_error.hi));
+    }
+    return table;
+}
+
+struct OutputBound {
+    Interval enclosure;
+    Real reported=0.0, error_upper=0.0, budget_lower=0.0;
+};
+struct Certificate {
+    std::string arithmetic="Outward-rounded IEEE binary64 intervals";
+    std::string scope="Finite-state residual and nine selected finite-formula outputs";
+    bool root_existence_proved=false, passed=false;
+    int order=0, equation_count=0;
+    std::vector<Interval> residual_intervals;
+    std::vector<Real> state, surface_coefficients;
+    Real residual_upper=0.0, residual_tolerance=1e-10;
+    std::map<std::string,OutputBound> outputs;
+};
+} // namespace Verified
+
 namespace fs = std::filesystem;
 
 
@@ -198,9 +326,8 @@ This file is intentionally "monolithic": it embeds what historically were severa
 source modules (Allocation, Solve, Subroutines, Inout, main) into a single build
 unit to simplify compilation and reproducibility.
 
-The numerical heart of the program is unchanged from the legacy Fourier/stream-
-function driver: *only comments, I/O robustness, and lifetime management were
-modernised*.
+The numerical core uses a Fourier collocation system with adaptive continuation
+and numerical acceptance checks before writing result files.
 
 -------------------------------------------------------------------------------
 1) COORDINATE SYSTEMS AND FRAMES OF REFERENCE (VERY IMPORTANT)
@@ -335,11 +462,11 @@ periodicity of cos/sin over 2π.
 5) LINEAR ALGEBRA AND ROBUSTNESS CHOICES
 -------------------------------------------------------------------------------
 
-The Newton step solves a dense system with a numerically-differenced Jacobian.
+The Newton step solves a dense system with an analytic Jacobian.
 Near limiting steep waves, the Jacobian can be ill-conditioned; therefore the
 solver uses an SVD-based least-squares solve (Numerical Recipes dsvdcmp/dsvbksb).
 
-The singular-value cutoff wmin = wmax * 1e-12 is a pragmatic stabilisation:
+The singular-value cutoff wmin = wmax * 1e-15 is a pragmatic stabilisation:
 small singular values are treated as zero to suppress amplification of numerical
 noise in nearly-singular directions.
 
@@ -519,8 +646,15 @@ console dependencies and introduces RAII ownership for:
   - FILE* handles (unique_ptr with fclose deleter),
   - the long-lived NR-allocated vectors/matrices used by the solver.
 
-IMPORTANT: We *do not* change any numerical formulas or iteration logic.
-Only lifetime/ownership and cross-platform I/O robustness is improved.
+The numerical solve uses an analytic Jacobian, column equilibration, damped
+Newton steps and adaptive height continuation. Fourier order is reduced when
+the equilibrated Jacobian condition exceeds 1e11. Every accepted solution must
+satisfy a maximum absolute residual of 1e-10 and a sampled surface residual of
+1e-6. Finite-depth integral outputs are independently checked by quadrature in
+k-based units and outward-rounded intervals in depth-based units. In each
+scaling, the absolute-plus-relative output budget is 1e-7 + 1e-8*abs(reference).
+These checks do not constitute a Lean proof of program execution, root existence
+or error bounds for the continuous free-boundary problem.
 ------------------------------------------------------------------------------
 */
 
@@ -536,43 +670,11 @@ using FilePtr = std::unique_ptr<std::FILE, FileCloser>;
 // "Headers.h" content (flattened)
 // -----------------------------------------------------------------------------
 
-/*
-------------------------------------------------------------------------------
-LEGACY MACROS (FENTON-STYLE DRIVER COMPATIBILITY)
-------------------------------------------------------------------------------
-The original multi-file program used a small header ("Headers.h") with many
-preprocessor macros to keep the C code compact:
-
-  - `Skip` / `skip` : consume the remainder of the current input line.
-  - `Read` / `read` : scanf a value then Skip to end-of-line (two spellings kept).
-  - `iff(x, Token)` : string-compare convenience that reads like a mini language.
-  - `Is_finite` / `Is_deep` : branch on the chosen depth regime.
-  - `HI` / `LO` : legacy printf field-width specifiers used in output tables.
-
-These macros are retained verbatim to ensure:
-  1) the *token stream* of numerical formulas remains identical to the legacy code,
-  2) input parsing behaves exactly like the historical driver,
-  3) the z[]/rhs[] indexing semantics are preserved.
-
-Important cautions:
-  - Macros do not respect scope; they can hide side effects.
-  - `Readtext` assumes the line ends with '\n' and overwrites it with '\0'.
-  - `Skip` hardcodes a 400-byte buffer size (`dummy[400]`), matching the legacy.
-
-Do not "modernise" these macros unless you are prepared to revalidate the solver
-numerically against known benchmark cases (e.g., Fenton's published tables).
-------------------------------------------------------------------------------
-*/
-
-#define Skip             std::fgets(dummy, 400, Input1)
-#define skip             Skip
-#define read(x, y)       std::fscanf(Input1, "%" #y, &(x)); skip
-#define pi               3.14159265358979324
+// Text helpers for depth/case dispatch and numerical output.
+static constexpr double pi = 3.14159265358979324;
 #define iff(x, y)        if (std::strcmp((x), #y) == 0)
-#define HI               " % 13.8f"
-#define LO               " % 13.8f"
-#define Readtext(x)      do { std::fgets((x), 400, Input1); (x)[std::strlen((x)) - 1] = '\0'; } while (0)
-#define Read(x, y)       do { std::fscanf(Input1, "%" #y, &(x)); Skip; } while (0)
+#define HI               " % 23.15e"
+#define LO               "\t%8.4f"
 #define Is_deep          if (std::strcmp(Depth, "Deep") == 0)
 #define Is_finite        if (std::strcmp(Depth, "Finite") == 0)
 
@@ -655,7 +757,6 @@ static char Theory[10] = {0};
 static int Current_criterion = 0;
 static int n = 0;
 static int Nprofiles = 0;
-static int ns = 0;
 static int nstep = 0;
 static int num = 0;
 static int number = 0;
@@ -742,7 +843,15 @@ static double Bernoulli_check = 0.0;
 static double c = 0.0;
 static double ce = 0.0;
 static double crit = 0.0;
-static double criter = 0.0;
+static constexpr double kFinalResidualTolerance = 1.0e-10;
+static constexpr double kConditionLimit = 1.0e11;
+static double jacobian_condition = std::numeric_limits<double>::infinity();
+static double final_residual = std::numeric_limits<double>::infinity();
+static double spectral_defect = std::numeric_limits<double>::infinity();
+static int requested_order = 0;
+static Verified::Certificate finite_system_certificate;
+static double integral_error_ratio = 0.0;
+static double spectral_error_ratio = 0.0;
 static double cs = 0.0;
 static double Current = 0.0;
 static double dphidt = 0.0;
@@ -869,7 +978,7 @@ Numerical Recipes in C SVD implementation.
 
 High-level purpose in this program:
   - Newton's method requires solving J Δz = -rhs.
-  - J is a dense Jacobian built by finite differences.
+  - J is a dense analytic Jacobian.
   - For steep waves and/or large N, J can become ill-conditioned.
   - SVD decomposes J into U W V^T, allowing stable least-squares solutions and
     controlled handling of near-singular directions (via small singular values).
@@ -913,7 +1022,7 @@ static int iminarg1, iminarg2;
 #define IMIN(a, b) (iminarg1 = (a), iminarg2 = (b), (iminarg1) < (iminarg2) ? (iminarg1) : (iminarg2))
 #define SIGN(a, b) ((b) >= 0.0 ? std::fabs(a) : -std::fabs(a))
 
-static void dsvdcmp(double **a, int m, int n, double w[], double **v)
+static bool dsvdcmp(double **a, int m, int n, double w[], double **v)
 {
   int flag = 0, i = 0, its = 0, j = 0, jj = 0, k = 0, l = 0, nm = 0;
   double anorm, c_, f_, g_, h_, s_, scale, x_, y_, z_;
@@ -1000,7 +1109,7 @@ static void dsvdcmp(double **a, int m, int n, double w[], double **v)
     ++a[i][i];
   }
   for (k = n; k >= 1; k--) {
-    for (its = 1; its <= 30; its++) {
+    for (its = 1; its <= 100; its++) {
       flag = 1;
       for (l = k; l >= 1; l--) {
         nm = l - 1;
@@ -1039,8 +1148,9 @@ static void dsvdcmp(double **a, int m, int n, double w[], double **v)
         }
         break;
       }
-      if (its == 50) {
-        std::fprintf(stderr, "no convergence in 30 dsvdcmp iterations");
+      if (its == 100) {
+        free_dvector(rv1, 1, n);
+        return false;
       }
       x_ = w[l];
       nm = k - 1;
@@ -1093,6 +1203,7 @@ static void dsvdcmp(double **a, int m, int n, double w[], double **v)
     }
   }
   free_dvector(rv1, 1, n);
+  return true;
 }
 
 static void dsvbksb(double **u, double w[], double **v, int m, int n, double b[], double x[])
@@ -1126,7 +1237,7 @@ static void dsvbksb(double **u, double w[], double **v, int m, int n, double b[]
  *
  * This is used inside the Newton iteration to solve:
  *     J Δz = -rhs
- * where J is the numerically-differenced Jacobian matrix.
+ * where J is the analytic Jacobian matrix.
  *
  * SVD-based solving is more robust than naive Gaussian elimination for
  * potentially ill-conditioned spectral/collocation systems near limiting waves.
@@ -1142,8 +1253,22 @@ static void Solve(double **a, double *b, int m, int n_, double *solution, int MP
   w = dvector(1, NP);
   v = dmatrix(1, NP, 1, NP);
 
+  std::vector<double> scales(static_cast<std::size_t>(n_ + 1), 1.0);
+  for (int j = 1; j <= n_; ++j) {
+    double maximum = 0.0;
+    for (int row = 1; row <= m; ++row)
+      maximum = std::max(maximum, std::abs(a[row][j]));
+    if (maximum > 0.0) scales[j] = maximum;
+    for (int row = 1; row <= m; ++row) a[row][j] /= scales[j];
+  }
   // Perform decomposition
-  dsvdcmp(a, m, n_, w, v);
+  if (!dsvdcmp(a, m, n_, w, v)) {
+    jacobian_condition = std::numeric_limits<double>::infinity();
+    for (int j = 1; j <= n_; ++j) solution[j] = std::numeric_limits<double>::quiet_NaN();
+    free_dmatrix(v, 1, NP, 1, NP);
+    free_dvector(w, 1, NP);
+    return;
+  }
 
   /*
     SINGULAR VALUE FILTERING
@@ -1160,7 +1285,7 @@ static void Solve(double **a, double *b, int m, int n_, double *solution, int MP
 
     The conventional NR remedy is to zero singular values below a relative cutoff.
     Here we use:
-        wmin = wmax * 1e-12
+        wmin = wmax * 1e-15
     This preserves the well-resolved modes while damping the ill-conditioned ones.
 
     Note: This is not a "tunable physics parameter"; it is a numerical-stability
@@ -1170,11 +1295,16 @@ static void Solve(double **a, double *b, int m, int n_, double *solution, int MP
   // Set up: see p65 of Press et al.
   wmax = 0.0;
   for (i = 1; i <= n_; i++) if (w[i] >= wmax) wmax = w[i];
-  wmin = wmax * 1.e-12;
+  double smallest = std::numeric_limits<double>::infinity();
+  for (i = 1; i <= n_; ++i) smallest = std::min(smallest, w[i]);
+  jacobian_condition = smallest > 0.0 ? wmax / smallest
+                                      : std::numeric_limits<double>::infinity();
+  wmin = wmax * 1.e-15;
   for (i = 1; i <= n_; i++) if (w[i] <= wmin) w[i] = 0.0;
 
   // Back substitute
   dsvbksb(a, w, v, m, n_, b, solution);
+  for (int j = 1; j <= n_; ++j) solution[j] /= scales[j];
 
   free_dmatrix(v, 1, NP, 1, NP);
   free_dvector(w, 1, NP);
@@ -1259,64 +1389,20 @@ static void init()
   Is_deep {
     z[1] = 1.;
     iff(Case, Period)
-      z[2] = 4 * pi * pi * Height;
+      z[2] = 4 * pi * pi * height;
     else
-      z[2] = 2 * pi * Height;
+      z[2] = 2 * pi * height;
     z[3] = 2 * pi;
     z[4] = 1.;
   }
 
-  Is_finite {
-    /*
-      INITIAL CURRENT GUESS
-      ---------------------
-      The nonlinear steady-wave family depends on the specification of “current”.
-      Fenton (1999) distinguishes:
-        - Eulerian mean current ū1 = c - Ū  (Eq. 3.13)
-        - Stokes / mass-transport current ū2 = c - Q/d (Eq. 3.14)
-
-      Here, Current_criterion selects whether the *input* CurrentValue corresponds
-      to ū1 (Euler) or ū2 (Stokes). The exact enforcement of the chosen criterion
-      is performed inside Eqns() (see rhs[6] and Fenton 1999 Eq. 3.15–3.16).
-
-      The lines below are ONLY a starting guess for Newton’s method; the subsequent
-      iterations will correct these values to satisfy the full system.
-    */
-    if (Current_criterion == 1) {
-      z[5] = Current * std::sqrt(z[2]);
-      z[6] = 0.;
-    } else {
-      z[6] = Current * std::sqrt(z[2]);
-      z[5] = 0.;
-    }
-  }
-
-  Is_deep {
-    z[5] = 0.;
-    z[6] = 0.;
-  }
-
-  /*
-    INITIAL GUESSES FOR MEAN FLOW / FLUX / BERNOULLI CONSTANT
-    --------------------------------------------------------
-
-    The initial values below are a *small-amplitude* consistent guess:
-      - z[7] (U) is set equal to z[4] so that the mean flow in the wave frame
-        matches the phase speed in the linear limit. This makes the moving-frame
-        velocities small initially, stabilising the first Newton steps.
-
-      - z[8] (q) is initialised to zero. q is a legacy auxiliary variable that
-        becomes nonzero as the nonlinear solution develops and mass transport /
-        set-down effects appear.
-
-      - z[9] (r) is seeded as ½ U^2, consistent with a Bernoulli constant for
-        a uniform flow state. Newton's method will then adjust it to satisfy the
-        nonlinear dynamic condition on the free surface.
-
-    These seeds matter only for convergence speed; the final converged solution
-    is determined by Eqns() constraints.
-  */
   z[7] = z[4];
+  Is_finite {
+    z[5] = z[6] = Current * std::sqrt(z[1]);
+    z[4] = z[7] + z[5];
+    z[3] = 2.0 * pi / z[4];
+  }
+  Is_deep { z[5] = z[6] = 0.0; }
   z[8] = 0.;
   z[9] = 0.5 * z[7] * z[7];
   /*
@@ -1403,12 +1489,26 @@ static void init()
  *
  * Returns: Sum of squares of residual components (useful as a diagnostic).
  */
+static void VerticalBasis(int mode, double eta, double depth,
+                          double& stream, double& velocity)
+{
+  const double forward = std::exp(mode * eta);
+  if (std::strcmp(Depth, "Finite") != 0) {
+    stream = velocity = forward;
+    return;
+  }
+  const double reflected = std::exp(-mode * (2.0 * depth + eta));
+  const double denominator = 1.0 + std::exp(-2.0 * mode * depth);
+  stream = (forward - reflected) / denominator;
+  velocity = (forward + reflected) / denominator;
+}
+
 static double EqnsAt(const double* state, double* rhs, double* tanh_values)
 {
   const bool finite_depth = std::strcmp(Depth, "Finite") == 0;
   const bool wavelength_case = std::strcmp(Case, "Wavelength") == 0;
 
-  rhs[1] = finite_depth ? state[2] - state[1] * Hoverd : 0.0;
+  rhs[1] = finite_depth ? state[2] - state[1] * Hoverd : state[1] - 1.0;
   rhs[2] = wavelength_case
              ? state[2] - 2.0 * pi * height
              : state[2] - height * state[3] * state[3];
@@ -1436,9 +1536,8 @@ static double EqnsAt(const double* state, double* rhs, double* tanh_values)
   /*
     Each collocation point is independent once the state vector and finite-depth
     tanh factors are fixed.  The loop therefore writes two unique residual entries
-    per iteration.  Newton() parallelises complete residual evaluations
-    while constructing Jacobian columns, which provides a coarser and more efficient
-    parallel workload than creating a nested region inside every evaluation.
+    per iteration. The analytic Jacobian uses the same vertical basis and
+    collocation phases as this residual evaluation.
   */
   for (int m = 0; m <= n; ++m) {
     double psi_sum = 0.0;
@@ -1449,25 +1548,12 @@ static double EqnsAt(const double* state, double* rhs, double* tanh_values)
     for (int j = 1; j <= n; ++j) {
       const int nm = (m * j) % (2 * n);
       const double coefficient = state[n + j + 10];
-      const double exponential = std::exp(static_cast<double>(j) * eta);
-
-      if (finite_depth) {
-        const double inverse_exponential = 1.0 / exponential;
-        const double sinh_eta = 0.5 * (exponential - inverse_exponential);
-        const double cosh_eta = 0.5 * (exponential + inverse_exponential);
-        const double stream_basis = sinh_eta + cosh_eta * tanh_values[j];
-        const double velocity_basis = cosh_eta + sinh_eta * tanh_values[j];
-        const double weighted_mode = static_cast<double>(j) * coefficient;
-
-        psi_sum += coefficient * stream_basis * cosa[nm];
-        u_sum += weighted_mode * velocity_basis * cosa[nm];
-        v_sum += weighted_mode * stream_basis * sina[nm];
-      } else {
-        const double weighted_mode = static_cast<double>(j) * coefficient * exponential;
-        psi_sum += coefficient * exponential * cosa[nm];
-        u_sum += weighted_mode * cosa[nm];
-        v_sum += weighted_mode * sina[nm];
-      }
+      double stream_basis, velocity_basis;
+      VerticalBasis(j, eta, state[1], stream_basis, velocity_basis);
+      const double weighted_mode = static_cast<double>(j) * coefficient;
+      psi_sum += coefficient * stream_basis * cosa[nm];
+      u_sum += weighted_mode * velocity_basis * cosa[nm];
+      v_sum += weighted_mode * stream_basis * sina[nm];
     }
 
     rhs[m + 9] = psi_sum - state[8] - state[7] * eta;
@@ -1485,101 +1571,231 @@ static double Eqns(double* rhs)
   return EqnsAt(z, rhs, Tanh);
 }
 
-/**
- * Perform one Newton iteration on the nonlinear system defined by Eqns().
- *
- * This implementation follows the strategy described in Fenton (1988):
- *   - Evaluate rhs at the current state z[]
- *   - Build a numerical Jacobian by forward differencing each component z[i]
- *   - Solve the linear system J Δz = -rhs for the correction Δz
- *     using an SVD-based solver for robustness
- *   - Update z ← z + Δz
- *
- * The return value is the mean absolute correction applied to the free-surface
- * unknowns (z[10..10+N]), which is used as a convergence indicator.
- */
-static double Newton(int count)
+// Analytic derivatives of all global constraints and surface equations.
+static void Jacobian(double** jac)
 {
-  (void)count;
+  for (int row = 1; row <= num; ++row)
+    for (int col = 1; col <= num; ++col) jac[row][col] = 0.0;
+  const bool finite = std::strcmp(Depth, "Finite") == 0;
+  const bool wavelength = std::strcmp(Case, "Wavelength") == 0;
+  if (finite) { jac[1][1] = -Hoverd; jac[1][2] = 1.0; }
+  else jac[1][1] = 1.0;
+  jac[2][2] = 1.0;
+  if (!wavelength) jac[2][3] = -2.0 * height * z[3];
+  jac[3][3] = z[4]; jac[3][4] = z[3];
+  jac[4][5] = jac[4][7] = 1.0; jac[4][4] = -1.0;
+  jac[5][1] = z[6] + z[7] - z[4];
+  jac[5][6] = jac[5][7] = z[1]; jac[5][4] = -z[1]; jac[5][8] = -1.0;
+  jac[6][Current_criterion + 4] = 1.0;
+  if (finite) jac[6][1] = -0.5 * Current / std::sqrt(z[1]);
+  else if (!wavelength) jac[6][3] = -Current;
+  jac[7][10] = jac[7][n + 10] = 1.0;
+  for (int m = 1; m < n; ++m) jac[7][10 + m] = 2.0;
+  jac[8][10] = 1.0; jac[8][n + 10] = jac[8][2] = -1.0;
+#if defined(_OPENMP)
+#pragma omp parallel for schedule(static) if(n >= 24)
+#endif
+  for (int m = 0; m <= n; ++m) {
+    const double eta = z[10 + m];
+    double us = 0.0, vs = 0.0, uy_sum = 0.0, vy_sum = 0.0;
+    double pd = 0.0, ud = 0.0, vd = 0.0;
+    for (int j = 1; j <= n; ++j) {
+      const int phase = (m * j) % (2 * n);
+      double stream, velocity;
+      VerticalBasis(j, eta, z[1], stream, velocity);
+      const double coeff = z[n + 10 + j], co = cosa[phase], si = sina[phase];
+      us += j * coeff * velocity * co;
+      vs += j * coeff * stream * si;
+      uy_sum += j * j * coeff * stream * co;
+      vy_sum += j * j * coeff * velocity * si;
+      if (finite) {
+        const double e = std::exp(-2.0 * j * z[1]);
+        const double forward = std::exp(j * eta);
+        const double reflected = std::exp(-j * (2.0 * z[1] + eta));
+        const double factor = 2.0 * j / ((1.0 + e) * (1.0 + e));
+        const double sd = factor * (reflected + e * forward);
+        const double cd = factor * (e * forward - reflected);
+        pd += coeff * sd * co;
+        ud += j * coeff * cd * co;
+        vd += j * coeff * sd * si;
+      }
+      jac[m + 9][n + 10 + j] = stream * co;
+    }
+    const double relative_u = us - z[7];
+    jac[m + 9][1] = pd;
+    jac[m + 9][7] = -eta;
+    jac[m + 9][8] = -1.0;
+    jac[m + 9][10 + m] = relative_u;
+    const int row = n + m + 10;
+    jac[row][1] = relative_u * ud + vs * vd;
+    jac[row][7] = -relative_u;
+    jac[row][9] = -1.0;
+    jac[row][10 + m] = 1.0 + relative_u * uy_sum + vs * vy_sum;
+    for (int j = 1; j <= n; ++j) {
+      const int phase = (m * j) % (2 * n);
+      double stream, velocity;
+      VerticalBasis(j, eta, z[1], stream, velocity);
+      jac[row][n + 10 + j] = j * (relative_u * velocity * cosa[phase] + vs * stream * sina[phase]);
+    }
+  }
+}
 
+static bool Admissible()
+{
+  for (int i = 1; i <= num; ++i) if (!std::isfinite(z[i])) return false;
+  if (z[1] <= 0.0 || z[2] <= 0.0 || z[3] <= 0.0 || z[4] <= 0.0 || z[7] <= 0.0) return false;
+  for (int m = 0; m <= n; ++m) {
+    if (std::strcmp(Depth, "Finite") == 0 && z[1] + z[10 + m] <= 0.0) return false;
+    if (n * std::abs(z[10 + m]) > 650.0) return false;
+  }
+  return true;
+}
+
+static double MaxResidual(const double* residual)
+{
+  double maximum = 0.0;
+  for (int i = 1; i <= num; ++i) {
+    if (!std::isfinite(residual[i])) return std::numeric_limits<double>::infinity();
+    maximum = std::max(maximum, std::abs(residual[i]));
+  }
+  return maximum;
+}
+
+// Backtracking accepts only admissible states with a decreasing residual norm.
+static bool Newton()
+{
+  if (!Admissible()) return false;
   double* rhs = dvector(1, num);
   double* correction = dvector(1, num);
   double** jacobian = dmatrix(1, num, 1, num);
-
-  Eqns(rhs1);
+  std::vector<double> base(static_cast<std::size_t>(num + 1), 0.0);
+  for (int i = 1; i <= num; ++i) base[i] = z[i];
+  const double initial_merit = Eqns(rhs1);
   for (int i = 1; i <= num; ++i) rhs[i] = -rhs1[i];
-
-  /*
-    Numerical Jacobian columns are independent.  The perturbed state vectors are
-    prepared serially in the same index order as the original finite-difference
-    loop, including its floating-point add/subtract restoration semantics.  The
-    expensive residual evaluations are then distributed across OpenMP workers.
-  */
-  const std::size_t state_size = static_cast<std::size_t>(num + 1);
-  std::vector<double> initial_state(state_size, 0.0);
-  std::vector<double> restored_state(state_size, 0.0);
-  std::vector<double> perturbations(state_size, 0.0);
-
-  for (int k = 1; k <= num; ++k) {
-    initial_state[k] = z[k];
-    restored_state[k] = z[k];
-  }
-
-  for (int i = 1; i <= num; ++i) {
-    double h = 0.01 * initial_state[i];
-    if (std::fabs(initial_state[i]) < 1.0e-4) h = 1.0e-5;
-
-    const double perturbed_value = initial_state[i] + h;
-    restored_state[i] = perturbed_value - h;
-    perturbations[i] = h;
-  }
-
-  for (int k = 1; k <= num; ++k) z[k] = restored_state[k];
-
-  #pragma omp parallel
-  {
-    int thread_id = 0;
-    int thread_count = 1;
-#if defined(_OPENMP)
-    thread_id = omp_get_thread_num();
-    thread_count = omp_get_num_threads();
-#endif
-    const int first_column = 1 + (thread_id * num) / thread_count;
-    const int last_column = ((thread_id + 1) * num) / thread_count;
-
-    std::vector<double> local_state = initial_state;
-    std::vector<double> local_rhs(static_cast<std::size_t>(num + 1));
-    std::vector<double> local_tanh(static_cast<std::size_t>(n + 1));
-
-    for (int k = 1; k < first_column; ++k) local_state[k] = restored_state[k];
-
-    for (int i = first_column; i <= last_column; ++i) {
-      local_state[i] = initial_state[i] + perturbations[i];
-      EqnsAt(local_state.data(), local_rhs.data(), local_tanh.data());
-      local_state[i] = restored_state[i];
-
-      const double h = perturbations[i];
-      for (int j = 1; j <= num; ++j) {
-        jacobian[j][i] = (local_rhs[j] - rhs1[j]) / h;
+  Jacobian(jacobian);
+  bool finite = std::isfinite(initial_merit);
+  for (int i = 1; i <= num; ++i)
+    for (int j = 1; j <= num; ++j) finite = finite && std::isfinite(jacobian[i][j]);
+  bool accepted = false;
+  if (finite) {
+    Solve(jacobian, rhs, num, num, correction, num, num);
+    for (double damping = 1.0; damping >= 1.0 / 1048576.0; damping *= 0.5) {
+      for (int i = 1; i <= num; ++i) z[i] = base[i] + damping * correction[i];
+      if (!Admissible()) continue;
+      const double merit = Eqns(rhs1);
+      if (std::isfinite(merit) &&
+          (merit < initial_merit * (1.0 - 1.0e-4 * damping) || MaxResidual(rhs1) <= kFinalResidualTolerance)) {
+        accepted = true;
+        break;
       }
     }
   }
-
-  Solve(jacobian, rhs, num, num, correction, num, num);
-
-  for (int i = 1; i <= num; ++i) z[i] += correction[i];
-
-  double mean_surface_correction = 0.0;
-  for (int i = 10; i <= n + 10; ++i) {
-    mean_surface_correction += std::fabs(correction[i]);
-  }
-  mean_surface_correction /= n;
-
+  if (!accepted) for (int i = 1; i <= num; ++i) z[i] = base[i];
   free_dvector(rhs, 1, num);
   free_dvector(correction, 1, num);
   free_dmatrix(jacobian, 1, num, 1, num);
+  return accepted;
+}
 
-  return mean_surface_correction;
+static void RefreshCondition()
+{
+  jacobian_condition = std::numeric_limits<double>::infinity();
+  if (!Admissible()) return;
+  double** jac = dmatrix(1, num, 1, num);
+  double* zero = dvector(1, num);
+  double* correction = dvector(1, num);
+  Jacobian(jac);
+  bool finite = true;
+  for (int i = 1; i <= num; ++i) {
+    zero[i] = 0.0;
+    for (int j = 1; j <= num; ++j) finite = finite && std::isfinite(jac[i][j]);
+  }
+  if (finite) Solve(jac, zero, num, num, correction, num, num);
+  free_dmatrix(jac, 1, num, 1, num);
+  free_dvector(zero, 1, num);
+  free_dvector(correction, 1, num);
+}
+
+static bool ContinueToTarget()
+{
+  double fraction = 0.0, previous_fraction = 0.0;
+  double increment = std::min(0.25, 1.0 / nstep);
+  const double minimum_increment = 1.0 / 4096.0;
+  std::vector<double> accepted(static_cast<std::size_t>(num + 1), 0.0), previous = accepted;
+  bool have_previous = false;
+  final_residual = std::numeric_limits<double>::infinity();
+  for (int trial = 0; trial < 160 && fraction < 1.0; ++trial) {
+    const double target = std::min(1.0, fraction + increment);
+    height = target * Height;
+    Hoverd = target * MaxH;
+    if (fraction == 0.0) init();
+    else {
+      const double ratio = have_previous ? (target - fraction) / (fraction - previous_fraction) : 0.0;
+      for (int i = 1; i <= num; ++i) z[i] = accepted[i] + ratio * (accepted[i] - previous[i]);
+      if (!Admissible()) for (int i = 1; i <= num; ++i) z[i] = accepted[i];
+    }
+    bool converged = false;
+    int iterations = 0;
+    const double tolerance = target == 1.0 ? kFinalResidualTolerance : std::min(crit, 1.0e-10);
+    for (; iterations <= number; ++iterations) {
+      if (!Admissible()) break;
+      Eqns(rhs1);
+      final_residual = MaxResidual(rhs1);
+      if (final_residual <= tolerance) { converged = true; break; }
+      if (iterations == number || !Newton()) break;
+    }
+    std::fprintf(monitor, "Height fraction %.8f, iterations %d, max|F| %.3e: %s\n",
+                 target, iterations, final_residual, converged ? "PASS" : "retry");
+    if (converged) {
+      previous = accepted;
+      previous_fraction = fraction;
+      have_previous = fraction > 0.0;
+      for (int i = 1; i <= num; ++i) accepted[i] = z[i];
+      fraction = target;
+      increment = std::min(0.25, increment * (iterations <= 8 ? 1.5 : 1.0));
+    } else {
+      if (fraction > 0.0) {
+        for (int i = 1; i <= num; ++i) z[i] = accepted[i];
+        height = fraction * Height;
+        Hoverd = fraction * MaxH;
+      }
+      increment *= 0.5;
+      if (increment < minimum_increment) return false;
+    }
+  }
+  if (fraction != 1.0 || !Admissible()) return false;
+  height = Height;
+  Hoverd = MaxH;
+  Eqns(rhs1);
+  final_residual = MaxResidual(rhs1);
+  return final_residual <= kFinalResidualTolerance;
+}
+
+// Independent free-surface boundary residuals between collocation nodes.
+static double SpectralDefect()
+{
+  double maximum = 0.0;
+  const int samples = std::max(2048, 32 * n);
+  for (int m = 0; m < samples; ++m) {
+    const double phase = pi * (m + 0.5) / samples;
+    double eta = 0.5 * Y[n] * std::cos(n * phase);
+    for (int j = 1; j < n; ++j) eta += Y[j] * std::cos(j * phase);
+    if (std::strcmp(Depth, "Finite") == 0 && z[1] + eta <= 0.0)
+      return std::numeric_limits<double>::infinity();
+    double ps = 0.0, us = 0.0, vs = 0.0;
+    for (int j = 1; j <= n; ++j) {
+      double stream, velocity;
+      VerticalBasis(j, eta, z[1], stream, velocity);
+      ps += B[j] * stream * std::cos(j * phase);
+      us += j * B[j] * velocity * std::cos(j * phase);
+      vs += j * B[j] * stream * std::sin(j * phase);
+    }
+    const double kin = ps - z[8] - z[7] * eta;
+    const double dyn = 0.5 * ((us - z[7]) * (us - z[7]) + vs * vs) + eta - z[9];
+    if (!std::isfinite(kin) || !std::isfinite(dyn)) return std::numeric_limits<double>::infinity();
+    maximum = std::max({maximum, std::abs(kin), std::abs(dyn)});
+  }
+  return maximum;
 }
 
 // -----------------------------------------------------------------------------
@@ -1614,7 +1830,7 @@ static void Input_Data_block(std::FILE* file)
   if (std::strcmp(Theory, "Fourier") == 0)
     std::sprintf(Method, "\n# Solution by %d-term Fourier series", n);
 
-  std::fprintf(file, "\n%s\n", Method);
+  std::fprintf(file, "\n\n%s\n", Method);
 }
 
 /**
@@ -1635,101 +1851,40 @@ static void Input_Data_block(std::FILE* file)
  */
 static int Read_data(void)
 {
-  Readtext(Title);
-  iff(Title, FINISH) return 0;
-  Read(MaxH, lf);
-
-  /*
-    DEPTH-REGIME SELECTION VIA LEGACY SIGN CONVENTION
-    -------------------------------------------------
-    The historical input format uses the sign of the "Height/Depth" line to
-    select finite vs deep water:
-
-      MaxH >= 0  => finite depth
-                   MaxH is interpreted as H/d
-
-      MaxH <  0  => deep water
-                   MaxH is interpreted as -H/L  (note the minus sign)
-
-    This convention is preserved for compatibility with existing data.dat files
-    and with the documented interface in Instructions.pdf (Table 6-1).
-
-    Internally, the variable `Height` is a continuation/control parameter used by
-    init() and Eqns() to seed the solver. Its meaning depends on the case:
-
-      Finite depth, Case=Wavelength:
-        Height = (H/d) / (L/d) = H/L
-
-      Finite depth, Case=Period:
-        Height = (H/d) / (T√(g/d))^2  (legacy scaling used to relate kH to τ)
-
-      Deep water:
-        Height = H/L (because MaxH stores -H/L)
-
-    This is why both `Height` and `Hoverd` appear in the code: Hoverd is the
-    physically meaningful H/d at each continuation step, while Height is the
-    legacy "driver variable" that keeps the original formulas intact.
-  */
-
-  if (MaxH >= 0.) {
+  if (!std::fgets(Title, sizeof(Title), Input1)) return 0;
+  Title[std::strcspn(Title, "\r\n")] = '\0';
+  if (std::strcmp(Title, "FINISH") == 0) return 0;
+  auto read_double = [](double& value) {
+    return std::fgets(dummy, sizeof(dummy), Input1) &&
+           std::sscanf(dummy, "%lf", &value) == 1;
+  };
+  auto read_int = [](int& value) {
+    return std::fgets(dummy, sizeof(dummy), Input1) &&
+           std::sscanf(dummy, "%d", &value) == 1;
+  };
+  double value = 0.0;
+  if (!read_double(MaxH) || !std::fgets(dummy, sizeof(dummy), Input1) ||
+      std::sscanf(dummy, "%19s", Case) != 1 || !read_double(value) ||
+      !read_int(Current_criterion) || !read_double(Current) ||
+      !read_int(n) || !read_int(nstep)) return 0;
+  if (MaxH >= 0.0) {
     std::strcpy(Depth, "Finite");
-    std::fscanf(Input1, "%s", Case);
-    Skip;
-    iff(Case, Wavelength) {
-      Read(L, lf);
-      Height = MaxH / L;
-    }
-    iff(Case, Period) {
-      Read(T, lf);
-      Height = MaxH / (T * T);
-    }
-  }
-
-  if (MaxH < 0.) {
+    if (!std::isfinite(value) || value <= 0.0) return 0;
+    if (std::strcmp(Case, "Wavelength") == 0) { L = value; Height = MaxH / L; }
+    else if (std::strcmp(Case, "Period") == 0) { T = value; Height = MaxH / (T * T); }
+    else return 0;
+  } else {
     std::strcpy(Depth, "Deep");
-    std::fscanf(Input1, "%s", Case);
-    Skip;
-    Skip;
     Height = -MaxH;
   }
-
-  Read(Current_criterion, d);
-  Read(Current, lf);
   if (Current_criterion == 1) std::strcpy(Currentname, Current1);
   if (Current_criterion == 2) std::strcpy(Currentname, Current2);
-
-  Read(n, d);
-  Read(nstep, d);
-
-  Input_Data_block(monitor);
-
-  if (std::strcmp(Theory, "Stokes") == 0) {
-    iff(Case, Wavelength)
-      if (L > 10.) {
-        std::printf("\nThe dimensionless wavelength is greater than 10.");
-        std::printf("\nStokes theory should not be applied. Exiting.");
-        std::exit(1);
-      }
-    iff(Case, Period)
-      if (T > 10.) {
-        std::printf("\nThe dimensionless period is greater than 10.");
-        std::printf("\nStokes theory should not be applied. Exiting.");
-        std::exit(1);
-      }
-  }
-
-  // Convergence criteria (embedded defaults; Convergence.dat is not required)
-  // Values correspond to the original Convergence.dat shipped with this codebase.
   number = kConvergenceMaxIterations;
-  crit   = kConvergenceCriterion;
-
-
-  // Output sampling resolution (embedded; formerly read from Points.dat)
+  crit = kConvergenceCriterion;
   Surface_points = kSurfacePointsDefault;
-  Nprofiles      = kNprofilesDefault;
-  Points         = kProfilePointsDefault;
-
-
+  Nprofiles = kNprofilesDefault;
+  Points = kProfilePointsDefault;
+  Input_Data_block(monitor);
   return 1;
 }
 
@@ -1745,23 +1900,23 @@ static void Title_block(std::FILE* file)
   Highest = (0.0077829 * L * L * L + 0.0095721 * L * L + 0.141063 * L)
           / (0.0093407 * L * L * L + 0.0317567 * L * L + 0.078834 * L + 1);
   std::fprintf(file, "# %s", Title);
-  std::fprintf(file, "\n%s\n", Method);
-  std::fprintf(file, "\n# Height/Depth:%6.5f, %3.0lf%% of the maximum of H/d =%6.5f for this length:",
+  std::fprintf(file, "\n\n%s\n", Method);
+  std::fprintf(file, "\n# Height/Depth:%6.3f, %3.0lf%% of the maximum of H/d =%6.3f for this length:",
                z[2] / z[1], z[2] / z[1] / Highest * 100., Highest);
-  std::fprintf(file, "\n# Length/Depth:%7.5f", 2 * pi / z[1]);
-  std::fprintf(file, "\n# Dimensionless Period T*sqrt(g/d):%7.5f", z[3] / std::sqrt(z[1]));
-  std::fprintf(file, "\n# Current criterion: %s,  Dimensionless value:%6.5lf\n", Currentname, Current);
+  std::fprintf(file, "\n# Length/Depth:%7.2f", 2 * pi / z[1]);
+  std::fprintf(file, "\n# Dimensionless Period T*sqrt(g/d):%7.2f", z[3] / std::sqrt(z[1]));
+  std::fprintf(file, "\n# Current criterion: %s,  Dimensionless value:%6.3lf\n", Currentname, Current);
 }
 
 static void Title_block_deep(std::FILE* file)
 {
   Highest = 0.141063;
   std::fprintf(file, "# %s", Title);
-  std::fprintf(file, "\n%s\n", Method);
+  std::fprintf(file, "\n\n%s\n", Method);
   std::fprintf(file, "\n# Height/Length:%6.5f, %3.0lf%% of the maximum of H/L =%6.5f",
                z[2] / 2 / pi, (z[2] / 2 / pi) / Highest * 100., Highest);
   std::fprintf(file, "\n# Dimensionless Period T*sqrt(g/L):%7.5f", z[3] / std::sqrt(2 * pi));
-  std::fprintf(file, "\n# Current criterion: %s,  Dimensionless value:%6.5lf\n", Currentname, Current);
+  std::fprintf(file, "\n# Current criterion: %s,  Dimensionless value:%6.3lf\n", Currentname, Current);
 }
 
 static void Results(const char *Description, double x, double y)
@@ -1844,7 +1999,6 @@ static void Point(double X, double Y_)
 {
   int j;
   double C = 0.0, S = 0.0, Sin = 0.0, Cos = 0.0, y = 0.0;
-  double coshdelta, sinhdelta;
 
   u = v = ux = vx = phi = psi = 0.;
 
@@ -1863,7 +2017,7 @@ static void Point(double X, double Y_)
 
     This `y` variable is thus y/d (dimensionless by depth).
   */
-  y = 1. + Y_ / kd;
+  Is_finite y = 1. + Y_ / kd;
 
   /*
     FOURIER EVALUATION OF POTENTIAL/STREAMFUNCTION AND DERIVATIVES
@@ -1899,13 +2053,7 @@ static void Point(double X, double Y_)
   for (j = 1; j <= n; j++) {
     Cos = std::cos(j * X);
     Sin = std::sin(j * X);
-    Is_finite {
-      coshdelta = std::cosh(j * Y_);
-      sinhdelta = std::sinh(j * Y_);
-      C = coshdelta + sinhdelta * Tanh[j];
-      S = sinhdelta + coshdelta * Tanh[j];
-    }
-    Is_deep C = S = std::exp(j * Y_);
+    VerticalBasis(j, Y_, kd, S, C);
     phi += B[j] * C * Sin;
     psi += B[j] * S * Cos;
     u += j * B[j] * C * Cos;
@@ -2022,42 +2170,325 @@ static void Point(double X, double Y_)
   }
 }
 
-static double MeanSquareBedOrbitalVelocity(int nph = 720)
+struct KinematicOutputs {
+  double surface_velocity = 0.0, bed_velocity = 0.0;
+  double surface_acceleration = 0.0, bed_acceleration = 0.0;
+  double asymmetry = 0.0;
+};
+static KinematicOutputs kinematics;
+
+static double PhaseQuantity(double phase, bool bed, bool acceleration)
 {
-  // Only defined/used for finite depth in this legacy program.
-  // In deep water there is no physical bed at finite depth to evaluate.
-  if (std::strcmp(Depth, "Finite") != 0) return 0.0;
-  if (kd <= 0.0) return 0.0;
+  const double ordinate = bed ? -kd : Surface(phase);
+  if (std::strcmp(Depth,"Finite")==0 && !bed && kd+ordinate<=0.0)
+    throw std::runtime_error("Interpolated free surface intersects the bed.");
+  Point(phase,ordinate);
+  const double value = acceleration ? dudt : u;
+  if (!std::isfinite(value)) throw std::runtime_error("Non-finite kinematic phase evaluation.");
+  return std::abs(value);
+}
 
-  // Definition used here:
-  //   ub² = < (ub - ū₁)² >
-  // with phase-averaging over one wave period / wavelength.
-  const int N = std::max(36, nph);
-
-  const double twoPi = 2.0 * pi;
-
-  // In finite depth, Point() expects Y_ = k(y - d). At the bed y = 0 => Y_ = -k d = -kd.
-  const double Y_bed = -kd;
-
-  double sumsq = 0.0;
-
-  for (int i = 0; i < N; ++i) {
-    const double X = twoPi * (static_cast<double>(i) / static_cast<double>(N));
-
-    // Evaluates u, v, pressures, etc. at (X, Y_bed). Results are stored in globals.
-    Point(X, Y_bed);
-
-    // Point() returns velocities in the depth-based non-dimensionalisation (scaled by √(g d)).
-    // Convert to the solver's native k-based non-dimensionalisation (scaled by √(g/k)):
-    const double u_abs_gk = u * std::sqrt(kd);
-
-    // Remove the Eulerian mean current u1 (k-based variable is z[5]) to obtain orbital velocity.
-    const double u_orb_gk = u_abs_gk - z[5];
-
-    sumsq += u_orb_gk * u_orb_gk;
+  static double PhaseMaximum(bool bed, bool acceleration) {
+    const int count = std::max(257, 8 * n + 1);
+    std::vector<double> phases(count), values(count);
+    double best = 0.0;
+    for (int i = 0; i < count; ++i) {
+      phases[i] = pi * i / (count - 1);
+      values[i] = PhaseQuantity(phases[i], bed, acceleration);
+      best = std::max(best, values[i]);
+    }
+    const double golden = (std::sqrt(5.0) - 1.0) / 2.0;
+    for (int i = 1; i < count - 1; ++i) {
+      if (!(values[i] >= values[i-1] && values[i] >= values[i+1] &&
+            (values[i] > values[i-1] || values[i] > values[i+1]))) continue;
+      double left = phases[i-1], right = phases[i+1];
+      double x1 = right - golden*(right-left), x2 = left + golden*(right-left);
+      double f1 = PhaseQuantity(x1, bed, acceleration);
+      double f2 = PhaseQuantity(x2, bed, acceleration);
+      best = std::max({best, f1, f2});
+      for (int iteration = 0; iteration < 64 && right-left >= 1e-12; ++iteration) {
+        if (f1 < f2) {
+          left = x1; x1 = x2; f1 = f2;
+          x2 = left + golden*(right-left);
+          f2 = PhaseQuantity(x2, bed, acceleration);
+        } else {
+          right = x2; x2 = x1; f2 = f1;
+          x1 = right - golden*(right-left);
+          f1 = PhaseQuantity(x1, bed, acceleration);
+        }
+        best = std::max({best, f1, f2});
+      }
+    }
+    return best;
   }
 
-  return sumsq / static_cast<double>(N);
+
+static void CalculateKinematicOutputs()
+{
+  kinematics = KinematicOutputs{};
+  kinematics.surface_velocity = PhaseMaximum(false,false);
+  kinematics.surface_acceleration = PhaseMaximum(false,true);
+  if (std::strcmp(Depth,"Finite")==0) {
+    kinematics.bed_velocity = PhaseMaximum(true,false);
+    kinematics.bed_acceleration = PhaseMaximum(true,true);
+    if (!std::isfinite(ub2) || ub2<0.0) throw std::runtime_error("Invalid bed orbital velocity variance.");
+  }
+  Point(0.0,Surface(0.0));
+  const double crest_velocity = u;
+  Point(pi,Surface(pi));
+  if (!std::isfinite(crest_velocity) || !std::isfinite(u))
+    throw std::runtime_error("Non-finite surface velocity for asymmetry.");
+  kinematics.asymmetry = std::abs(u)>0.0 ? std::abs(crest_velocity/u) : 0.0;
+  if (!std::isfinite(kinematics.asymmetry)) throw std::runtime_error("Non-finite velocity asymmetry.");
+}
+
+static void WriteKinematicOutputs(std::FILE* file)
+{
+  const bool finite = std::strcmp(Depth,"Finite")==0;
+  const char* velocity_scale = finite ? "u/sqrt(g*d)" : "u/sqrt(g/k)";
+  std::fprintf(file,"\n\n");
+  std::fprintf(file,"# Material accelerations are divided by g. Bed quantities require finite depth.\n");
+  auto row = [file](const char* label, double value, const char* scaling, bool available=true) {
+    if (available) std::fprintf(file,"# %-38s % .16e  %s\n",label,value,scaling);
+    else std::fprintf(file,"# %-38s N/A\n",label);
+  };
+  row("Surface max |u|",kinematics.surface_velocity,velocity_scale);
+  row("Bed max |u|",kinematics.bed_velocity,velocity_scale,finite);
+  row("Surface max |aₓ|",kinematics.surface_acceleration,"a_x/g");
+  row("Bed max |aₓ|",kinematics.bed_acceleration,"a_x/g",finite);
+  row("Velocity asymmetry |uc|/|ut|",kinematics.asymmetry,"-");
+  row("Mean square bed orbital vel ub²",finite ? ub2/kd : 0.0,"ub²/(g*d)",finite);
+  row("Bed orbital RMS velocity ub,rms",finite ? std::sqrt(ub2/kd) : 0.0,"ub,rms/sqrt(g*d)",finite);
+}
+
+static double MeanSquareBedOrbitalVelocity()
+{
+  if (std::strcmp(Depth, "Finite") != 0) return 0.0;
+  double result = 0.0;
+  for (int j = 1; j <= n; ++j) {
+    const double inverse_cosh = 2.0 * std::exp(-j*z[1]) / (1.0 + std::exp(-2.0*j*z[1]));
+    const double amplitude = j*B[j]*inverse_cosh;
+    result += 0.5*amplitude*amplitude;
+  }
+  return result;
+}
+
+static void CalculateIntegralOutputs()
+{
+  kd = z[1];
+  L = 2.0*pi/kd; H = z[2]/kd; T = z[3]/std::sqrt(kd);
+  c = z[4]/std::sqrt(kd); ce = z[5]/std::sqrt(kd);
+  cs = z[6]/std::sqrt(kd); ubar = z[7]/std::sqrt(kd);
+  if (std::strcmp(Depth, "Finite") != 0) return;
+  q = z[7]*kd-z[8]; Q = q/std::pow(kd,1.5);
+  r = z[9]+kd; R = r/kd;
+  pulse = z[8]+kd*z[5];
+  ke = 0.5*(z[4]*pulse-z[5]*q);
+  pe = Y[n]*Y[n]/16.0;
+  for (int j=1;j<n;++j) pe += 0.25*Y[j]*Y[j];
+  const double beta = 2.0*z[9]-z[4]*z[4]+2.0*z[4]*z[5];
+  sxx = 4.0*ke-3.0*pe+beta*kd-2.0*z[5]*pulse;
+  f = z[4]*(3.0*ke-2.0*pe)+0.5*beta*(pulse+z[4]*kd)-2.0*z[4]*z[5]*pulse;
+  ub2 = MeanSquareBedOrbitalVelocity();
+  s = sxx-2.0*z[4]*pulse+(z[4]*z[4]+0.5*kd)*kd;
+}
+
+static std::map<std::string,double> SelectedOutputs()
+{
+  // Values use g and k for nondimensionalisation; density is factored out.
+  return {{"L",2.0*pi},{"c",z[4]},{"Impulse",pulse},{"KineticEnergy",ke},
+          {"PotentialEnergy",pe},{"EnergyDensity",ke+pe},{"Sxx",sxx},{"Power",f},
+          {"MeanSquareBedVelocity",ub2}};
+}
+
+static bool VerifyFiniteSystem() {
+        using I=Verified::Interval;
+
+        finite_system_certificate=Verified::Certificate{};
+        volatile Real smallest=std::numeric_limits<Real>::denorm_min();
+        if (!std::numeric_limits<Real>::is_iec559 || std::fegetround()!=FE_TONEAREST ||
+            smallest*2.0!=std::nextafter(std::numeric_limits<Real>::denorm_min(),1.0))
+            throw std::runtime_error("Interval verification requires IEEE binary64, round-to-nearest and gradual underflow.");
+        std::vector<I> state;state.reserve(static_cast<size_t>(num+1));
+        state.emplace_back(0.0);
+        for (int i=1;i<=num;++i) state.emplace_back(z[i]);
+        const bool finite = std::strcmp(Depth,"Finite")==0;
+        const bool wavelength = std::strcmp(Case,"Wavelength")==0;
+        std::vector<I> F((size_t)(2*n+10));
+        F[0]=finite ? state[2]-state[1]*I(MaxH) : state[1]-I(1);
+        F[1]=wavelength ? state[2]-I(2)*Verified::pi()*I(Height)
+                        : state[2]-I(Height)*state[3].square();
+        F[2]=state[4]*state[3]-I(2)*Verified::pi();
+        F[3]=state[5]+state[7]-state[4];
+        F[4]=state[1]*(state[6]+state[7]-state[4])-state[8];
+        F[5]=state[(size_t)Current_criterion+4]-I(Current)*(finite ? state[1].sqrt()
+                           : (wavelength ? I(1) : state[3]));
+        F[6]=state[10]+state[(size_t)n+10];
+        for (int j=11;j<n+10;++j) F[6]=F[6]+I(2)*state[(size_t)j];
+        F[7]=state[10]-state[(size_t)n+10]-state[2];
+        const auto table=Verified::collocation(n);
+        std::vector<I> denominators;denominators.reserve((size_t)n);
+        for (int j=1;j<=n;++j) denominators.push_back(I(1)+(-I(2*j)*state[1]).exp());
+        for (int m=0;m<=n;++m) {
+            const I ordinate=state[(size_t)m+10];
+            I psi,u,v;
+            for (int j=1;j<=n;++j) {
+                const I ep=(I(j)*ordinate).exp(),em=(-I(j)*ordinate-I(2*j)*state[1]).exp();
+                const I S=finite ? (ep-em)/denominators[(size_t)j-1] : ep;
+                const I C=finite ? (ep+em)/denominators[(size_t)j-1] : ep;
+                const auto& trig=table[(size_t)((m*j)%(2*n))];
+                const I coefficient=state[(size_t)n+10+j];
+                psi=psi+coefficient*S*trig.second;
+                u=u+I(j)*coefficient*C*trig.second;
+                v=v+I(j)*coefficient*S*trig.first;
+            }
+            F[(size_t)8+m]=psi-state[8]-state[7]*ordinate;
+            F[(size_t)n+9+m]=((u-state[7]).square()+v.square())/I(2)+ordinate-state[9];
+        }
+        const I wave_number=state[1],speed_scale=(I(1)/wave_number).sqrt();
+        const I energy_scale=I(1)/wave_number.square(),density(1),gravity(1);
+        const I pulse=state[8]+state[1]*state[5],flux_scaled=state[7]*state[1]-state[8];
+        const I kinetic=(state[4]*pulse-state[5]*flux_scaled)/I(2);
+        I potential;
+        for (int j=1;j<n;++j) potential=potential+I(Y[(size_t)j]).square()/I(4);
+        potential=potential+I(Y[(size_t)n]).square()/I(16);
+        const I beta=I(2)*state[9]-state[4].square()+I(2)*state[4]*state[5];
+        const I stress=I(4)*kinetic-I(3)*potential+beta*state[1]-I(2)*state[5]*pulse;
+        const I power=state[4]*(I(3)*kinetic-I(2)*potential)+beta*(pulse+state[4]*state[1])/I(2)
+                     -I(2)*state[4]*state[5]*pulse;
+        I bed_sum;
+        for (int j=1;j<=n;++j) {
+            const I inverse_cosh=I(2)*(-I(j)*state[1]).exp()/denominators[(size_t)j-1];
+            bed_sum=bed_sum+(I(j)*state[(size_t)n+10+j]*inverse_cosh).square()/I(2);
+        }
+        const std::map<std::string,I> outputs={
+            {"L",I(2)*Verified::pi()/wave_number},{"c",state[4]*speed_scale},
+            {"Impulse",density*speed_scale/wave_number*pulse},{"KineticEnergy",energy_scale*kinetic},
+            {"PotentialEnergy",energy_scale*potential},{"EnergyDensity",energy_scale*(kinetic+potential)},
+            {"Sxx",energy_scale*stress},{"Power",energy_scale*speed_scale*power},
+            {"MeanSquareBedVelocity",gravity/wave_number*bed_sum}
+        };
+        const std::map<std::string,Real> reported={
+            {"L",L},{"c",c},{"Impulse",::pulse/std::pow(kd,1.5)},
+            {"KineticEnergy",ke/(kd*kd)},{"PotentialEnergy",pe/(kd*kd)},
+            {"EnergyDensity",(ke+pe)/(kd*kd)},{"Sxx",sxx/(kd*kd)},
+            {"Power",f/std::pow(kd,2.5)},{"MeanSquareBedVelocity",ub2/kd}
+        };
+        auto& certificate=finite_system_certificate;
+        certificate.state.assign(1,0.0);
+        certificate.state.insert(certificate.state.end(),z+1,z+num+1);
+        certificate.surface_coefficients.assign(Y,Y+n+1);
+        certificate.scope=finite ? "Collocation residuals and nine depth-scaled outputs"
+                                 : "Deep-water collocation residuals; finite-depth integral outputs excluded";
+        certificate.order=n;certificate.equation_count=(int)F.size();certificate.residual_intervals=F;
+        // The lower adjacent constants are conservative decimal tolerance bounds.
+        certificate.residual_tolerance=I::down(1e-10);
+        for (const auto& residual : F) certificate.residual_upper=std::max(certificate.residual_upper,residual.magnitude());
+        bool valid=certificate.residual_upper<=certificate.residual_tolerance;
+        if (finite) for (const auto& entry : outputs) {
+            const auto& interval=entry.second;
+            const Real minimum=interval.lo<=0.0 && interval.hi>=0.0 ? 0.0 : std::min(std::abs(interval.lo),std::abs(interval.hi));
+            Verified::OutputBound check;
+            check.enclosure=interval;check.reported=reported.at(entry.first);
+            check.error_upper=(I(check.reported)-interval).magnitude();
+            check.budget_lower=I::down(I::down(1e-7)+I::down(I::down(1e-8)*minimum));
+            valid=valid && check.error_upper<=check.budget_lower;
+            certificate.outputs.emplace(entry.first,check);
+        }
+        certificate.passed=valid;
+        return valid;
+    }
+
+    static std::pair<std::vector<Real>, std::vector<Real>> gauss_legendre(int count) {
+        std::vector<Real> nodes((size_t)count), weights((size_t)count);
+        for (int i = 0; i < (count+1)/2; ++i) {
+            Real root = std::cos(Phys::PI*(i+0.75)/(count+0.5)), derivative = 0.0;
+            bool ready = false;
+            for (int iteration = 0; iteration < 100; ++iteration) {
+                Real p0 = 1.0, p1 = root;
+                for (int j = 2; j <= count; ++j) {
+                    const Real next = ((2*j-1)*root*p1-(j-1)*p0)/j;
+                    p0 = p1; p1 = next;
+                }
+                derivative = count*(root*p1-p0)/(root*root-1.0);
+                const Real delta = p1/derivative;
+                if (std::abs(delta) <= 4*std::numeric_limits<Real>::epsilon()) { ready = true; break; }
+                root -= delta;
+            }
+            if (!ready) throw std::runtime_error("Gauss-Legendre node iteration did not converge.");
+            const Real weight = 2.0/((1.0-root*root)*derivative*derivative);
+            nodes[(size_t)i] = -root; nodes[(size_t)(count-1-i)] = root;
+            weights[(size_t)i] = weights[(size_t)(count-1-i)] = weight;
+        }
+        return {nodes, weights};
+    }
+
+
+static std::map<std::string, Real> DefiningIntegrals(int phase_count, int vertical_count) {
+        const auto quadrature = gauss_legendre(vertical_count);
+        Real impulse = 0.0, kinetic = 0.0, potential = 0.0, stress = 0.0, power = 0.0;
+        std::vector<Real> cosine((size_t)n+1), sine((size_t)n+1);
+        for (int i = 0; i < phase_count; ++i) {
+            const Real phase = 2.0*Phys::PI*i/phase_count;
+            const Real eta = Surface(phase), thickness = (z[1]+eta)/2.0;
+            if (!(thickness > 0.0) || !std::isfinite(thickness))
+                throw std::runtime_error("The interpolated surface intersects the bed or is non-finite.");
+            potential += 0.5*eta*eta/phase_count;
+            for (int j = 1; j <= n; ++j) {
+                cosine[(size_t)j] = std::cos(j*phase);
+                sine[(size_t)j] = std::sin(j*phase);
+            }
+            for (int m = 0; m < vertical_count; ++m) {
+                const Real y = -z[1]+thickness*(quadrature.first[(size_t)m]+1.0);
+                Real u = z[5], v = 0.0;
+                for (int j = 1; j <= n; ++j) {
+                    const Real a = j*y, b = j*z[1];
+                    const Real denominator = 1.0+std::exp(-2*b);
+                    const Real positive = std::exp(a), reflected = std::exp(-a-2*b);
+                    const Real amplitude = j*B[(size_t)j];
+                    u += (positive+reflected)/denominator*amplitude*cosine[(size_t)j];
+                    v += (positive-reflected)/denominator*amplitude*sine[(size_t)j];
+                }
+                const Real pressure = z[9]-y-0.5*((u-z[4])*(u-z[4])+v*v);
+                const Real weight = quadrature.second[(size_t)m]*thickness/phase_count;
+                impulse += weight*u;
+                kinetic += weight*0.5*(u*u+v*v);
+                stress += weight*(pressure+u*u);
+                power += weight*(pressure+y+0.5*(u*u+v*v))*u;
+            }
+        }
+        return {{"Impulse", impulse}, {"KineticEnergy", kinetic}, {"PotentialEnergy", potential},
+                {"Sxx", stress-0.5*z[1]*z[1]}, {"Power", power}};
+    }
+
+static double ComparisonRatio(double value, double reference)
+{
+  if (!std::isfinite(value) || !std::isfinite(reference))
+    return std::numeric_limits<double>::infinity();
+  return std::abs(value-reference)/(1e-7+1e-8*std::abs(reference));
+}
+
+static bool VerifyAccuracy()
+{
+  spectral_defect = SpectralDefect();
+  integral_error_ratio = spectral_error_ratio = 0.0;
+  const bool interval_pass = VerifyFiniteSystem();
+  if (!std::isfinite(spectral_defect) || spectral_defect > 1e-6 || !interval_pass) return false;
+  if (std::strcmp(Depth,"Finite") != 0) return true;
+  const auto reported = SelectedOutputs();
+  const double bed_absolute = ub2+z[5]*z[5];
+  const double spectral_stress = 4.0*ke-3.0*pe+bed_absolute*kd-2.0*z[5]*pulse;
+  const double spectral_power = z[4]*(3.0*ke-2.0*pe)
+      +0.5*bed_absolute*(pulse+z[4]*kd)-2.0*z[4]*z[5]*pulse;
+  spectral_error_ratio = std::max(ComparisonRatio(sxx,spectral_stress),ComparisonRatio(f,spectral_power));
+  const auto coarse = DefiningIntegrals(std::max(256,8*n),64);
+  const auto fine = DefiningIntegrals(std::max(512,16*n),96);
+  for (const auto& entry : fine) {
+    integral_error_ratio = std::max({integral_error_ratio,
+        ComparisonRatio(coarse.at(entry.first),entry.second),
+        ComparisonRatio(reported.at(entry.first),entry.second)});
+  }
+  return spectral_error_ratio<=1.0 && integral_error_ratio<=1.0;
 }
 
 /**
@@ -2077,6 +2508,7 @@ static void Output(void)
 {
   int i, I;
   double X = 0.0, eta = 0.0, y = 0.0;
+  kd = z[1];
 
   std::fprintf(monitor, "\n\n# Solution summary:\n\n");
   Is_finite Title_block(monitor);
@@ -2085,83 +2517,16 @@ static void Output(void)
   Is_finite Title_block(Solution);
   Is_deep Title_block_deep(Solution);
 
-  Is_finite {
-    /*
-      DERIVING "ENGINEERING" VARIABLES FROM THE SOLVER STATE (FINITE DEPTH)
-      --------------------------------------------------------------------
-      After Newton convergence at the final continuation step, z[] contains the
-      solution in the solver's k-based nondimensionalisation.
 
-      We now compute commonly used dimensional groups (still non-dimensional but
-      in depth-based scaling) for reporting:
-
-        kd   = k d
-        L/d  = 2π / kd
-        H/d  = (kH) / (kd)
-        T√(g/d) = z[3] / √(kd)
-        c/√(g d) = z[4] / √(kd)
-
-      and corresponding currents:
-        ū1/√(g d) = z[5] / √(kd)
-        ū2/√(g d) = z[6] / √(kd)
-        U/√(g d)  = z[7] / √(kd)
-
-      Flux and Bernoulli constants also require kd^(3/2) factors because of the
-      scaling of streamfunction/potential with √(g/k³).
-    */
-    kd = z[1];
-    L = 2 * pi / z[1];
-    H = z[2] / z[1];
-    T = z[3] / std::sqrt(z[1]);
-    c = z[4] / std::sqrt(z[1]);
-    ce = z[5] / std::sqrt(z[1]);
-    cs = z[6] / std::sqrt(z[1]);
-    ubar = z[7] / std::sqrt(z[1]);
-    /*
-      DISCHARGE (VOLUME FLUX) IN THE MOVING FRAME
-      ------------------------------------------
-      In Fenton's notation, Q is the depth-integrated volume flux per unit width
-      in the frame moving with the wave. In the solver variables, z[8] represents
-      a k-based flux-related term, so the conversion to depth-based scaling
-      introduces kd^(3/2):
-
-          Q = U - q / (kd)^(3/2)
-
-      where U is the mean flow in the wave frame (depth-based).
-    */
-    Q = ubar - z[8] / std::pow(kd, 1.5);
-    R = 1 + z[9] / z[1];
-
-    pulse = z[8] + z[1] * z[5];
-    ke = 0.5 * (z[4] * pulse - z[5] * Q * std::pow(kd, 1.5));
-
-    pe = 0;
-    for (i = 1; i <= n; ++i) pe += 0.25 * std::pow(Y[i], 2);
-
-    // -------------------------------------------------------------------------
-    // Integral-wave auxiliary quantity used in Fenton-style expressions:
-    //   ub2_internal = 2 r - c^2 (in the program's k-based non-dimensionalisation)
-    //
-    // This value appears inside the original formulas for radiation stress (Sxx)
-    // and wave power (F). We preserve that usage unchanged to keep those formulas
-    // identical to the supplied codebase.
-    // -------------------------------------------------------------------------
-    const double ub2_internal = 2. * z[9] - z[4] * z[4];
-
-    sxx = 4. * ke - 3. * pe + ub2_internal * z[1] + 2. * z[5] * (z[7] * z[1] - z[8]);
-    f = z[4] * (3. * ke - 2. * pe) + 0.5 * ub2_internal * (pulse + z[4] * z[1]) + z[4] * z[5] * (z[7] * z[1] - z[8]);
-
-    // -------------------------------------------------------------------------
-    // Reported mean square *orbital* bed velocity ub2:
-    //   ub2 = < (ub - u1)^2 >
-    // where u1 is the Eulerian current and <·> denotes phase averaging.
-    // -------------------------------------------------------------------------
-    ub2 = MeanSquareBedOrbitalVelocity();
-    q = z[7] * z[1] - z[8];
-    r = z[9] + z[1];
-    s = sxx - 2. * z[4] * pulse + (z[4] * z[4] + 0.5 * z[1]) * z[1];
-  }
-
+  std::fprintf(monitor, "\n# Requested Fourier order: %d; active order: %d", requested_order, n);
+  std::fprintf(monitor, "\n# Maximum absolute residual: %.16e", final_residual);
+  std::fprintf(monitor, "\n# Equilibrated Jacobian condition: %.16e", jacobian_condition);
+  std::fprintf(monitor, "\n# Between-node boundary defect: %.16e", spectral_defect);
+  std::fprintf(monitor, "\n# Interval residual upper bound: %.16e", finite_system_certificate.residual_upper);
+  std::fprintf(monitor, "\n# Verification scope: %s", finite_system_certificate.scope.c_str());
+  Is_finite std::fprintf(monitor, "\n# Output budget in each nondimensional scaling: 1e-7 + 1e-8 * abs(reference)");
+  Is_finite std::fprintf(monitor, "\n# Spectral/integral comparison-to-budget ratios: %.8e / %.8e",
+                        spectral_error_ratio, integral_error_ratio);
   Is_finite std::fprintf(Solution, "\n# Stokes-Ursell number %7.3f", 0.5 * z[2] / std::pow(z[1], 3));
   std::fprintf(Solution, "\n\n# Integral quantities - notation from Fenton (1988)");
   Is_finite {
@@ -2175,9 +2540,9 @@ static void Output(void)
   Results("# Wave height                        (H)", z[2], H);
   Results("# Wave period                      (tau)", z[3], T);
   Results("# Wave speed                         (c)", z[4], c);
-  Results("# Eulerian current                  (u1)", z[5], ce);
-  Results("# Stokes current                    (u2)", z[6], cs);
-  Results("# Mean fluid speed in frame of wave  (U)", z[7], ubar);
+  Results("# Eulerian current                 (u1_)", z[5], ce);
+  Results("# Stokes current                   (u2_)", z[6], cs);
+  Results("# Mean fluid speed in frame of wave (U_)", z[7], ubar);
   Results("# Volume flux due to waves           (q)", z[8], z[8] / std::pow(kd, 1.5));
   Results("# Bernoulli constant                 (r)", z[9], z[9] / kd);
 
@@ -2188,7 +2553,7 @@ static void Output(void)
     Results("# Impulse                            (I)", pulse, pulse / std::pow(kd, 1.5));
     Results("# Kinetic energy                     (T)", ke, ke / kd / kd);
     Results("# Potential energy                   (V)", pe, pe / kd / kd);
-    Results("# Mean square of bed velocity      (ub2)", ub2, ub2 / kd);
+    Results("# Mean square of bed velocity     (ub2_)", ub2, ub2 / kd);
     Results("# Radiation stress                 (Sxx)", sxx, sxx / kd / kd);
     Results("# Wave power                         (F)", f, f / std::pow(kd, 2.5));
   }
@@ -2200,6 +2565,8 @@ static void Output(void)
     std::fprintf(Solution, "\n%2d\t%15.7e\t%15.7e", i, B[i], Y[i]);
   }
   std::fprintf(Solution, "\n\n");
+
+  WriteKinematicOutputs(monitor);
 
   // Surface coordinates
   std::fprintf(Elevation, "# %s\n", Title);
@@ -2358,8 +2725,8 @@ auto print_usage = [&](std::FILE* out) {
     "                        (defaults to 0.0 if omitted)\n"
     "                        CurrentValue = current / sqrt(g d)\n"
     "                        IMPORTANT: must appear immediately after CurrentCriterion\n"
-    "    N                = number of Fourier components (Instructions.pdf §6.1.5)\n"
-    "    Steps            = number of height steps to reach the final H/d (Instructions.pdf §6.1.6)\n\n"
+    "    N                = requested Fourier order (1..512); reduced if ill-conditioned\n"
+    "    Steps            = initial height subdivision (1..4096); continuation is adaptive\n\n"
     "Output files (lowercase): solution.res, surface.res, flowfield.res\n",
     exe, exe
   );
@@ -2379,7 +2746,7 @@ auto print_usage = [&](std::FILE* out) {
     char* end = nullptr;
     const std::string tmp(s);
     out = std::strtod(tmp.c_str(), &end);
-    return end && *end == '\0';
+    return end && end != tmp.c_str() && *end == '\0' && std::isfinite(out);
   };
 
   monitor = stdout;
@@ -2488,7 +2855,7 @@ if (have_data_file) {
     Input1 = input.get();
 
     if (!Read_data()) {
-      std::fprintf(stderr, "No case found in data.dat (FINISH encountered).\n");
+      std::fprintf(stderr, "No valid case found in data.dat (incomplete input or FINISH).\n");
       return 1;
     }
   } else {
@@ -2644,6 +3011,15 @@ nstep = steps;
     Input_Data_block(monitor);
   }
 
+  if (!std::isfinite(MaxH) || MaxH == 0.0 || !std::isfinite(Height) || Height <= 0.0 ||
+      !std::isfinite(Current) || n < 1 || n > 512 || nstep < 1 || nstep > 4096 ||
+      (Current_criterion != 1 && Current_criterion != 2) ||
+      (std::strcmp(Case, "Period") != 0 && std::strcmp(Case, "Wavelength") != 0)) {
+    std::fprintf(stderr, "Invalid input: finite nonzero height, positive period/wavelength, "
+                         "criterion 1 or 2, 1 <= N <= 512 and 1 <= Steps <= 4096 are required.\n");
+    return 2;
+  }
+
   // ---------------------------------------------------------------------------
   // Allocate solver work arrays (NR-style 1-based indexing, but RAII-managed)
   // ---------------------------------------------------------------------------
@@ -2660,8 +3036,6 @@ nstep = steps;
   omp_set_dynamic(0);
 #endif
 
-  const double dhe = Height / nstep;   // increment in “height” variable used by the legacy algorithm
-  const double dho = MaxH   / nstep;   // increment in H/d used for step-wise continuation
 
   // RAII owners for long-lived allocations. Raw pointers are retained for
   // compatibility with the original indexing and formula structure.
@@ -2698,89 +3072,46 @@ nstep = steps;
   auto B_owner     = make_dvector_owner(1, n);           B = B_owner.get();
   auto Tanh_owner  = make_dvector_owner(1, n);           Tanh = Tanh_owner.get();
 
-  // ---------------------------------------------------------------------------
-  // Continuation in wave height (Fenton 1988 continuation/robustness strategy)
-  // ---------------------------------------------------------------------------
-  /*
-    HEIGHT STEPPING / CONTINUATION STRATEGY
-    --------------------------------------
-    Solving directly at the target H/d can fail when the wave is steep because
-    Newton's method is local: it requires a sufficiently good initial guess.
-
-    The standard remedy in steady-wave solvers is *continuation*:
-      1) Start from a small-amplitude wave where linear theory provides a good
-         initial guess (init()).
-      2) Increase the target height gradually in `nstep` increments.
-      3) At each increment, use the previous converged solution as a predictor
-         for the next one. This code uses a simple secant predictor:
-             z_pred = 2*z_prev - z_prevprev
-         which approximates the tangent direction along the solution branch.
-
-    Variables:
-      - `height` : legacy internal continuation parameter used in Eqns() branches
-      - `Hoverd` : physically meaningful H/d at the current step
-
-    On the *final* step (ns == nstep), the solver tightens the tolerance from
-    crit (typically 1e-9) to 1e-10, matching the legacy program behaviour.
-  */
-  for (ns = 1; ns <= nstep; ns++) {
-    height = ns * dhe;   // legacy “height parameter” used internally by init/Eqns branches
-    Hoverd = ns * dho;   // H/d at this continuation step
-
-    std::fprintf(monitor, "\n\nHeight step %2d of %2d\n", ns, nstep);
-
-    // Step 1: small-amplitude initial guess (linear / weakly nonlinear start)
-    if (ns <= 1) {
-      init();
-    } else {
-      // Step >1: extrapolation from two previous solutions (simple secant continuation)
-      for (int i = 1; i <= num; i++) z[i] = 2.0 * sol[i][2] - sol[i][1];
+  requested_order = n;
+  const int minimum_order = std::min(n, 12);
+  bool solved = false;
+  for (;;) {
+    num = 2 * n + 10;
+    solved = ContinueToTarget();
+    RefreshCondition();
+    std::fprintf(monitor, "\nFourier order %d: residual %.3e, condition %.3e\n",
+                 n, final_residual, jacobian_condition);
+    if (jacobian_condition <= kConditionLimit || n <= minimum_order) break;
+    n = std::max(minimum_order, static_cast<int>(0.8 * n));
+    std::fprintf(monitor, "Retrying with Fourier order %d.\n", n);
+  }
+  if (!solved || !std::isfinite(jacobian_condition) || jacobian_condition > kConditionLimit) {
+    std::fprintf(stderr, "Numerical failure: no verified solution at the requested height. "
+                         "No result files were written.\n");
+    return 3;
+  }
+  std::snprintf(Method, sizeof(Method), "# Solution by %d-term Fourier series", n);
+  Y[0] = 0.0;
+  for (int j = 1; j <= n; ++j) {
+    B[j] = z[j + n + 10];
+    double sum = 0.5 * (z[10] + z[n + 10] * (j % 2 ? -1.0 : 1.0));
+    for (int m = 1; m < n; ++m) sum += z[10 + m] * cosa[(m * j) % (2 * n)];
+    Y[j] = 2.0 * sum / n;
+  }
+  CalculateIntegralOutputs();
+  try {
+    if (!VerifyAccuracy()) {
+      std::fprintf(stderr,"Numerical accuracy checks failed: surface residual %.3e, interval residual %.3e, "
+                          "spectral comparison/budget %.3e, integral comparison/budget %.3e. "
+                          "No result files were written for this run.\n",
+                          spectral_defect,finite_system_certificate.residual_upper,
+                          spectral_error_ratio,integral_error_ratio);
+      return 4;
     }
-
-    // Newton iterations for this step
-    for (int iter = 1; iter <= number; iter++) {
-      std::fprintf(monitor, "\nIteration%3d:", iter);
-
-      const double error = Newton(iter);
-
-      std::fprintf(stdout, " Mean of corrections to free surface: %8.1e", error);
-
-      // Tighten the final step (legacy behavior preserved)
-      criter = (ns == nstep) ? 1.0e-10 : crit;
-
-      if ((error < criter * std::fabs(z[1])) && iter > 1) break;
-
-      if (iter == number) {
-        std::fprintf(stdout,
-          "\nNote that the program still had not converged to the degree specified\n"
-        );
-      }
-
-      // Extrapolation bookkeeping: retain last two solutions for the secant predictor
-      if (ns == 1) {
-        for (int i = 1; i <= num; i++) sol[i][2] = z[i];
-      } else {
-        for (int i = 1; i <= num; i++) {
-          sol[i][1] = sol[i][2];
-          sol[i][2] = z[i];
-        }
-      }
-    }
-
-    // -------------------------------------------------------------------------
-    // POST-PROCESS: RECOVER COSINE-SERIES COEFFICIENTS FOR kη(X)
-    // -------------------------------------------------------------------------
-    Y[0] = 0.0;
-    #pragma omp parallel for schedule(static) if(n >= 24)
-    for (int j = 1; j <= n; ++j) {
-      B[j] = z[j + n + 10];
-
-      double cosine_sum = 0.5 * (z[10] + z[n + 10] * std::pow(-1.0, static_cast<double>(j)));
-      for (int m = 1; m < n; ++m) {
-        cosine_sum += z[10 + m] * cosa[(m * j) % (2 * n)];
-      }
-      Y[j] = 2.0 * cosine_sum / n;
-    }
+    CalculateKinematicOutputs();
+  } catch (const std::exception& error) {
+    std::fprintf(stderr,"Numerical verification failed: %s. No result files were written for this run.\n",error.what());
+    return 4;
   }
 
 // To make it obvious to users *where* files are written (especially on Windows,
@@ -2809,6 +3140,27 @@ std::fprintf(stdout, "  %s\n", out_flowfield.string().c_str());
 
   Output();
 
+  auto close_result = [](FilePtr& file, const char* name) {
+    bool failed = std::ferror(file.get()) != 0;
+    if (std::fclose(file.release()) != 0) failed = true;
+    if (failed) std::fprintf(stderr, "Failed to finish writing %s.\n", name);
+    return !failed;
+  };
+  const bool solution_closed = close_result(solution_fp, "solution.res");
+  const bool elevation_closed = close_result(elevation_fp, "surface.res");
+  const bool flowfield_closed = close_result(flowfield_fp, "flowfield.res");
+  Solution = Elevation = Flowfield = nullptr;
+  if (!solution_closed || !elevation_closed || !flowfield_closed) return 1;
+
   std::printf("\nFinished\n");
+  std::fflush(stdout);
+  std::fflush(stderr);
+#if defined(_WIN32)
+  // Release a console used exclusively by this process.
+  DWORD console_processes[2] = {};
+  const DWORD console_count = ::GetConsoleProcessList(console_processes, 2);
+  if (console_count == 1 && console_processes[0] == ::GetCurrentProcessId())
+    ::FreeConsole();
+#endif
   return 0;
 }

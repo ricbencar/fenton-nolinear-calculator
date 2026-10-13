@@ -24,6 +24,7 @@ import argparse
 import math
 import re
 import sys
+import textwrap
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -72,6 +73,8 @@ class SolutionData:
     fourier_order: int | None
     residual_rms: float | None
     residual_max: float | None
+    requested_order: int | None = None
+    spectral_test_passed: bool | None = None
 
 
 
@@ -109,6 +112,13 @@ class ResidualEntry:
 
 
 @dataclass(frozen=True)
+class FourierAttempt:
+    order: int
+    accepted: bool
+    condition: float
+
+
+@dataclass(frozen=True)
 class SolverData:
     fourier_order: int
     unknown_count: int
@@ -136,6 +146,11 @@ class SolverData:
     residual_groups: tuple[ResidualGroup, ...]
     residuals: tuple[ResidualEntry, ...]
     state_count: int
+    state_values: tuple[float, ...] = ()
+    requested_order: int | None = None
+    jacobian_condition: float | None = None
+    condition_limit: float | None = None
+    order_attempts: tuple[FourierAttempt, ...] = ()
 
 @dataclass(frozen=True)
 class SurfaceData:
@@ -191,7 +206,7 @@ def _first_float(text: str) -> float | None:
 
 
 def _all_floats(text: str) -> list[float]:
-    return [_as_float(value) for value in FLOAT_RE.findall(text)]
+    return [_as_float(value) for value in re.findall(NUMBER_PATTERN, text, re.IGNORECASE)]
 
 
 def _strip_comment_prefix(line: str) -> str:
@@ -339,6 +354,23 @@ def parse_solution(path: Path) -> SolutionData:
     if not modes:
         raise ValueError(f"No Fourier coefficients were found in {path}")
 
+    if modes != list(range(1, len(modes) + 1)):
+        raise ValueError(f"Fourier modes in {path} must be consecutive from 1 to N")
+    if fourier_order is not None and fourier_order != len(modes):
+        raise ValueError(f"Reported Fourier order disagrees with coefficient count in {path}")
+    by_symbol = {quantity.symbol: quantity for quantity in quantities}
+    if len(by_symbol) != len(quantities):
+        raise ValueError(f"Duplicate integral-quantity symbols in {path}")
+    # Integral rows retain more precision than the compact case header.
+    if "H" in by_symbol: height_depth = by_symbol["H"].d_based
+    if "lambda" in by_symbol: length_depth = by_symbol["lambda"].d_based
+    if "tau" in by_symbol: period_depth = by_symbol["tau"].d_based
+    current_symbol = {"eulerian": "u1", "euler": "u1", "masstransport": "u2", "stokes": "u2"}.get(
+        (current_criterion or "").casefold()
+    )
+    if current_symbol in by_symbol:
+        current_value = by_symbol[current_symbol].d_based
+
     return SolutionData(
         title=title,
         method=method,
@@ -377,7 +409,7 @@ def _solver_float(lines: Sequence[str], prefix: str) -> float:
         if not line.casefold().startswith(expected):
             continue
         remainder = line[len(prefix) :].strip()
-        match = re.match(NUMBER_PATTERN, remainder, re.IGNORECASE)
+        match = re.fullmatch(NUMBER_PATTERN, remainder, re.IGNORECASE)
         if match:
             return _as_float(match.group(0))
     raise ValueError(f"Required numeric solver field was not found: {prefix}")
@@ -461,7 +493,8 @@ def parse_solver(path: Path) -> SolverData:
     )
     residuals: list[ResidualEntry] = []
     state_indices: list[int] = []
-    state_re = re.compile(r"^z\[\s*(\d+)\]\s*=")
+    state_values: list[float] = []
+    state_re = re.compile(rf"^z\[\s*(\d+)\]\s*=\s*({NUMBER_PATTERN})", re.IGNORECASE)
     for raw_line in lines:
         residual_match = residual_re.match(raw_line)
         if residual_match:
@@ -478,6 +511,7 @@ def parse_solver(path: Path) -> SolverData:
         state_match = state_re.match(raw_line)
         if state_match:
             state_indices.append(int(state_match.group(1)))
+            state_values.append(_as_float(state_match.group(2)))
 
     if not continuation:
         raise ValueError(f"No adaptive-continuation rows were found in {path}")
@@ -502,6 +536,19 @@ def parse_solver(path: Path) -> SolverData:
             f"State indices in {path} are incomplete or out of order; "
             f"expected z[1..{unknown_count}]"
         )
+
+    attempt_re = re.compile(
+        rf"^\s*(\d+)\s+(PASS|REJECTED)\s+({NUMBER_PATTERN})\s*$", re.IGNORECASE
+    )
+    attempts = tuple(
+        FourierAttempt(int(match[1]), match[2].upper() == "PASS", _as_float(match[3]))
+        for line in lines if (match := attempt_re.match(line))
+    )
+    def optional_number(prefix: str) -> float | None:
+        if any(_strip_comment_prefix(line).casefold().startswith(prefix.casefold()) for line in lines):
+            return _solver_float(lines, prefix)
+        return None
+    requested = optional_number("Requested Fourier order")
 
     return SolverData(
         fourier_order=fourier_order,
@@ -550,6 +597,11 @@ def parse_solver(path: Path) -> SolverData:
         residual_groups=tuple(residual_groups),
         residuals=tuple(residuals),
         state_count=len(state_indices),
+        state_values=tuple(state_values),
+        requested_order=int(requested) if requested is not None else None,
+        jacobian_condition=optional_number("Equilibrated Jacobian condition"),
+        condition_limit=optional_number("Jacobian condition limit"),
+        order_attempts=attempts,
     )
 
 
@@ -562,6 +614,8 @@ def merge_solver_metadata(
         fourier_order=solver.fourier_order,
         residual_rms=solver.final_residual_rms,
         residual_max=solver.final_residual_max,
+        requested_order=solver.requested_order,
+        spectral_test_passed=solver.spectral_test_passed,
     )
 
 
@@ -626,6 +680,122 @@ def validate_result_set(
         raise ValueError("flowfield.res phases must be strictly increasing")
     if abs(phases[0]) > 1.0e-8 or abs(phases[-1] - 180.0) > 1.0e-6:
         raise ValueError("flowfield.res must span the crest-to-trough half-wave")
+    if solution.fourier_order != solver.fourier_order:
+        raise ValueError("solution.res and solver.res report different active Fourier orders")
+    if not solver.overall_convergence_passed or not solver.residual_test_passed:
+        raise ValueError("The solver did not verify nonlinear convergence")
+    numeric_arrays = [
+        solution.stream_coefficients, solution.surface_coefficients,
+        np.asarray([(q.k_based, q.d_based) for q in solution.quantities]),
+        surface.x_over_d, surface.pressure_check, flow.x, flow.y,
+        np.asarray(solver.state_values),
+        np.asarray([entry.value for entry in solver.residuals]),
+    ]
+    if any(not np.all(np.isfinite(values)) for values in numeric_arrays):
+        raise ValueError("The final result files contain non-finite values")
+    if not all(math.isfinite(value) and value > 0.0 for value in (
+        solver.residual_rms_tolerance, solver.residual_max_tolerance,
+        solver.spectral_defect_tolerance,
+    )):
+        raise ValueError("Solver tolerances must be finite and positive")
+    residual = np.asarray([entry.value for entry in solver.residuals])
+    actual_max = float(np.max(np.abs(residual)))
+    actual_rms = float(np.sqrt(np.mean(residual * residual)))
+    if actual_max > solver.residual_max_tolerance or actual_rms > solver.residual_rms_tolerance:
+        raise ValueError("The final residual vector exceeds the solver tolerances")
+    if not math.isclose(actual_max, solver.final_residual_max, rel_tol=1e-10, abs_tol=1e-300) or not math.isclose(
+        actual_rms, solver.final_residual_rms, rel_tol=1e-10, abs_tol=1e-300
+    ):
+        raise ValueError("The final residual norms disagree with the residual vector")
+    if solver.spectral_test_passed != (
+        math.isfinite(solver.spectral_defect_max) and 0.0 <= solver.spectral_defect_max <= solver.spectral_defect_tolerance
+    ):
+        raise ValueError("The reported spectral status disagrees with its defect and tolerance")
+    if not solver.continuation[-1].accepted or not math.isclose(solver.continuation[-1].fraction, 1.0, abs_tol=1e-12):
+        raise ValueError("The continuation history did not reach the requested target")
+    if solver.requested_order is not None and solver.requested_order < solver.fourier_order:
+        raise ValueError("The accepted order exceeds the requested Fourier order")
+    if solver.jacobian_condition is not None:
+        if (not math.isfinite(solver.jacobian_condition) or solver.jacobian_condition < 1.0 or
+            solver.condition_limit is None or not math.isfinite(solver.condition_limit) or
+            solver.jacobian_condition > solver.condition_limit):
+            raise ValueError("The accepted Jacobian exceeds the conditioning limit")
+    if solver.order_attempts:
+        attempts = solver.order_attempts
+        if (attempts[0].order != solver.requested_order or attempts[-1].order != solver.fourier_order or
+            not attempts[-1].accepted or any(item.accepted for item in attempts[:-1]) or
+            any(a.order <= b.order for a, b in zip(attempts, attempts[1:]))):
+            raise ValueError("Inconsistent Fourier order selection history")
+        if solver.jacobian_condition is None or not math.isclose(
+            attempts[-1].condition, solver.jacobian_condition, rel_tol=1e-12
+        ):
+            raise ValueError("The final Fourier attempt disagrees with the Jacobian condition")
+
+    quantities = {q.symbol: q for q in solution.quantities}
+    state_symbols = ("d", "H", "tau", "c", "u1", "u2", "U", "q", "r")
+    required = set(state_symbols) | {"lambda", "Q", "R", "S", "I", "T", "V", "ub2", "Sxx", "F"}
+    if required - quantities.keys():
+        raise ValueError("solution.res is missing required integral quantities")
+    state = np.asarray(solver.state_values)
+    if len(state) != solver.unknown_count:
+        raise ValueError("The final nonlinear state is incomplete")
+    for index, symbol in enumerate(state_symbols):
+        if not math.isclose(quantities[symbol].k_based, state[index], rel_tol=2e-8, abs_tol=1e-10):
+            raise ValueError(f"solution.res and solver.res disagree on {symbol}")
+    kd = float(state[0])
+    if kd <= 0.0:
+        raise ValueError("The mean depth must be positive")
+    if not np.allclose(solution.stream_coefficients, state[solver.fourier_order + 10:], rtol=2e-8, atol=1e-12):
+        raise ValueError("solution.res Fourier coefficients disagree with the final state")
+    if not math.isclose(solution.length_depth or 0.0, 2.0 * math.pi / kd, rel_tol=2e-8, abs_tol=1e-10):
+        raise ValueError("The reported wavelength disagrees with the final state")
+    if not math.isclose(solution.period_depth or 0.0, state[2] / math.sqrt(kd), rel_tol=2e-8, abs_tol=1e-10):
+        raise ValueError("The reported period disagrees with the final state")
+
+    modes = solution.modes
+    amplitudes = solution.surface_coefficients.copy()
+    amplitudes[-1] *= 0.5
+    def surface_at(phase: np.ndarray) -> np.ndarray:
+        return 1.0 + np.cos(np.outer(phase, modes)) @ amplitudes / kd
+    nodal_phase = np.linspace(0.0, math.pi, solver.fourier_order + 1)
+    if not np.allclose(surface_at(nodal_phase), 1.0 + state[9:solver.fourier_order + 10] / kd,
+                       rtol=2e-8, atol=2e-10):
+        raise ValueError("Surface coefficients disagree with the solver's nodal elevations")
+    # Output coordinates have four decimals for the surface and six for profiles.
+    slope_bound = float(np.sum(np.abs(modes * amplitudes)))
+    surface_tolerance = 5.1e-5 * (1.0 + slope_bound)
+    if not np.allclose(surface.y_over_d, surface_at(kd * surface.x_over_d), rtol=0.0, atol=surface_tolerance):
+        raise ValueError("surface.res is inconsistent with the Fourier surface")
+    half_length = math.pi / kd
+    if not np.allclose([surface.x_over_d[0], surface.x_over_d[-1]], [-half_length, half_length],
+                       rtol=0.0, atol=5.1e-5):
+        raise ValueError("surface.res has a different wavelength or incomplete extent")
+    profile_x = np.asarray([profile.x_over_d for profile in flow.profiles])
+    if not np.all(np.diff(profile_x) > 0.0) or not np.allclose(
+        profile_x[[0, -1]], [0.0, half_length], rtol=0.0, atol=5.1e-8
+    ):
+        raise ValueError("flowfield.res has a different wavelength or incomplete extent")
+    if not np.allclose(phases, np.degrees(kd * profile_x), rtol=0.0, atol=0.051):
+        raise ValueError("Flow-profile positions and phases are inconsistent")
+    tops = surface_at(kd * profile_x)
+    for profile, top in zip(flow.profiles, tops, strict=True):
+        if not np.all(np.diff(profile.values[:, 0]) > 0.0):
+            raise ValueError("Flow-profile elevations must increase from bed to surface")
+        if abs(profile.values[0, 0]) > 5.1e-7 or abs(profile.values[-1, 0] - top) > 5.1e-7 + 5.1e-8 * slope_bound:
+            raise ValueError("flowfield.res does not match the bed and Fourier free surface")
+    celerity = quantities["c"].d_based
+    rounding_tolerance = 5.2e-7 * (1.0 + abs(celerity))
+    for time_column, spatial_column in ((3, 1), (4, 6), (5, 7)):
+        if not np.allclose(flow.values[:, time_column], -celerity * flow.values[:, spatial_column],
+                           rtol=0.0, atol=rounding_tolerance):
+            raise ValueError("flowfield.res is inconsistent with the wave speed in solution.res")
+    decay = np.exp(-modes * kd)
+    bed_modes = modes * solution.stream_coefficients * (2.0 * decay / (1.0 + decay * decay)) / math.sqrt(kd)
+    bed_velocity = quantities["u1"].d_based + np.cos(np.outer(kd * profile_x, modes)) @ bed_modes
+    bed_rounding = 5.2e-7 + 5.2e-8 * kd * float(np.sum(np.abs(modes * bed_modes)))
+    if not np.allclose([profile.values[0, 1] for profile in flow.profiles], bed_velocity,
+                       rtol=0.0, atol=bed_rounding):
+        raise ValueError("flowfield.res bed velocities disagree with the Fourier solution and current")
 
 
 def parse_surface(path: Path) -> SurfaceData:
@@ -636,11 +806,11 @@ def parse_surface(path: Path) -> SurfaceData:
             continue
         numeric_part = raw_line.split("#", 1)[0]
         values = _all_floats(numeric_part)
-        if len(values) >= 3:
-            # The historical files may contain a dummy 0,0,0 scaling point.
-            if "dummy" in raw_line.casefold():
-                continue
-            rows.append(values[:3])
+        if "dummy" in raw_line.casefold():
+            continue
+        if len(values) != 3:
+            raise ValueError(f"Expected three surface columns in {path}: {raw_line}")
+        rows.append(values)
 
     if not rows:
         raise ValueError(f"No surface points were found in {path}")
@@ -691,9 +861,10 @@ def parse_flowfield(path: Path) -> FlowFieldData:
         if current_x is None or not stripped or stripped.startswith("#"):
             continue
 
-        values = _all_floats(stripped)
-        if len(values) >= len(FLOW_COLUMNS):
-            current_rows.append(values[: len(FLOW_COLUMNS)])
+        values = _all_floats(stripped.split("#", 1)[0])
+        if len(values) != len(FLOW_COLUMNS):
+            raise ValueError(f"Expected {len(FLOW_COLUMNS)} flow columns in {path}: {raw_line}")
+        current_rows.append(values)
 
     commit_profile()
 
@@ -711,6 +882,8 @@ def parse_flowfield(path: Path) -> FlowFieldData:
 
     n_profiles = len(profiles)
     n_vertical = profiles[0].values.shape[0]
+    if n_vertical < 2:
+        raise ValueError("Each flow profile must have at least two vertical points")
 
     x_values: list[float] = []
     y_values: list[float] = []
@@ -792,11 +965,17 @@ def case_caption(solution: SolutionData) -> str:
         parts.append(f"SU={solution.stokes_ursell:.5g}")
     if solution.fourier_order is not None:
         parts.append(f"N={solution.fourier_order}")
+        if solution.requested_order is not None and solution.requested_order != solution.fourier_order:
+            parts.append(f"requested N={solution.requested_order}")
     return "  |  ".join(parts)
 
 
 def add_case_footer(fig: Figure, solution: SolutionData) -> None:
-    fig.text(0.5, 0.012, case_caption(solution), ha="center", va="bottom", fontsize=9)
+    caption = textwrap.fill(case_caption(solution), width=150)
+    fig.text(0.5, 0.012, caption, ha="center", va="bottom", fontsize=8.5)
+    if solution.spectral_test_passed is False:
+        fig.text(0.5, 0.070, "WARNING: spectral-resolution tolerance exceeded; nonlinear residuals passed.",
+                 ha="center", va="bottom", fontsize=9, color="#a94300")
 
 
 def add_stat_box(ax: Axes, lines: Sequence[str], location: str = "upper right") -> None:
@@ -819,7 +998,7 @@ def add_stat_box(ax: Axes, lines: Sequence[str], location: str = "upper right") 
     )
 
 
-def finish_figure(fig: Figure, solution: SolutionData, bottom: float = 0.075) -> None:
+def finish_figure(fig: Figure, solution: SolutionData, bottom: float = 0.105) -> None:
     add_case_footer(fig, solution)
     fig.tight_layout(rect=(0.02, bottom, 0.99, 0.98))
 
@@ -929,23 +1108,26 @@ def plot_solution_summary(solution: SolutionData) -> Figure:
             cell.set_text_props(ha="center")
 
     add_case_footer(fig, solution)
-    fig.tight_layout(rect=(0.025, 0.04, 0.975, 0.985))
+    fig.tight_layout(rect=(0.025, 0.105, 0.975, 0.985))
     return fig
 
 
 def plot_solver_summary(solution: SolutionData, solver: SolverData) -> Figure:
     """Create a compact audit page from the authoritative solver.res values."""
-    fig, ax = plt.subplots(figsize=(12.5, 8.8))
+    fig, ax = plt.subplots(figsize=(12.5, 10.2))
     ax.axis("off")
     ax.set_title("Nonlinear solver verification summary", pad=24, fontweight="bold")
 
     checks = [
         ("Residual convergence", solver.residual_test_passed),
         ("Spectral resolution", solver.spectral_test_passed),
-        ("Overall convergence", solver.overall_convergence_passed),
+        ("Nonlinear convergence", solver.overall_convergence_passed),
     ]
     metrics = [
-        ("Fourier order", f"{solver.fourier_order}"),
+        ("Fourier order: requested / accepted", f"{solver.requested_order or solver.fourier_order} / {solver.fourier_order}"),
+        ("Equilibrated Jacobian condition", format_optional(solver.jacobian_condition, ".6e")),
+        ("Jacobian condition limit", format_optional(solver.condition_limit, ".6e")),
+        ("Fourier orders attempted", " → ".join(str(item.order) for item in solver.order_attempts) or "n/a"),
         ("Unknowns / equations", f"{solver.unknown_count} / {solver.equation_count}"),
         (
             "Continuation steps / trials",
@@ -1001,7 +1183,33 @@ def plot_solver_summary(solution: SolutionData, solver: SolverData) -> Figure:
         fontsize=10,
     )
     add_case_footer(fig, solution)
-    fig.tight_layout(rect=(0.025, 0.05, 0.975, 0.985))
+    fig.tight_layout(rect=(0.025, 0.105, 0.975, 0.985))
+    return fig
+
+
+def plot_fourier_order_selection(solution: SolutionData, solver: SolverData) -> Figure:
+    fig, ax = plt.subplots(figsize=(11.8, 7.2))
+    attempts = solver.order_attempts
+    positions = np.arange(1, len(attempts) + 1)
+    conditions = np.asarray([item.condition for item in attempts])
+    finite = np.isfinite(conditions) & (conditions > 0.0)
+    limit = solver.condition_limit or 1.0e11
+    cap = max(limit * 10.0, float(np.max(conditions[finite])) if finite.any() else limit * 10.0)
+    plotted = np.where(finite, conditions, cap)
+    ax.semilogy(positions, plotted, color="0.6", linewidth=1.0)
+    for index, (item, value) in enumerate(zip(attempts, plotted, strict=True), 1):
+        ax.scatter(index, value, color="#187649" if item.accepted else "#a94300", marker="o" if item.accepted else "x", s=75)
+        label = f"{'Accepted' if item.accepted else 'Rejected'}\n" + (f"{item.condition:.3e}" if math.isfinite(item.condition) else "non-finite")
+        ax.annotate(label, (index, value), xytext=(0, 12), textcoords="offset points", ha="center", fontsize=9)
+    ax.axhline(limit, linestyle="--", label=f"Condition limit: {limit:.1e}")
+    ax.set_xticks(positions, [f"N={item.order}" for item in attempts])
+    ax.set_xlim(0.5, len(attempts) + 0.5)
+    ax.set_ylim(bottom=min(float(np.min(plotted)), limit) / 3.0, top=cap * 15.0)
+    ax.set_title("Fourier order selection and Jacobian conditioning", fontweight="bold")
+    ax.set_xlabel("Attempted Fourier order")
+    ax.set_ylabel("Condition number of the column-equilibrated Jacobian")
+    ax.legend(loc="lower left")
+    finish_figure(fig, solution)
     return fig
 
 
@@ -1056,7 +1264,7 @@ def plot_continuation_history(solution: SolutionData, solver: SolverData) -> Fig
         ],
         "upper right",
     )
-    ax.set_title("Adaptive continuation convergence history", fontweight="bold")
+    ax.set_title(f"Adaptive continuation at accepted Fourier order N={solver.fourier_order}", fontweight="bold")
     ax.set_xlabel("Continuation trial")
     ax.set_ylabel("Residual norm")
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
@@ -1126,14 +1334,14 @@ def plot_wave_profile(solution: SolutionData, surface: SurfaceData) -> Figure:
     trough_index = int(np.argmin(eta))
     ax.scatter([x[crest_index], x[trough_index]], [eta[crest_index], eta[trough_index]], zorder=5)
     ax.annotate(
-        f"Crest: η/d={eta[crest_index]:.5f}",
+        f"Crest: y/d={eta[crest_index]:.5f}",
         xy=(x[crest_index], eta[crest_index]),
         xytext=(24, -38),
         textcoords="offset points",
         arrowprops={"arrowstyle": "->"},
     )
     ax.annotate(
-        f"Trough: η/d={eta[trough_index]:.5f}",
+        f"Trough: y/d={eta[trough_index]:.5f}",
         xy=(x[trough_index], eta[trough_index]),
         xytext=(14, -34),
         textcoords="offset points",
@@ -1179,7 +1387,7 @@ def plot_surface_pressure_check(solution: SolutionData, surface: SurfaceData) ->
         ax,
         [
             f"Maximum |check|: {max_abs:.3e}",
-            f"RMS check: {rms:.3e}",
+            f"RMS over sampled points: {rms:.3e}",
             f"Mean check: {np.mean(check):.3e}",
             "Ideal value: 0",
         ],
@@ -1188,7 +1396,7 @@ def plot_surface_pressure_check(solution: SolutionData, surface: SurfaceData) ->
 
     ax.set_title("Dynamic free-surface pressure consistency", fontweight="bold")
     ax.set_xlabel("Wave coordinate, X/d")
-    ax.set_ylabel("Surface-pressure check (dimensionless)")
+    ax.set_ylabel("Surface pressure, p/(ρgd)")
     ax.legend(loc="best")
     finish_figure(fig, solution)
     return fig
@@ -1198,7 +1406,9 @@ def plot_fourier_coefficients(solution: SolutionData) -> Figure:
     fig, ax = plt.subplots()
     modes = solution.modes
     b_values = safe_log_values(solution.stream_coefficients)
-    e_values = safe_log_values(solution.surface_coefficients)
+    surface_amplitudes = solution.surface_coefficients.copy()
+    surface_amplitudes[-1] *= 0.5
+    e_values = safe_log_values(surface_amplitudes)
 
     ax.semilogy(
         modes,
@@ -1212,7 +1422,7 @@ def plot_fourier_coefficients(solution: SolutionData) -> Figure:
         e_values,
         marker="s",
         markevery=max(1, len(modes) // 20),
-        label="|E[j]| surface elevation",
+        label="|a[j]| surface cosine amplitude",
     )
 
     b_peak = float(np.max(b_values))
@@ -1224,7 +1434,8 @@ def plot_fourier_coefficients(solution: SolutionData) -> Figure:
         [
             f"Modes represented: {len(modes)}",
             f"|B[N]| / max|B|: {b_last / b_peak:.3e}",
-            f"|E[N]| / max|E|: {e_last / e_peak:.3e}",
+            f"|a[N]| / max|a|: {e_last / e_peak:.3e}",
+            "a[j]=E[j] for j<N; a[N]=E[N]/2",
             f"Reported residual max: {format_optional(solution.residual_max, '.3e')}",
         ],
         "upper right",
@@ -1502,7 +1713,7 @@ def select_profiles(flow: FlowFieldData, target_phases: Iterable[float]) -> list
     selected: list[FlowProfile] = []
     for target in target_phases:
         nearest = min(flow.profiles, key=lambda profile: abs(profile.phase_deg - target))
-        if nearest not in selected:
+        if all(nearest is not profile for profile in selected):
             selected.append(nearest)
     return selected
 
@@ -1647,7 +1858,15 @@ def write_manifest(
         "",
         case_caption(solution),
         "",
-        f"Fourier order: {solver.fourier_order}",
+        f"Requested Fourier order: {solver.requested_order or solver.fourier_order}",
+        f"Accepted Fourier order: {solver.fourier_order}",
+        f"Jacobian condition: {format_optional(solver.jacobian_condition, '.8e')}",
+        f"Condition limit: {format_optional(solver.condition_limit, '.8e')}",
+        "Fourier order attempts: " + "; ".join(
+            f"N={item.order}, {'PASS' if item.accepted else 'REJECTED'}, condition={item.condition:.8e}"
+            for item in solver.order_attempts
+        ),
+        f"Spectral resolution: {'PASS' if solver.spectral_test_passed else 'WARNING: tolerance exceeded'}",
         f"Nonlinear equations: {solver.equation_count}",
         f"Overall convergence: {'PASS' if solver.overall_convergence_passed else 'FAIL'}",
         f"Maximum off-grid defect: {solver.spectral_defect_max:.8e}",
@@ -1708,10 +1927,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         solution = parse_solution(solution_path)
         solver = parse_solver(solver_path)
-        solution = merge_solver_metadata(solution, solver)
         surface = parse_surface(surface_path)
         flow = parse_flowfield(flowfield_path)
         validate_result_set(solution, solver, surface, flow)
+        solution = merge_solver_metadata(solution, solver)
+        if not solver.spectral_test_passed:
+            print(f"Warning: spectral defect {solver.spectral_defect_max:.3e} exceeds "
+                  f"{solver.spectral_defect_tolerance:.3e}; nonlinear convergence passed.", file=sys.stderr)
 
         output_dir = Path(args.output_dir).expanduser().resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -1750,6 +1972,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             ("18_surface_bed_kinematics", lambda: plot_surface_and_bed_kinematics(solution, flow)),
         ]
+
+        if solver.order_attempts:
+            plot_specs.append(("19_fourier_order_selection", lambda: plot_fourier_order_selection(solution, solver)))
 
         created: list[Path] = []
         for stem, factory in plot_specs:

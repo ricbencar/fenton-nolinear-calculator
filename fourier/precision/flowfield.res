@@ -1,5 +1,5 @@
 # Test wave
-# Solution by fixed 50-mode spectral collocation
+# Solution by 50-mode spectral collocation (requested 50)
 
 # Velocity and acceleration profiles and Bernoulli checks
 

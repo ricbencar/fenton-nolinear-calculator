@@ -1,5 +1,5 @@
 # Test wave
-# Solution by fixed 50-mode spectral collocation
+# Solution by 50-mode spectral collocation (requested 50)
 
 # Surface of wave - trough-crest-trough, note quadratic point spacing clustered around crest
 # Non-dimensionalised with respect to depth

@@ -1,6 +1,6 @@
 /*
 ================================================================================
-fourier.cpp — production spectral solver for steady nonlinear gravity waves
+fourier_precision.cpp — production spectral solver for steady nonlinear gravity waves
 ================================================================================
 
 PROGRAM PURPOSE
@@ -15,9 +15,11 @@ or mass-transport definition selected in data.dat.
 The executable is self-contained.  It reads one annotated case from data.dat
 when that file exists; otherwise, it requests every required value from the
 console.  No physical input is silently defaulted or inferred.  The production
-spectral order is fixed at 50 Fourier modes.  A successful calculation writes:
+requested spectral order is 50 Fourier modes. The active order is reduced when
+the column-equilibrated Jacobian exceeds its binary64 conditioning limit.
+A successful calculation writes:
 
-  solution.res   engineering wave summary and Fourier coefficients
+  solution.res   engineering wave summary, phase maxima, and Fourier coefficients
   solver.res     continuation history, full state, full residuals, and final
                  convergence and spectral-resolution checks
   surface.res    continuous free-surface samples and surface pressure checks
@@ -68,7 +70,8 @@ The crest-to-trough half-wave is collocated at
 
   X_m = m*pi/N,  m = 0,...,N,
 
-with N fixed at 50.  Symmetry makes this half interval sufficient.  The free
+with N initially 50 and reported explicitly for the accepted solution.
+Symmetry makes this half interval sufficient. The free
 surface is represented by N+1 nodal ordinates and the stream function by N
 Fourier coefficients.
 
@@ -139,7 +142,7 @@ FINAL VERIFICATION
 ------------------
 After continuation reaches the exact target, the program independently:
 
-  * re-evaluates all 110 nonlinear residuals;
+  * re-evaluates all 2*N+10 nonlinear residuals;
   * verifies state admissibility and finite Jacobian entries;
   * checks both RMS and maximum residual tolerances;
   * computes a final scaled Newton correction;
@@ -223,7 +226,7 @@ storage, parsing, and file-ownership utilities:
   2. Configuration, state model, and indexing
      ProblemDefinition, Discretization, ContinuationState, SolverStatus,
      SolverAudit, and the state/residual index helpers define ownership and the
-     exact 110-component layout.
+     active 2*N+10-component layout.
 
   3. Input and normalized case configuration
      trim_line(), parse_leading_value(), ascii_iequals(), locate_data_file(),
@@ -392,7 +395,7 @@ kernels. Contiguous storage improves cache locality and avoids fragmented
 per-row allocations.
 
 The maximum matrix dimension is fixed by the allocated Fourier order. Individual
-solves use the leading kSystemSize rows and columns.
+solves use the leading system_size_ rows and columns.
 ================================================================================
 */
 class DenseMatrix {
@@ -526,10 +529,12 @@ private:
   thresholds auditable without searching through algorithm bodies.
   ============================================================================
   */
-  // Mathematical and spectral configuration.  The production order is fixed so
-  // every array extent and equation count is known at compile time.
+  // Mathematical constants and the requested spectral resolution.
+  // Active storage is rebuilt whenever the Fourier order changes.
   static constexpr double kPi = std::numbers::pi_v<double>;
-  static constexpr int kFourierOrder = 50;
+  static constexpr int kRequestedFourierOrder = 50;
+  static constexpr double kJacobianConditionLimit = 1.0e11;
+  int fourier_order_ = kRequestedFourierOrder;
 
   // Nonlinear convergence and independent spectral-resolution requirements.
   static constexpr int kConvergenceMaxIterations = 80;
@@ -618,23 +623,20 @@ private:
     double specified_measure = 0.0;        // T*sqrt(g/d) or L/d.
   };
 
-  // Compile-time equation accounting.  Nine global state variables are followed
+  // Active equation accounting.  Nine global state variables are followed
   // by N+1 free-surface ordinates and N stream-function coefficients.  Eight
   // global residuals are followed by N+1 kinematic and N+1 dynamic equations.
   static constexpr int kGlobalStateCount = StateIndex::surface_begin - 1;
   static constexpr int kGlobalResidualCount =
       ResidualIndex::kinematic_begin - 1;
-  static constexpr int kSurfaceNodeCount = kFourierOrder + 1;
-  static constexpr int kCoefficientStateBegin =
-      StateIndex::surface_begin + kSurfaceNodeCount;
-  static constexpr int kDynamicResidualBegin =
-      ResidualIndex::kinematic_begin + kSurfaceNodeCount;
-  static constexpr int kSystemSize =
-      kGlobalStateCount + kSurfaceNodeCount + kFourierOrder;
-  static_assert(kSystemSize ==
-                kGlobalResidualCount + 2 * kSurfaceNodeCount);
-  static_assert(kCoefficientStateBegin + kFourierOrder - 1 == kSystemSize);
-  static_assert(kDynamicResidualBegin + kFourierOrder == kSystemSize);
+  int surface_node_count_ = fourier_order_ + 1;
+  int coefficient_state_begin_ =
+      StateIndex::surface_begin + surface_node_count_;
+  int dynamic_residual_begin_ =
+      ResidualIndex::kinematic_begin + surface_node_count_;
+  int system_size_ =
+      kGlobalStateCount + surface_node_count_ + fourier_order_;
+
 
   /*
   Numerical discretization and output-grid policy.  Only the initial
@@ -667,6 +669,7 @@ private:
     double residual_rms = std::numeric_limits<double>::infinity();
     double residual_max = std::numeric_limits<double>::infinity();
     double trust_radius = 1.0;
+    double jacobian_condition = std::numeric_limits<double>::infinity();
     double spectral_defect_max = std::numeric_limits<double>::infinity();
     LinearSolverKind linear_solver = LinearSolverKind::LU;
   };
@@ -796,6 +799,12 @@ private:
     return success;
   }
 
+  struct OrderAttempt {
+    int order;
+    bool converged;
+    double condition;
+  };
+  std::vector<OrderAttempt> order_attempts_;
   ProblemDefinition problem_;
   Discretization discretization_;
   ContinuationState continuation_;
@@ -836,9 +845,9 @@ private:
   Map Fourier mode j in [1,N] to its stream-function coefficient component.
   Coefficients follow the complete N+1-node surface block in the state vector.
   */
-  [[nodiscard]] static constexpr int
-  coefficient_state_index(int mode) noexcept {
-    return kCoefficientStateBegin + mode - 1;
+  [[nodiscard]] int
+  coefficient_state_index(int mode) const noexcept {
+    return coefficient_state_begin_ + mode - 1;
   }
 
   /*
@@ -852,11 +861,11 @@ private:
 
   /*
   Map node m to its dynamic Bernoulli residual row.  Dynamic rows immediately
-  follow all N+1 kinematic rows and terminate at kSystemSize.
+  follow all N+1 kinematic rows and terminate at system_size_.
   */
-  [[nodiscard]] static constexpr int
-  dynamic_residual_index(int node) noexcept {
-    return kDynamicResidualBegin + node;
+  [[nodiscard]] int
+  dynamic_residual_index(int node) const noexcept {
+    return dynamic_residual_begin_ + node;
   }
 
   /*
@@ -875,14 +884,11 @@ private:
   These functions contain presentation text only; no solver decision depends on
   the returned strings.
   */
-  [[nodiscard]] static const std::string &method_description() {
-    static const std::string description = [] {
-      std::ostringstream stream;
-      stream << "# Solution by fixed " << kFourierOrder
-             << "-mode spectral collocation";
-      return stream.str();
-    }();
-    return description;
+  [[nodiscard]] std::string method_description() const {
+    std::ostringstream stream;
+    stream << "# Solution by " << fourier_order_
+           << "-mode spectral collocation (requested " << kRequestedFourierOrder << ")";
+    return stream.str();
   }
 
   /*
@@ -998,7 +1004,7 @@ private:
         "Usage:\n"
         "  %s\n"
         "      Use data.dat when available; otherwise request every required\n"
-        "      numerical value interactively. Solve one fixed %d-mode wave\n"
+        "      numerical value interactively. Solve with up to %d Fourier modes\n"
         "      case and write solution.res, solver.res, surface.res, and "
         "flowfield.res.\n\n"
         "  %s --help\n"
@@ -1013,7 +1019,7 @@ private:
         "  FINISH\n\n"
         "If data.dat is absent, the same five numerical/keyword fields are\n"
         "requested from the console. No default input values are used.\n",
-        executable, kFourierOrder, executable);
+        executable, kRequestedFourierOrder, executable);
   }
 
   /*
@@ -1415,16 +1421,16 @@ private:
   keeping the hot table compact and cache-friendly.
   */
   void build_spectral_tables() {
-    const std::size_t side = static_cast<std::size_t>(kSurfaceNodeCount);
+    const std::size_t side = static_cast<std::size_t>(surface_node_count_);
     assert(spectral_.cosine_table.size() == side * side);
     assert(spectral_.sine_table.size() == side * side);
 
-    for (int node = 0; node <= kFourierOrder; ++node) {
-      for (int mode = 0; mode <= kFourierOrder; ++mode) {
+    for (int node = 0; node <= fourier_order_; ++node) {
+      for (int mode = 0; mode <= fourier_order_; ++mode) {
         const long double angle = std::numbers::pi_v<long double> *
                                   static_cast<long double>(node) *
                                   static_cast<long double>(mode) /
-                                  static_cast<long double>(kFourierOrder);
+                                  static_cast<long double>(fourier_order_);
         const std::size_t index = static_cast<std::size_t>(node) * side +
                                   static_cast<std::size_t>(mode);
         spectral_.cosine_table[index] = static_cast<double>(std::cos(angle));
@@ -1441,7 +1447,7 @@ private:
                                              int mode) const noexcept {
     return spectral_
         .cosine_table[static_cast<std::size_t>(node) *
-                          static_cast<std::size_t>(kSurfaceNodeCount) +
+                          static_cast<std::size_t>(surface_node_count_) +
                       static_cast<std::size_t>(mode)];
   }
 
@@ -1451,7 +1457,7 @@ private:
   */
   [[nodiscard]] inline double sine_at_node(int node, int mode) const noexcept {
     return spectral_.sine_table[static_cast<std::size_t>(node) *
-                                    static_cast<std::size_t>(kSurfaceNodeCount) +
+                                    static_cast<std::size_t>(surface_node_count_) +
                                 static_cast<std::size_t>(mode)];
   }
 
@@ -1543,7 +1549,7 @@ private:
     */
     nonlinear_.state[surface_state_index(0)] =
         0.5 * nonlinear_.state[StateIndex::wave_height];
-    for (int node = 1; node <= kFourierOrder; ++node) {
+    for (int node = 1; node <= fourier_order_; ++node) {
       nonlinear_.state[coefficient_state_index(node)] = 0.0;
       nonlinear_.state[surface_state_index(node)] =
           0.5 * nonlinear_.state[StateIndex::wave_height] *
@@ -1635,7 +1641,7 @@ private:
   */
   [[nodiscard]] double stable_sum_squares(const Vector &vector) const {
     StableNormAccumulator accumulator;
-    for (int i = 1; i <= kSystemSize; ++i)
+    for (int i = 1; i <= system_size_; ++i)
       accumulator.add(vector[i]);
     return accumulator.squared_norm();
   }
@@ -1716,8 +1722,8 @@ private:
     */
     rhs[ResidualIndex::mean_surface] =
         nonlinear_.state[surface_state_index(0)] +
-        nonlinear_.state[surface_state_index(kFourierOrder)];
-    for (int i = 1; i < kFourierOrder; ++i)
+        nonlinear_.state[surface_state_index(fourier_order_)];
+    for (int i = 1; i < fourier_order_; ++i)
       rhs[ResidualIndex::mean_surface] =
           rhs[ResidualIndex::mean_surface] +
           nonlinear_.state[surface_state_index(i)] +
@@ -1726,7 +1732,7 @@ private:
     // Global equation R8: crest elevation minus trough elevation equals kH.
     rhs[ResidualIndex::wave_height] =
         nonlinear_.state[surface_state_index(0)] -
-        nonlinear_.state[surface_state_index(kFourierOrder)] -
+        nonlinear_.state[surface_state_index(fourier_order_)] -
         nonlinear_.state[StateIndex::wave_height];
 
     /*
@@ -1735,15 +1741,15 @@ private:
     deterministic long-double accumulation order.
     */
 #if defined(_OPENMP)
-#pragma omp parallel for schedule(static) if (kFourierOrder >=                   \
+#pragma omp parallel for schedule(static) if (fourier_order_ >=                   \
                                                   kOpenMpMinimumOrder)
 #endif
-    for (int m = 0; m <= kFourierOrder; ++m) {
+    for (int m = 0; m <= fourier_order_; ++m) {
       long double psi_acc = 0.0L;
       long double u_acc = 0.0L;
       long double v_acc = 0.0L;
       bool basis_ok = true;
-      for (int j = 1; j <= kFourierOrder; ++j) {
+      for (int j = 1; j <= fourier_order_; ++j) {
         const double cosine = cosine_at_node(m, j);
         const double sine = sine_at_node(m, j);
         VerticalBasisValues basis;
@@ -1814,11 +1820,11 @@ private:
   */
   void assemble_jacobian(DenseMatrix &jac) {
 #if defined(_OPENMP)
-#pragma omp parallel for schedule(static) if (kFourierOrder >=                   \
+#pragma omp parallel for schedule(static) if (fourier_order_ >=                   \
                                                   kOpenMpMinimumOrder)
 #endif
-    for (int i = 1; i <= kSystemSize; ++i) {
-      for (int j = 1; j <= kSystemSize; ++j)
+    for (int i = 1; i <= system_size_; ++i) {
+      for (int j = 1; j <= system_size_; ++j)
         jac[i][j] = 0.0;
     }
 
@@ -1869,23 +1875,23 @@ private:
 
     // Derivatives of mean-level and crest-to-trough constraints R7 and R8.
     jac[ResidualIndex::mean_surface][surface_state_index(0)] = 1.0;
-    jac[ResidualIndex::mean_surface][surface_state_index(kFourierOrder)] = 1.0;
-    for (int i = 1; i < kFourierOrder; ++i)
+    jac[ResidualIndex::mean_surface][surface_state_index(fourier_order_)] = 1.0;
+    for (int i = 1; i < fourier_order_; ++i)
       jac[ResidualIndex::mean_surface][surface_state_index(i)] = 2.0;
 
     jac[ResidualIndex::wave_height][StateIndex::wave_height] = -1.0;
     jac[ResidualIndex::wave_height][surface_state_index(0)] = 1.0;
-    jac[ResidualIndex::wave_height][surface_state_index(kFourierOrder)] = -1.0;
+    jac[ResidualIndex::wave_height][surface_state_index(fourier_order_)] = -1.0;
 
 #if defined(_OPENMP)
-#pragma omp parallel for schedule(static) if (kFourierOrder >=                   \
+#pragma omp parallel for schedule(static) if (fourier_order_ >=                   \
                                                   kOpenMpMinimumOrder)
 #endif
     /*
     Each surface node contributes two independent Jacobian rows. Parallelizing
     over nodes is race-free because no two iterations write the same rows.
     */
-    for (int m = 0; m <= kFourierOrder; ++m) {
+    for (int m = 0; m <= fourier_order_; ++m) {
       const int eta_index = surface_state_index(m);
       const int row_psi = kinematic_residual_index(m);
       const int row_dyn = dynamic_residual_index(m);
@@ -1900,7 +1906,7 @@ private:
       long double dv_deta_acc = 0.0L;
       bool basis_ok = true;
 
-      for (int j = 1; j <= kFourierOrder; ++j) {
+      for (int j = 1; j <= fourier_order_; ++j) {
         const int coeff_index = coefficient_state_index(j);
         const double bj = nonlinear_.state[coeff_index];
         const double jj = static_cast<double>(j);
@@ -1976,7 +1982,7 @@ private:
       Finalize coefficient derivatives from the basis values cached during the
       first modal pass. No transcendental functions are evaluated here.
       */
-      for (int j = 1; j <= kFourierOrder; ++j) {
+      for (int j = 1; j <= fourier_order_; ++j) {
         const int coeff_index = coefficient_state_index(j);
         const double jj = static_cast<double>(j);
         const double basis_s = jac[row_psi][coeff_index];
@@ -2004,7 +2010,7 @@ private:
   comparisons and an infinity can corrupt merit-reduction calculations.
   */
   [[nodiscard]] bool residual_is_finite(const Vector &residual) const {
-    for (int i = 1; i <= kSystemSize; ++i) {
+    for (int i = 1; i <= system_size_; ++i) {
       if (!std::isfinite(residual[i]))
         return false;
     }
@@ -2024,9 +2030,9 @@ private:
     }
 
     status_.residual_rms = std::sqrt(std::max(0.0, sum_squares) /
-                                     static_cast<double>(kSystemSize));
+                                     static_cast<double>(system_size_));
     status_.residual_max = 0.0;
-    for (int i = 1; i <= kSystemSize; ++i) {
+    for (int i = 1; i <= system_size_; ++i) {
       status_.residual_max =
           std::max(status_.residual_max, std::fabs(residual[i]));
     }
@@ -2051,7 +2057,7 @@ private:
   inside the safe floating-point range.
   */
   [[nodiscard]] bool state_is_admissible() const {
-    for (int i = 1; i <= kSystemSize; ++i) {
+    for (int i = 1; i <= system_size_; ++i) {
       if (!std::isfinite(nonlinear_.state[i]))
         return false;
     }
@@ -2064,7 +2070,7 @@ private:
     const double bed_clearance =
         64.0 * std::numeric_limits<double>::epsilon() *
         std::max(1.0, nonlinear_.state[StateIndex::depth]);
-    for (int node = 0; node <= kFourierOrder; ++node) {
+    for (int node = 0; node <= fourier_order_; ++node) {
       if (!(nonlinear_.state[surface_state_index(node)] >
             -nonlinear_.state[StateIndex::depth] + bed_clearance)) {
         return false;
@@ -2078,8 +2084,8 @@ private:
 
     const double kSafeExpArgument =
         0.95 * std::log(std::numeric_limits<double>::max());
-    for (int m = 0; m <= kFourierOrder; ++m) {
-      if (static_cast<double>(kFourierOrder) *
+    for (int m = 0; m <= fourier_order_; ++m) {
+      if (static_cast<double>(fourier_order_) *
               nonlinear_.state[surface_state_index(m)] >=
           kSafeExpArgument)
         return false;
@@ -2094,13 +2100,75 @@ private:
   handling and ensures a failed basis evaluation follows normal rollback logic.
   */
   [[nodiscard]] bool jacobian_is_finite(const DenseMatrix &jac) const {
-    for (int i = 1; i <= kSystemSize; ++i) {
-      for (int j = 1; j <= kSystemSize; ++j) {
+    for (int i = 1; i <= system_size_; ++i) {
+      for (int j = 1; j <= system_size_; ++j) {
         if (!std::isfinite(jac[i][j]))
           return false;
       }
     }
     return true;
+  }
+
+  [[nodiscard]] double equilibrated_jacobian_condition() const {
+    const int n = system_size_;
+    std::vector<double> columns(static_cast<std::size_t>(n) * n, 0.0);
+    for (int j = 0; j < n; ++j) {
+      double maximum = 0.0;
+      for (int i = 0; i < n; ++i)
+        maximum = std::max(maximum, std::abs(workspace_.jacobian[i + 1][j + 1]));
+      if (!std::isfinite(maximum) || maximum == 0.0)
+        return std::numeric_limits<double>::infinity();
+      for (int i = 0; i < n; ++i)
+        columns[static_cast<std::size_t>(j) * n + i] =
+            workspace_.jacobian[i + 1][j + 1] / maximum;
+    }
+    const double tolerance = 32.0 * std::numeric_limits<double>::epsilon();
+    bool orthogonal = false;
+    for (int sweep = 0; sweep < 100; ++sweep) {
+      orthogonal = true;
+      for (int p = 0; p < n; ++p) {
+        for (int q = p + 1; q < n; ++q) {
+          double pp = 0.0, qq = 0.0, pq = 0.0;
+          for (int i = 0; i < n; ++i) {
+            const double a = columns[static_cast<std::size_t>(p) * n + i];
+            const double b = columns[static_cast<std::size_t>(q) * n + i];
+            pp += a * a;
+            qq += b * b;
+            pq += a * b;
+          }
+          if (!(pp > 0.0) || !(qq > 0.0) ||
+              std::abs(pq) <= tolerance * std::sqrt(pp) * std::sqrt(qq))
+            continue;
+          orthogonal = false;
+          const double tau = (qq - pp) / (2.0 * pq);
+          const double t = std::copysign(1.0, tau) /
+                           (std::abs(tau) + std::hypot(1.0, tau));
+          const double c = 1.0 / std::hypot(1.0, t), sn = t * c;
+          for (int i = 0; i < n; ++i) {
+            const std::size_t pi = static_cast<std::size_t>(p) * n + i;
+            const std::size_t qi = static_cast<std::size_t>(q) * n + i;
+            const double a = columns[pi], b = columns[qi];
+            columns[pi] = c * a - sn * b;
+            columns[qi] = sn * a + c * b;
+          }
+        }
+      }
+      if (orthogonal)
+        break;
+    }
+    if (!orthogonal)
+      return std::numeric_limits<double>::infinity();
+    double smallest = std::numeric_limits<double>::infinity(), largest = 0.0;
+    for (int j = 0; j < n; ++j) {
+      double sigma = 0.0;
+      for (int i = 0; i < n; ++i)
+        sigma = std::hypot(sigma, columns[static_cast<std::size_t>(j) * n + i]);
+      smallest = std::min(smallest, sigma);
+      largest = std::max(largest, sigma);
+    }
+    return smallest > largest * 1e-300
+               ? largest / smallest
+               : std::numeric_limits<double>::infinity();
   }
 
   /*
@@ -2112,19 +2180,19 @@ private:
   */
   [[nodiscard]] double euclidean_norm(const Vector &vector) const {
     StableNormAccumulator accumulator;
-    for (int i = 1; i <= kSystemSize; ++i)
+    for (int i = 1; i <= system_size_; ++i)
       accumulator.add(vector[i]);
     return accumulator.norm();
   }
 
   /*
   Convert the stable Euclidean norm to a root-mean-square value.  Dividing by
-  sqrt(kSystemSize) makes trust-region step diagnostics comparable if the fixed
-  spectral order is changed in a future build.
+  sqrt(system_size_) makes trust-region step diagnostics comparable between
+  active Fourier orders.
   */
   [[nodiscard]] double rms_norm(const Vector &vector) const {
     return euclidean_norm(vector) /
-           std::sqrt(static_cast<double>(kSystemSize));
+           std::sqrt(static_cast<double>(system_size_));
   }
 
   /*
@@ -2134,7 +2202,7 @@ private:
   */
   [[nodiscard]] double dot_product(const Vector &a, const Vector &b) const {
     long double sum_ = 0.0L;
-    for (int i = 1; i <= kSystemSize; ++i) {
+    for (int i = 1; i <= system_size_; ++i) {
       sum_ += static_cast<long double>(a[i]) * static_cast<long double>(b[i]);
     }
     return static_cast<double>(sum_);
@@ -2161,7 +2229,7 @@ private:
   */
   [[nodiscard]] bool apply_retraction(const Vector &base_state,
                                       const Vector &scaled_step) {
-    for (int i = 1; i <= kSystemSize; ++i) {
+    for (int i = 1; i <= system_size_; ++i) {
       if (uses_log_coordinate(i)) {
         const double base = base_state[i];
         if (!(base > 0.0) || !std::isfinite(base))
@@ -2219,11 +2287,11 @@ private:
 
     const double wave_height_scale = std::fabs(state[StateIndex::wave_height]);
     if (index >= StateIndex::surface_begin &&
-        index <= surface_state_index(kFourierOrder)) {
+        index <= surface_state_index(fourier_order_)) {
       return std::max({1.0e-4, wave_height_scale, magnitude});
     }
 
-    const int mode = index - surface_state_index(kFourierOrder);
+    const int mode = index - surface_state_index(fourier_order_);
     const double spectral_scale =
         wave_height_scale / (2.0 * static_cast<double>(std::max(1, mode)));
     return std::max({1.0e-7, spectral_scale, magnitude});
@@ -2239,14 +2307,14 @@ private:
   */
   void build_scaled_linearization(const DenseMatrix &jac,
                                   const Vector &residual) {
-    for (int j = 1; j <= kSystemSize; ++j) {
+    for (int j = 1; j <= system_size_; ++j) {
       workspace_.column_scale[j] = state_scale(j, workspace_.base_state);
     }
 
     for (int pass = 0; pass < 2; ++pass) {
-      for (int i = 1; i <= kSystemSize; ++i) {
+      for (int i = 1; i <= system_size_; ++i) {
         double row_norm = 0.0;
-        for (int j = 1; j <= kSystemSize; ++j) {
+        for (int j = 1; j <= system_size_; ++j) {
           row_norm = std::max(
               row_norm, std::fabs(jac[i][j] * workspace_.column_scale[j]));
         }
@@ -2254,9 +2322,9 @@ private:
       }
 
       if (pass == 0) {
-        for (int j = 1; j <= kSystemSize; ++j) {
+        for (int j = 1; j <= system_size_; ++j) {
           long double column_sum = 0.0L;
-          for (int i = 1; i <= kSystemSize; ++i) {
+          for (int i = 1; i <= system_size_; ++i) {
             const long double value =
                 static_cast<long double>(workspace_.row_scale[i]) *
                 static_cast<long double>(jac[i][j]) *
@@ -2264,7 +2332,7 @@ private:
             column_sum += value * value;
           }
           const double column_rms = std::sqrt(static_cast<double>(
-              column_sum / static_cast<long double>(kSystemSize)));
+              column_sum / static_cast<long double>(system_size_)));
           if (column_rms > 0.0 && std::isfinite(column_rms)) {
             const double adjustment = std::clamp(1.0 / column_rms, 0.25, 4.0);
             workspace_.column_scale[j] *= adjustment;
@@ -2273,9 +2341,9 @@ private:
       }
     }
 
-    for (int i = 1; i <= kSystemSize; ++i) {
+    for (int i = 1; i <= system_size_; ++i) {
       workspace_.linear_rhs[i] = -workspace_.row_scale[i] * residual[i];
-      for (int j = 1; j <= kSystemSize; ++j) {
+      for (int j = 1; j <= system_size_; ++j) {
         workspace_.linear_matrix[i][j] =
             workspace_.row_scale[i] * jac[i][j] * workspace_.column_scale[j];
       }
@@ -2288,9 +2356,9 @@ private:
   is accumulated in long double before conversion to stored precision.
   */
   void scaled_matrix_vector_product(const Vector &x, Vector &result) const {
-    for (int i = 1; i <= kSystemSize; ++i) {
+    for (int i = 1; i <= system_size_; ++i) {
       long double sum_ = 0.0L;
-      for (int j = 1; j <= kSystemSize; ++j) {
+      for (int j = 1; j <= system_size_; ++j) {
         sum_ += static_cast<long double>(workspace_.row_scale[i]) *
                 static_cast<long double>(workspace_.jacobian[i][j]) *
                 static_cast<long double>(workspace_.column_scale[j]) *
@@ -2305,9 +2373,9 @@ private:
   applied because the result is used in the physical residual-space merit model.
   */
   void physical_matrix_vector_product(const Vector &x, Vector &result) const {
-    for (int i = 1; i <= kSystemSize; ++i) {
+    for (int i = 1; i <= system_size_; ++i) {
       long double sum_ = 0.0L;
-      for (int j = 1; j <= kSystemSize; ++j) {
+      for (int j = 1; j <= system_size_; ++j) {
         sum_ += static_cast<long double>(workspace_.jacobian[i][j]) *
                 static_cast<long double>(workspace_.column_scale[j]) *
                 static_cast<long double>(x[j]);
@@ -2336,11 +2404,11 @@ private:
   right-hand sides and iterative-refinement corrections.
   */
   [[nodiscard]] bool factorize_lu(DenseMatrix &matrix, IndexVector &pivot) {
-    for (int i = 0; i <= kSystemSize; ++i)
+    for (int i = 0; i <= system_size_; ++i)
       pivot[i] = 0;
     double matrix_max = 0.0;
-    for (int i = 1; i <= kSystemSize; ++i) {
-      for (int j = 1; j <= kSystemSize; ++j) {
+    for (int i = 1; i <= system_size_; ++i) {
+      for (int j = 1; j <= system_size_; ++j) {
         matrix_max = std::max(matrix_max, std::fabs(matrix[i][j]));
       }
     }
@@ -2348,12 +2416,12 @@ private:
       return false;
 
     const double pivot_floor = 64.0 * std::numeric_limits<double>::epsilon() *
-                               static_cast<double>(kSystemSize) *
+                               static_cast<double>(system_size_) *
                                matrix_max;
-    for (int k = 1; k <= kSystemSize; ++k) {
+    for (int k = 1; k <= system_size_; ++k) {
       int pivot_row = k;
       double pivot_abs = std::fabs(matrix[k][k]);
-      for (int i = k + 1; i <= kSystemSize; ++i) {
+      for (int i = k + 1; i <= system_size_; ++i) {
         const double candidate = std::fabs(matrix[i][k]);
         if (candidate > pivot_abs) {
           pivot_abs = candidate;
@@ -2366,16 +2434,16 @@ private:
 
       pivot[k] = pivot_row;
       if (pivot_row != k) {
-        for (int j = 1; j <= kSystemSize; ++j) {
+        for (int j = 1; j <= system_size_; ++j) {
           std::swap(matrix[k][j], matrix[pivot_row][j]);
         }
       }
 
       const double inverse_pivot = 1.0 / matrix[k][k];
-      for (int i = k + 1; i <= kSystemSize; ++i) {
+      for (int i = k + 1; i <= system_size_; ++i) {
         matrix[i][k] *= inverse_pivot;
         const double multiplier = matrix[i][k];
-        for (int j = k + 1; j <= kSystemSize; ++j) {
+        for (int j = k + 1; j <= system_size_; ++j) {
           matrix[i][j] = std::fma(-multiplier, matrix[k][j], matrix[i][j]);
         }
       }
@@ -2393,15 +2461,15 @@ private:
   */
   [[nodiscard]] bool solve_lu(const DenseMatrix &lu, const IndexVector &pivot,
                               const Vector &right_hand_side, Vector &solution) {
-    for (int i = 1; i <= kSystemSize; ++i)
+    for (int i = 1; i <= system_size_; ++i)
       solution[i] = right_hand_side[i];
 
-    for (int k = 1; k <= kSystemSize; ++k) {
+    for (int k = 1; k <= system_size_; ++k) {
       if (pivot[k] != k)
         std::swap(solution[k], solution[pivot[k]]);
     }
 
-    for (int i = 2; i <= kSystemSize; ++i) {
+    for (int i = 2; i <= system_size_; ++i) {
       long double value = static_cast<long double>(solution[i]);
       for (int j = 1; j < i; ++j) {
         value -= static_cast<long double>(lu[i][j]) *
@@ -2410,9 +2478,9 @@ private:
       solution[i] = static_cast<double>(value);
     }
 
-    for (int i = kSystemSize; i >= 1; --i) {
+    for (int i = system_size_; i >= 1; --i) {
       long double value = static_cast<long double>(solution[i]);
-      for (int j = i + 1; j <= kSystemSize; ++j) {
+      for (int j = i + 1; j <= system_size_; ++j) {
         value -= static_cast<long double>(lu[i][j]) *
                  static_cast<long double>(solution[j]);
       }
@@ -2434,7 +2502,7 @@ private:
   zero is padding and is deliberately ignored.
   */
   [[nodiscard]] bool vector_is_finite(const Vector &vector) const {
-    for (int i = 1; i <= kSystemSize; ++i) {
+    for (int i = 1; i <= system_size_; ++i) {
       if (!std::isfinite(vector[i]))
         return false;
     }
@@ -2446,8 +2514,8 @@ private:
   Fallback solvers require the original equilibrated coefficients.
   */
   void rebuild_scaled_matrix() {
-    for (int i = 1; i <= kSystemSize; ++i) {
-      for (int j = 1; j <= kSystemSize; ++j) {
+    for (int i = 1; i <= system_size_; ++i) {
+      for (int j = 1; j <= system_size_; ++j) {
         workspace_.linear_matrix[i][j] = workspace_.row_scale[i] *
                                          workspace_.jacobian[i][j] *
                                          workspace_.column_scale[j];
@@ -2467,7 +2535,7 @@ private:
   [[nodiscard]] bool solve_rank_revealing_qr(const DenseMatrix &matrix,
                                              const Vector &right_hand_side,
                                              Vector &solution) {
-    const int dimension = kSystemSize;
+    const int dimension = system_size_;
     const std::size_t stride = static_cast<std::size_t>(dimension);
     std::vector<long double> qr(stride * stride, 0.0L);
     std::vector<long double> transformed_rhs(stride, 0.0L);
@@ -2637,7 +2705,7 @@ private:
   [[nodiscard]] bool solve_regularized_least_squares(
       const DenseMatrix &matrix, const Vector &right_hand_side,
       Vector &solution) {
-    const int dimension = kSystemSize;
+    const int dimension = system_size_;
     const std::size_t stride = static_cast<std::size_t>(dimension);
     std::vector<long double> normal(stride * stride, 0.0L);
     std::vector<long double> gradient(stride, 0.0L);
@@ -2769,7 +2837,7 @@ private:
       for (int refinement = 0; refinement < 4; ++refinement) {
         scaled_matrix_vector_product(workspace_.newton_direction,
                                      workspace_.model_residual);
-        for (int i = 1; i <= kSystemSize; ++i) {
+        for (int i = 1; i <= system_size_; ++i) {
           workspace_.model_residual[i] =
               workspace_.linear_rhs[i] - workspace_.model_residual[i];
         }
@@ -2777,7 +2845,7 @@ private:
         const double residual_rms = rms_norm(workspace_.model_residual);
         const double rhs_rms = rms_norm(workspace_.linear_rhs);
         if (residual_rms <= 32.0 * std::numeric_limits<double>::epsilon() *
-                                static_cast<double>(kSystemSize) *
+                                static_cast<double>(system_size_) *
                                 (1.0 + rhs_rms)) {
           break;
         }
@@ -2787,7 +2855,7 @@ private:
           lu_success = false;
           break;
         }
-        for (int i = 1; i <= kSystemSize; ++i) {
+        for (int i = 1; i <= system_size_; ++i) {
           workspace_.newton_direction[i] += workspace_.cauchy_direction[i];
         }
       }
@@ -2795,7 +2863,7 @@ private:
       if (lu_success) {
         scaled_matrix_vector_product(workspace_.newton_direction,
                                      workspace_.model_residual);
-        for (int i = 1; i <= kSystemSize; ++i) {
+        for (int i = 1; i <= system_size_; ++i) {
           workspace_.model_residual[i] =
               workspace_.linear_rhs[i] - workspace_.model_residual[i];
         }
@@ -2815,7 +2883,7 @@ private:
                                 workspace_.newton_direction)) {
       scaled_matrix_vector_product(workspace_.newton_direction,
                                    workspace_.model_residual);
-      for (int i = 1; i <= kSystemSize; ++i) {
+      for (int i = 1; i <= system_size_; ++i) {
         workspace_.model_residual[i] =
             workspace_.linear_rhs[i] - workspace_.model_residual[i];
       }
@@ -2846,7 +2914,7 @@ private:
   solution-branch tangent used by the predictor.
   */
   void assemble_continuation_derivative(Vector &derivative) {
-    for (int i = 1; i <= kSystemSize; ++i)
+    for (int i = 1; i <= system_size_; ++i)
       derivative[i] = 0.0;
 
     derivative[ResidualIndex::depth] =
@@ -2868,8 +2936,8 @@ private:
   unreliable branch direction.
   */
   [[nodiscard]] bool compute_continuation_tangent(Vector &tangent) {
-    tangent.assign(static_cast<std::size_t>(kSystemSize + 1), 0.0);
-    for (int i = 1; i <= kSystemSize; ++i)
+    tangent.assign(static_cast<std::size_t>(system_size_ + 1), 0.0);
+    for (int i = 1; i <= system_size_; ++i)
       workspace_.base_state[i] = nonlinear_.state[i];
 
     assemble_jacobian(workspace_.jacobian);
@@ -2882,7 +2950,7 @@ private:
       return false;
 
     long double scaled_norm_squared = 0.0L;
-    for (int i = 1; i <= kSystemSize; ++i) {
+    for (int i = 1; i <= system_size_; ++i) {
       tangent[i] = workspace_.column_scale[i] * workspace_.newton_direction[i];
       const long double scale = static_cast<long double>(
           std::max(1.0e-12, state_scale(i, nonlinear_.state)));
@@ -2891,7 +2959,7 @@ private:
     }
 
     const double scaled_rms = static_cast<double>(std::sqrt(
-        scaled_norm_squared / static_cast<long double>(kSystemSize)));
+        scaled_norm_squared / static_cast<long double>(system_size_)));
     return std::isfinite(scaled_rms) && scaled_rms < 1.0e6;
   }
 
@@ -2903,9 +2971,9 @@ private:
   dogleg path.
   */
   [[nodiscard]] bool build_cauchy_direction() {
-    for (int j = 1; j <= kSystemSize; ++j) {
+    for (int j = 1; j <= system_size_; ++j) {
       long double gradient = 0.0L;
-      for (int i = 1; i <= kSystemSize; ++i) {
+      for (int i = 1; i <= system_size_; ++i) {
         gradient += static_cast<long double>(workspace_.jacobian[i][j]) *
                     static_cast<long double>(workspace_.column_scale[j]) *
                     static_cast<long double>(nonlinear_.residual[i]);
@@ -2926,7 +2994,7 @@ private:
       return false;
 
     const double alpha = gradient_squared / ag_squared;
-    for (int j = 1; j <= kSystemSize; ++j) {
+    for (int j = 1; j <= system_size_; ++j) {
       workspace_.cauchy_direction[j] = -alpha * workspace_.cauchy_direction[j];
     }
     return vector_is_finite(workspace_.cauchy_direction);
@@ -2943,7 +3011,7 @@ private:
   */
   [[nodiscard]] bool build_dogleg_step(double trust_radius) {
     const double target_norm =
-        trust_radius * std::sqrt(static_cast<double>(kSystemSize));
+        trust_radius * std::sqrt(static_cast<double>(system_size_));
     const double newton_norm = euclidean_norm(workspace_.newton_direction);
     const double cauchy_norm = euclidean_norm(workspace_.cauchy_direction);
 
@@ -2952,7 +3020,7 @@ private:
       return false;
 
     if (newton_norm <= target_norm) {
-      for (int i = 1; i <= kSystemSize; ++i)
+      for (int i = 1; i <= system_size_; ++i)
         workspace_.candidate_step[i] = workspace_.newton_direction[i];
       return true;
     }
@@ -2961,7 +3029,7 @@ private:
       return false;
     if (cauchy_norm >= target_norm) {
       const double factor = target_norm / cauchy_norm;
-      for (int i = 1; i <= kSystemSize; ++i) {
+      for (int i = 1; i <= system_size_; ++i) {
         workspace_.candidate_step[i] = factor * workspace_.cauchy_direction[i];
       }
       return true;
@@ -2969,7 +3037,7 @@ private:
 
     long double direction_squared = 0.0L;
     long double cauchy_dot_direction = 0.0L;
-    for (int i = 1; i <= kSystemSize; ++i) {
+    for (int i = 1; i <= system_size_; ++i) {
       const long double direction =
           static_cast<long double>(workspace_.newton_direction[i]) -
           static_cast<long double>(workspace_.cauchy_direction[i]);
@@ -2995,7 +3063,7 @@ private:
     if (!(tau >= 0.0 && tau <= 1.0) || !std::isfinite(tau))
       return false;
 
-    for (int i = 1; i <= kSystemSize; ++i) {
+    for (int i = 1; i <= system_size_; ++i) {
       workspace_.candidate_step[i] = workspace_.cauchy_direction[i] +
                                      tau * (workspace_.newton_direction[i] -
                                             workspace_.cauchy_direction[i]);
@@ -3040,7 +3108,7 @@ private:
     const double base_sum_squares = evaluate_residuals(nonlinear_.residual);
     const double base_residual_rms =
         std::sqrt(std::max(0.0, base_sum_squares) /
-                  static_cast<double>(kSystemSize));
+                  static_cast<double>(system_size_));
     if (!std::isfinite(base_sum_squares) ||
         !residual_is_finite(nonlinear_.residual)) {
       update_residual_diagnostics(nonlinear_.residual, base_sum_squares);
@@ -3048,7 +3116,7 @@ private:
     }
 
     // Preserve an exact rollback point before any trial state is formed.
-    for (int i = 1; i <= kSystemSize; ++i)
+    for (int i = 1; i <= system_size_; ++i)
       workspace_.base_state[i] = nonlinear_.state[i];
 
     assemble_jacobian(workspace_.jacobian);
@@ -3068,7 +3136,7 @@ private:
     bool accepted = false;
 
     auto restore_base_state = [&]() {
-      for (int i = 1; i <= kSystemSize; ++i)
+      for (int i = 1; i <= system_size_; ++i)
         nonlinear_.state[i] = workspace_.base_state[i];
     };
 
@@ -3081,7 +3149,7 @@ private:
     const double full_newton_rms = rms_norm(workspace_.newton_direction);
     if (base_residual_rms < 1.0e-7 && std::isfinite(full_newton_rms) &&
         full_newton_rms < 2.0) {
-      for (int i = 1; i <= kSystemSize; ++i)
+      for (int i = 1; i <= system_size_; ++i)
         workspace_.candidate_step[i] = workspace_.newton_direction[i];
 
       if (apply_retraction(workspace_.base_state, workspace_.candidate_step) &&
@@ -3140,7 +3208,7 @@ private:
 
       physical_matrix_vector_product(workspace_.candidate_step,
                                      workspace_.model_residual);
-      for (int i = 1; i <= kSystemSize; ++i)
+      for (int i = 1; i <= system_size_; ++i)
         workspace_.model_residual[i] += nonlinear_.residual[i];
 
       const double model_sum_squares =
@@ -3292,30 +3360,30 @@ private:
   are never filtered.
   */
   void filter_predictor_spectrum() {
-    if (kFourierOrder < 16)
+    if (fourier_order_ < 16)
       return;
 
     const int cutoff =
-        std::max(4, static_cast<int>(0.72 * static_cast<double>(kFourierOrder)));
+        std::max(4, static_cast<int>(0.72 * static_cast<double>(fourier_order_)));
     const double denominator =
-        static_cast<double>(std::max(1, kFourierOrder - cutoff));
+        static_cast<double>(std::max(1, fourier_order_ - cutoff));
     auto &cosine_coefficients = workspace_.predictor_coefficients;
     std::fill(cosine_coefficients.begin(), cosine_coefficients.end(), 0.0L);
 
-    for (int mode = 0; mode <= kFourierOrder; ++mode) {
+    for (int mode = 0; mode <= fourier_order_; ++mode) {
       long double sum_ = 0.5L * static_cast<long double>(
                                     nonlinear_.state[surface_state_index(0)]);
       sum_ += 0.5L *
               static_cast<long double>(
-                  nonlinear_.state[surface_state_index(kFourierOrder)]) *
+                  nonlinear_.state[surface_state_index(fourier_order_)]) *
               ((mode & 1) ? -1.0L : 1.0L);
-      for (int node = 1; node < kFourierOrder; ++node) {
+      for (int node = 1; node < fourier_order_; ++node) {
         sum_ += static_cast<long double>(
                     nonlinear_.state[surface_state_index(node)]) *
                 static_cast<long double>(cosine_at_node(node, mode));
       }
       cosine_coefficients[static_cast<std::size_t>(mode)] =
-          2.0L * sum_ / static_cast<long double>(kFourierOrder);
+          2.0L * sum_ / static_cast<long double>(fourier_order_);
     }
 
     auto filter = [&](int mode) -> long double {
@@ -3329,21 +3397,21 @@ private:
       return std::exp(-36.0L * xi8 * xi4);
     };
 
-    for (int mode = cutoff + 1; mode <= kFourierOrder; ++mode) {
+    for (int mode = cutoff + 1; mode <= fourier_order_; ++mode) {
       const long double sigma = filter(mode);
       cosine_coefficients[static_cast<std::size_t>(mode)] *= sigma;
       nonlinear_.state[coefficient_state_index(mode)] *=
           static_cast<double>(sigma);
     }
 
-    for (int node = 0; node <= kFourierOrder; ++node) {
+    for (int node = 0; node <= fourier_order_; ++node) {
       long double value = 0.5L * cosine_coefficients[0];
-      for (int mode = 1; mode < kFourierOrder; ++mode) {
+      for (int mode = 1; mode < fourier_order_; ++mode) {
         value += cosine_coefficients[static_cast<std::size_t>(mode)] *
                  static_cast<long double>(cosine_at_node(node, mode));
       }
       value += 0.5L *
-               cosine_coefficients[static_cast<std::size_t>(kFourierOrder)] *
+               cosine_coefficients[static_cast<std::size_t>(fourier_order_)] *
                ((node & 1) ? -1.0L : 1.0L);
       nonlinear_.state[surface_state_index(node)] = static_cast<double>(value);
     }
@@ -3367,7 +3435,7 @@ private:
   */
   void predict_from_tangent(const Vector &previous_state, const Vector &tangent,
                             double delta) {
-    for (int i = 1; i <= kSystemSize; ++i) {
+    for (int i = 1; i <= system_size_; ++i) {
       nonlinear_.state[i] =
           uses_log_coordinate(i)
               ? log_predict(previous_state[i], tangent[i], delta)
@@ -3393,7 +3461,7 @@ private:
             : 0.0;
     const double ratio = std::clamp(raw_ratio, 0.0, 1.5);
 
-    for (int i = 1; i <= kSystemSize; ++i) {
+    for (int i = 1; i <= system_size_; ++i) {
       const double current = current_state[i];
       const double older = older_state[i];
       if (uses_log_coordinate(i) && current > 0.0 && older > 0.0) {
@@ -3563,22 +3631,22 @@ private:
   */
   void update_output_coefficients() {
     spectral_.surface_coefficients[0] = 0.0;
-    for (int mode = 1; mode <= kFourierOrder; ++mode) {
+    for (int mode = 1; mode <= fourier_order_; ++mode) {
       spectral_.stream_coefficients[mode] =
           nonlinear_.state[coefficient_state_index(mode)];
       long double surface_sum =
           0.5L *
           (static_cast<long double>(nonlinear_.state[surface_state_index(0)]) +
            static_cast<long double>(
-               nonlinear_.state[surface_state_index(kFourierOrder)]) *
+               nonlinear_.state[surface_state_index(fourier_order_)]) *
                ((mode & 1) ? -1.0L : 1.0L));
-      for (int node = 1; node <= kFourierOrder - 1; ++node) {
+      for (int node = 1; node <= fourier_order_ - 1; ++node) {
         surface_sum += static_cast<long double>(
                            nonlinear_.state[surface_state_index(node)]) *
                        static_cast<long double>(cosine_at_node(node, mode));
       }
       spectral_.surface_coefficients[mode] = static_cast<double>(
-          2.0L * surface_sum / static_cast<long double>(kFourierOrder));
+          2.0L * surface_sum / static_cast<long double>(fourier_order_));
     }
   }
 
@@ -3590,7 +3658,7 @@ private:
   */
   [[nodiscard]] double surface_elevation(double phase) const {
     long double elevation = 0.0L;
-    for (int mode = 1; mode < kFourierOrder; ++mode) {
+    for (int mode = 1; mode < fourier_order_; ++mode) {
       elevation +=
           static_cast<long double>(spectral_.surface_coefficients[mode]) *
           std::cos(static_cast<long double>(mode) *
@@ -3598,8 +3666,8 @@ private:
     }
     elevation +=
         0.5L *
-        static_cast<long double>(spectral_.surface_coefficients[kFourierOrder]) *
-        std::cos(static_cast<long double>(kFourierOrder) *
+        static_cast<long double>(spectral_.surface_coefficients[fourier_order_]) *
+        std::cos(static_cast<long double>(fourier_order_) *
                  static_cast<long double>(phase));
     return static_cast<double>(elevation);
   }
@@ -3609,12 +3677,12 @@ private:
 
   Collocation residuals can be extremely small even when the fixed spectrum is
   under-resolved. Half-shifted verification points therefore provide an
-  independent internal defect estimate.  The check never changes the fixed
-  production order.  solver.res records the maximum scalar defect, while the
+  independent internal defect estimate. This check does not change the active
+  order or its tolerance. solver.res records the maximum scalar defect, while the
   individual off-grid samples remain internal diagnostics.
   */
   void update_spectral_defect() {
-    const int sample_count = std::max(2 * kFourierOrder, 32);
+    const int sample_count = std::max(2 * fourier_order_, 32);
     long double maximum = 0.0L;
 
     /*
@@ -3640,7 +3708,7 @@ private:
         long double u_acc = 0.0L;
         long double v_acc = 0.0L;
 
-        for (int mode = 1; mode <= kFourierOrder; ++mode) {
+        for (int mode = 1; mode <= fourier_order_; ++mode) {
           VerticalBasisValues basis;
           if (!evaluate_vertical_basis(
                   mode, eta, nonlinear_.state[StateIndex::depth], basis)) {
@@ -3728,6 +3796,7 @@ private:
     double du_dy = 0.0;
     double potential_time_derivative = 0.0;
     double horizontal_time_derivative = 0.0;
+    double horizontal_material_acceleration = 0.0;
     double vertical_time_derivative = 0.0;
     double pressure = 0.0;
     double bernoulli_residual = 0.0;
@@ -3756,7 +3825,7 @@ private:
     periodicity.  Derivative sums are accumulated alongside the field values so
     no mode is evaluated more than once at a point.
     */
-    for (int mode = 1; mode <= kFourierOrder; ++mode) {
+    for (int mode = 1; mode <= fourier_order_; ++mode) {
       VerticalBasisValues basis;
       if (!evaluate_vertical_basis(mode, vertical_coordinate,
                                    nonlinear_.state[StateIndex::depth],
@@ -3820,6 +3889,9 @@ private:
     point.potential_time_derivative = -celerity * point.horizontal_velocity;
     point.horizontal_time_derivative = -celerity * point.du_dx;
     point.vertical_time_derivative = -celerity * point.du_dy;
+    point.horizontal_material_acceleration =
+        point.horizontal_time_derivative + point.horizontal_velocity * point.du_dx +
+        point.vertical_velocity * point.du_dy;
     /*
     Pressure is recovered from Bernoulli's equation in the moving frame.  The
     final residual recomputes the same constant in the stationary frame and is
@@ -3840,10 +3912,59 @@ private:
                   std::isfinite(point.du_dx) && std::isfinite(point.du_dy) &&
                   std::isfinite(point.potential_time_derivative) &&
                   std::isfinite(point.horizontal_time_derivative) &&
+                  std::isfinite(point.horizontal_material_acceleration) &&
                   std::isfinite(point.vertical_time_derivative) &&
                   std::isfinite(point.pressure) &&
                   std::isfinite(point.bernoulli_residual);
     return point;
+  }
+
+  // Velocities use sqrt(g*d); material accelerations use g.
+  [[nodiscard]] double phase_quantity(double phase, bool bed,
+                                      bool acceleration) const {
+    const double ordinate = bed ? -nonlinear_.state[StateIndex::depth]
+                                : surface_elevation(phase);
+    if (!bed && nonlinear_.state[StateIndex::depth] + ordinate <= 0.0)
+      throw std::runtime_error("interpolated free surface intersects the bed");
+    const FlowPoint point = evaluate_flow_point(phase, ordinate);
+    if (!point.valid)
+      throw std::runtime_error("non-finite kinematic phase evaluation");
+    return std::abs(acceleration ? point.horizontal_material_acceleration
+                                 : point.horizontal_velocity);
+  }
+
+  [[nodiscard]] double phase_maximum(bool bed, bool acceleration) const {
+    const int count = std::max(257, 8 * fourier_order_ + 1);
+    std::vector<double> phases(count), values(count);
+    double best = 0.0;
+    for (int i = 0; i < count; ++i) {
+      phases[i] = kPi * i / (count - 1);
+      values[i] = phase_quantity(phases[i], bed, acceleration);
+      best = std::max(best, values[i]);
+    }
+    const double golden = (std::sqrt(5.0) - 1.0) / 2.0;
+    for (int i = 1; i < count - 1; ++i) {
+      if (!(values[i] >= values[i-1] && values[i] >= values[i+1] &&
+            (values[i] > values[i-1] || values[i] > values[i+1]))) continue;
+      double left = phases[i-1], right = phases[i+1];
+      double x1 = right - golden*(right-left), x2 = left + golden*(right-left);
+      double f1 = phase_quantity(x1, bed, acceleration);
+      double f2 = phase_quantity(x2, bed, acceleration);
+      best = std::max({best, f1, f2});
+      for (int iteration = 0; iteration < 64 && right-left >= 1e-12; ++iteration) {
+        if (f1 < f2) {
+          left = x1; x1 = x2; f1 = f2;
+          x2 = left + golden*(right-left);
+          f2 = phase_quantity(x2, bed, acceleration);
+        } else {
+          right = x2; x2 = x1; f2 = f1;
+          x1 = right - golden*(right-left);
+          f1 = phase_quantity(x1, bed, acceleration);
+        }
+        best = std::max({best, f1, f2});
+      }
+    }
+    return best;
   }
 
   /*
@@ -3903,6 +4024,11 @@ private:
     double mean_square_bed_velocity = 0.0;
     double radiation_stress = 0.0;
     double wave_power = 0.0;
+    double surface_max_velocity = 0.0;
+    double bed_max_velocity = 0.0;
+    double surface_max_acceleration = 0.0;
+    double bed_max_acceleration = 0.0;
+    double velocity_asymmetry = 0.0;
   };
 
   /*
@@ -3936,10 +4062,13 @@ private:
         0.5 * (nonlinear_.state[StateIndex::celerity] * result.impulse -
                nonlinear_.state[StateIndex::eulerian_current] *
                    result.volume_flux * depth_power_3_2);
-    for (int mode = 1; mode <= kFourierOrder; ++mode) {
+    for (int mode = 1; mode < fourier_order_; ++mode) {
       result.potential_energy += 0.25 * spectral_.surface_coefficients[mode] *
                                  spectral_.surface_coefficients[mode];
     }
+    // The terminal cosine mode has amplitude E_N/2 in the surface reconstruction.
+    result.potential_energy += spectral_.surface_coefficients[fourier_order_] *
+                               spectral_.surface_coefficients[fourier_order_] / 16.0;
     const double bed_velocity_identity =
         2.0 * nonlinear_.state[StateIndex::bernoulli] -
         nonlinear_.state[StateIndex::celerity] *
@@ -3961,6 +4090,22 @@ private:
             (nonlinear_.state[StateIndex::wave_frame_speed] * result.depth -
              nonlinear_.state[StateIndex::flux]);
     result.mean_square_bed_velocity = mean_square_bed_orbital_velocity();
+    result.surface_max_velocity = phase_maximum(false, false);
+    result.bed_max_velocity = phase_maximum(true, false);
+    result.surface_max_acceleration = phase_maximum(false, true);
+    result.bed_max_acceleration = phase_maximum(true, true);
+    const FlowPoint crest = evaluate_flow_point(0.0, surface_elevation(0.0));
+    const FlowPoint trough = evaluate_flow_point(kPi, surface_elevation(kPi));
+    if (!crest.valid || !trough.valid)
+      throw std::runtime_error("non-finite surface velocity for asymmetry");
+    result.velocity_asymmetry = std::abs(trough.horizontal_velocity) > 0.0
+        ? std::abs(crest.horizontal_velocity / trough.horizontal_velocity) : 0.0;
+    for (double value : {result.surface_max_velocity, result.bed_max_velocity,
+                         result.surface_max_acceleration, result.bed_max_acceleration,
+                         result.velocity_asymmetry, result.mean_square_bed_velocity}) {
+      if (!std::isfinite(value) || value < 0.0)
+        throw std::runtime_error("invalid kinematic output");
+    }
     result.momentum_flux =
         result.radiation_stress -
         2.0 * nonlinear_.state[StateIndex::celerity] * result.impulse +
@@ -4046,7 +4191,7 @@ private:
                      quantities.potential_energy,
                      quantities.potential_energy /
                          (quantities.depth * quantities.depth));
-    write_result_row(file, "# Mean square of bed velocity      (ub2)",
+    write_result_row(file, "# Mean square orbital bed velocity (ub2)",
                      quantities.mean_square_bed_velocity,
                      quantities.mean_square_bed_velocity / quantities.depth);
     write_result_row(file, "# Radiation stress                 (Sxx)",
@@ -4065,7 +4210,7 @@ private:
     std::fprintf(file, "\n\n# Dimensionless coefficients in Fourier series");
     std::fprintf(file, "\n# Potential/Streamfn\tSurface elevations");
     std::fprintf(file, "\n# j, B[j], & E[j], j=1..N\n");
-    for (int mode = 1; mode <= kFourierOrder; ++mode) {
+    for (int mode = 1; mode <= fourier_order_; ++mode) {
       std::fprintf(file, "\n%4d  % .16e  % .16e", mode,
                    spectral_.stream_coefficients[mode],
                    spectral_.surface_coefficients[mode]);
@@ -4076,10 +4221,10 @@ private:
   /*
   Describe one valid state-vector index for solver.res.  Global components use
   their physical symbols; nodal and modal components include their mathematical
-  node/mode number.  The caller iterates only over 1..kSystemSize.
+  node/mode number.  The caller iterates only over 1..system_size_.
   */
   [[nodiscard]] std::string state_variable_description(int index) const {
-    assert(index >= 1 && index <= kSystemSize);
+    assert(index >= 1 && index <= system_size_);
     switch (index) {
     case StateIndex::depth:
       return "kd: mean water depth scaled by wavenumber";
@@ -4104,14 +4249,14 @@ private:
     }
 
     if (index >= StateIndex::surface_begin &&
-        index <= surface_state_index(kFourierOrder)) {
+        index <= surface_state_index(fourier_order_)) {
       const int node = index - StateIndex::surface_begin;
       return "eta[" + std::to_string(node) +
              "]: free-surface ordinate at X=" + std::to_string(node) +
              "*pi/N";
     }
 
-    const int mode = index - surface_state_index(kFourierOrder);
+    const int mode = index - surface_state_index(fourier_order_);
     return "B[" + std::to_string(mode) +
            "]: stream-function Fourier coefficient";
   }
@@ -4122,7 +4267,7 @@ private:
   Eulerian/mass-transport closures at runtime.
   */
   [[nodiscard]] std::string residual_equation_description(int index) const {
-    assert(index >= 1 && index <= kSystemSize);
+    assert(index >= 1 && index <= system_size_);
     switch (index) {
     case ResidualIndex::depth:
       return "kH - kd*(H/d)";
@@ -4149,7 +4294,7 @@ private:
     }
 
     if (index >= kinematic_residual_index(0) &&
-        index <= kinematic_residual_index(kFourierOrder)) {
+        index <= kinematic_residual_index(fourier_order_)) {
       const int node = index - ResidualIndex::kinematic_begin;
       return "kinematic free-surface equation at node m=" +
              std::to_string(node);
@@ -4186,11 +4331,18 @@ private:
 
     std::fprintf(file, "\n# Solver configuration\n");
     std::fprintf(file, "Fourier order N                         %d\n",
-                 kFourierOrder);
+                 fourier_order_);
+    std::fprintf(file, "Requested Fourier order                %d\n", kRequestedFourierOrder);
+    std::fprintf(file, "Equilibrated Jacobian condition         %.16e\n", status_.jacobian_condition);
+    std::fprintf(file, "Jacobian condition limit                %.16e\n", kJacobianConditionLimit);
+    std::fprintf(file, "\n# Fourier order attempts: N, accepted, condition\n");
+    for (const auto &attempt : order_attempts_)
+      std::fprintf(file,"%d %s %.16e\n",attempt.order,attempt.converged?"PASS":"REJECTED",attempt.condition);
+    std::fprintf(file,"\n");
     std::fprintf(file, "Nonlinear unknowns                     %d\n",
-                 kSystemSize);
+                 system_size_);
     std::fprintf(file, "Nonlinear equations                    %d\n",
-                 kSystemSize);
+                 system_size_);
     std::fprintf(file, "Intermediate residual tolerance        %.16e\n",
                  kConvergenceCriterion);
     std::fprintf(file, "Final residual RMS tolerance           %.16e\n",
@@ -4280,7 +4432,7 @@ private:
                  "# The nonlinear convergence result is based on an independent "
                  "re-evaluation of all %d equations at the final state. The "
                  "spectral defect is a separate truncation-resolution check.\n",
-                 kSystemSize);
+                 system_size_);
 
     auto write_group = [&](const char *name, int first, int last) {
       long double sum_squares = 0.0L;
@@ -4309,25 +4461,25 @@ private:
     write_group("Global constraints", 1, 8);
     write_group("Kinematic surface equations",
                 kinematic_residual_index(0),
-                kinematic_residual_index(kFourierOrder));
+                kinematic_residual_index(fourier_order_));
     write_group("Dynamic surface equations", dynamic_residual_index(0),
-                dynamic_residual_index(kFourierOrder));
+                dynamic_residual_index(fourier_order_));
 
     std::fprintf(file, "\n# Complete final nonlinear state vector z[1..%d]\n",
-                 kSystemSize);
+                 system_size_);
     std::fprintf(file, "# index              value  variable and definition\n");
-    for (int i = 1; i <= kSystemSize; ++i) {
+    for (int i = 1; i <= system_size_; ++i) {
       std::fprintf(file, "z[%3d] = % .17e  %s\n", i,
                    nonlinear_.state[i], state_variable_description(i).c_str());
     }
 
     std::fprintf(file, "\n# Complete final residual vector F[1..%d]\n",
-                 kSystemSize);
+                 system_size_);
     std::fprintf(file,
                  "# index             residual       absolute_value  "
                  "fraction_of_max_limit  equation\n");
     const double maximum_limit = kResidualMaximumFactor * kFinalResidualTolerance;
-    for (int i = 1; i <= kSystemSize; ++i) {
+    for (int i = 1; i <= system_size_; ++i) {
       const double absolute = std::fabs(nonlinear_.residual[i]);
       std::fprintf(file, "F[%3d] = % .17e  % .17e  % .9e  %s\n", i,
                    nonlinear_.residual[i], absolute,
@@ -4442,8 +4594,8 @@ private:
   Numerical solving is complete before this routine begins.  Output generation is
   therefore read-only and cannot alter convergence state or spectral resolution.
   */
-  void write_outputs(const OutputHandles &output) const {
-    const DerivedQuantities quantities = compute_derived_quantities();
+  void write_outputs(const OutputHandles &output,
+                     const DerivedQuantities &quantities) const {
 
     std::fprintf(stdout, "\n\n# Solution summary:\n\n");
     write_finite_summary(stdout);
@@ -4472,9 +4624,9 @@ private:
   */
   void allocate_workspace() {
     const std::size_t vector_size =
-        static_cast<std::size_t>(kSystemSize + 1);
+        static_cast<std::size_t>(system_size_ + 1);
     const std::size_t spectral_size =
-        static_cast<std::size_t>(kSurfaceNodeCount);
+        static_cast<std::size_t>(surface_node_count_);
     const std::size_t table_size = spectral_size * spectral_size;
 
     spectral_.surface_coefficients.assign(spectral_size, 0.0);
@@ -4487,8 +4639,8 @@ private:
     nonlinear_.residual.assign(vector_size, 0.0);
     nonlinear_.trial_residual.assign(vector_size, 0.0);
 
-    workspace_.jacobian.resize(kSystemSize);
-    workspace_.linear_matrix.resize(kSystemSize);
+    workspace_.jacobian.resize(system_size_);
+    workspace_.linear_matrix.resize(system_size_);
     workspace_.linear_rhs.assign(vector_size, 0.0);
     workspace_.newton_direction.assign(vector_size, 0.0);
     workspace_.cauchy_direction.assign(vector_size, 0.0);
@@ -4505,10 +4657,10 @@ private:
   }
 
   /*
-  Execute adaptive continuation to the exact target H/d.  The fixed spectral
-  order never changes.  After convergence, the off-grid defect is evaluated as
-  an internal resolution check; an elevated defect produces a warning but does
-  not alter the fixed production discretization.
+  Execute adaptive continuation to the exact target H/d at one Fourier order.
+  The application retries ill-conditioned systems at a lower order. After
+  convergence, the off-grid defect is evaluated separately; an elevated defect
+  produces a warning and remains visible in the numerical audit.
   */
   [[nodiscard]] bool solve_wave() {
     const ContinuationResult continuation = continue_to_target();
@@ -4516,9 +4668,13 @@ private:
     audit_.total_continuation_trials = continuation.trials;
     audit_.target_fraction_reached = continuation.converged;
 
+    assemble_jacobian(workspace_.jacobian);
+    status_.jacobian_condition = jacobian_is_finite(workspace_.jacobian)
+        ? equilibrated_jacobian_condition() : std::numeric_limits<double>::infinity();
+
     if (!continuation.converged) {
       std::fprintf(stderr,
-                   "\nFatal: adaptive continuation failed before reaching "
+                   "\nAdaptive continuation stopped before reaching "
                    "the target wave height. No unconverged result files were "
                    "written.\n");
       return false;
@@ -4543,14 +4699,14 @@ private:
     audit_.residual_test_passed = residual_converged(kFinalResidualTolerance);
 
     audit_.maximum_residual_index = 1;
-    for (int i = 2; i <= kSystemSize; ++i) {
+    for (int i = 2; i <= system_size_; ++i) {
       if (std::fabs(nonlinear_.residual[i]) >
           std::fabs(nonlinear_.residual[audit_.maximum_residual_index])) {
         audit_.maximum_residual_index = i;
       }
     }
 
-    for (int i = 1; i <= kSystemSize; ++i)
+    for (int i = 1; i <= system_size_; ++i)
       workspace_.base_state[i] = nonlinear_.state[i];
     assemble_jacobian(workspace_.jacobian);
     audit_.jacobian_finite = jacobian_is_finite(workspace_.jacobian);
@@ -4571,13 +4727,15 @@ private:
       return false;
     }
 
+    if (status_.jacobian_condition > kJacobianConditionLimit) return false;
+
     update_spectral_defect();
     if (!std::isfinite(status_.spectral_defect_max) ||
         status_.spectral_defect_max > kSpectralDefectTolerance) {
       std::fprintf(stderr,
-                   "Warning: the fixed %d-mode solution has an elevated "
+                   "Warning: the %d-mode solution has an elevated "
                    "internal between-node boundary defect.\n",
-                   kFourierOrder);
+                   fourier_order_);
     }
     return true;
   }
@@ -4650,19 +4808,45 @@ public:
 
     write_input_summary(stdout);
     std::fprintf(stdout,
-                 "Fixed Fourier order: %d\n"
+                 "Requested Fourier order: %d\n"
                  "Adaptive continuation seed: %d increments\n",
-                 kFourierOrder, discretization_.initial_continuation_steps);
+                 fourier_order_, discretization_.initial_continuation_steps);
 
     /*
     Allocate, solve, and verify before creating any result file.  This ordering
     guarantees that a failed nonlinear calculation cannot leave apparently
     valid but unconverged output.
     */
-    allocate_workspace();
-    if (!solve_wave()) {
+    order_attempts_.clear();
+    bool solved = false;
+    for (;;) {
+      surface_node_count_ = fourier_order_ + 1;
+      coefficient_state_begin_ = StateIndex::surface_begin + surface_node_count_;
+      dynamic_residual_begin_ = ResidualIndex::kinematic_begin + surface_node_count_;
+      system_size_ = kGlobalStateCount + surface_node_count_ + fourier_order_;
+      assert(system_size_ == kGlobalResidualCount + 2 * surface_node_count_);
+      assert(coefficient_state_begin_ + fourier_order_ - 1 == system_size_);
+      assert(dynamic_residual_begin_ + fourier_order_ == system_size_);
+      status_ = SolverStatus{};
+      continuation_ = ContinuationState{};
+      allocate_workspace();
+      solved = solve_wave();
+      order_attempts_.push_back({fourier_order_, solved, status_.jacobian_condition});
+      if (status_.jacobian_condition <= kJacobianConditionLimit || fourier_order_ <= 12)
+        break;
+      fourier_order_ = std::max(12, static_cast<int>(0.8 * fourier_order_));
+      std::fprintf(stdout,
+                   "\nRetrying with Fourier order N=%d for binary64 conditioning.\n",
+                   fourier_order_);
+    }
+    if (!solved) {
+      std::fprintf(stderr,
+                   "Fatal: no verified target solution. The wave may be near or "
+                   "beyond its limiting height. No result files were written.\n");
       return 3;
     }
+
+    const DerivedQuantities quantities = compute_derived_quantities();
 
     const fs::path solution_path = io_directory / "solution.res";
     const fs::path solver_path = io_directory / "solver.res";
@@ -4680,7 +4864,7 @@ public:
 
     const OutputHandles output{solution_file.get(), solver_file.get(),
                                surface_file.get(), flowfield_file.get()};
-    write_outputs(output);
+    write_outputs(output, quantities);
 
     /*
     Explicitly flush and close each stream so delayed write failures are visible

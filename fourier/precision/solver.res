@@ -1,10 +1,17 @@
 # SOLVER AUDIT REPORT
 # Case: Test wave
-# Solution by fixed 50-mode spectral collocation
+# Solution by 50-mode spectral collocation (requested 50)
 # This file records the complete nonlinear state, complete residual vector, continuation history, and independent final convergence checks.
 
 # Solver configuration
 Fourier order N                         50
+Requested Fourier order                50
+Equilibrated Jacobian condition         1.4199413607440022e+05
+Jacobian condition limit                1.0000000000000000e+11
+
+# Fourier order attempts: N, accepted, condition
+50 PASS 1.4199413607440022e+05
+
 Nonlinear unknowns                     110
 Nonlinear equations                    110
 Intermediate residual tolerance        1.0000000000000000e-10

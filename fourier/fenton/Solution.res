@@ -1,4 +1,4 @@
-# Test wave - low & intermediate length to test all three theories
+# Test wave
 
 # Solution by 50-term Fourier series
 

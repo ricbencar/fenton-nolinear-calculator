@@ -1,5 +1,5 @@
 # Test wave
-# Solution by fixed 50-mode spectral collocation
+# Solution by 50-mode spectral collocation (requested 50)
 
 # Height/Depth:0.60000,  80% of the maximum of H/d =0.75101 for this length:
 # Length/Depth:15.76544
@@ -23,13 +23,13 @@
 # Bernoulli constant                 (r)  2.4788834204643870e-01  6.2198863929905113e-01
 # Volume flux                        (Q)  2.7181073834232122e-01  1.0803292493994912e+00
 # Bernoulli constant                 (R)  6.4642993329768073e-01  1.6219886392990510e+00
-# Momentum flux                      (S)  2.7052575070255402e-01  1.7031829855036600e+00
+# Momentum flux                      (S)  2.7052575070256968e-01  1.7031829855037586e+00
 # Impulse                            (I)  4.2890787443432672e-02  1.7047219137663536e-01
 # Kinetic energy                     (T)  4.6813913963457202e-03  2.9473224467662391e-02
-# Potential energy                   (V)  2.1598592865405808e-03  1.3598097698147378e-02
-# Mean square of bed velocity      (ub2)  6.5079294540927287e-03  1.6329360842015871e-02
-# Radiation stress                 (Sxx)  1.0345341355336676e-02  6.5132466428344526e-02
-# Wave power                         (F)  4.1888371074831040e-03  4.1774315842290077e-02
+# Potential energy                   (V)  2.1598592865353641e-03  1.3598097698114535e-02
+# Mean square orbital bed velocity (ub2)  6.5079294540927287e-03  1.6329360842015871e-02
+# Radiation stress                 (Sxx)  1.0345341355352323e-02  6.5132466428443031e-02
+# Wave power                         (F)  4.1888371074913422e-03  4.1774315842372241e-02
 
 # Dimensionless coefficients in Fourier series
 # Potential/Streamfn	Surface elevations
