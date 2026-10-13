@@ -3,6 +3,8 @@
 # ==============================================================================
 #  PROGRAM:      Fenton Nonlinear Wave Suite - Python Tkinter GUI solver
 #  FILE:         fenton_gui.py
+#  VALIDATION:   See accompanying Lean proofs and numerical audit.
+#  Formal proofs concern the real-valued model, not all IEEE-754 executions.
 #  METHOD:       Stream-function / Fourier collocation method for steady,
 #                two-dimensional, finite-amplitude gravity waves.
 #  REFERENCE:    Rienecker-Fenton / Fenton numerical-wave formulation,
@@ -63,11 +65,11 @@
 #  all hyperbolic sine terms vanish, so the bed condition is satisfied before the
 #  nonlinear equations are assembled.
 #
-#  For numerical stability the hyperbolic ratios are evaluated in the stable hyperbolic-ratio
-#  form
+#  The hyperbolic ratios use exponential expressions without subtracting
+#  large, nearly equal hyperbolic terms:
 #
-#      S_j(Y) = sinh(jY) + cosh(jY) tanh(jkd),
-#      C_j(Y) = cosh(jY) + sinh(jY) tanh(jkd).
+#      S_j(Y) = [exp(jY) - exp(-jY-2jkd)] / [1 + exp(-2jkd)],
+#      C_j(Y) = [exp(jY) + exp(-jY-2jkd)] / [1 + exp(-2jkd)].
 #
 #  For large jkd, tanh(jkd) tends to 1 and both functions tend to exp(jY).
 #
@@ -93,9 +95,9 @@
 #
 #      num = 2N + 10.
 #
-#  With the production value N = 50, this gives 110 active 1-based state entries
-#  and 110 nonlinear residual equations, matching the full nonlinear residual
-#  system for the stream-function / Fourier collocation solver.
+#  The requested order is N = 50. The solver reduces the order when the
+#  equilibrated Jacobian exceeds its binary64 conditioning limit. The active
+#  residual system always has 2N + 10 equations for the order actually used.
 #
 #  5. RESIDUAL SYSTEM IMPLEMENTED IN _eqns()
 #  -----------------------------------------------------------------------------
@@ -141,10 +143,10 @@
 #  -----------------------------------------------------------------------------
 #  Wave height is introduced by continuation from a near-linear wave to the target
 #  value.  At each continuation step, Newton iteration linearizes F(z) about the
-#  current iterate and solves J dz = -F(z).  Numerical finite-difference Jacobians
-#  and singular-value stabilized dense linear algebra are used because high-order
-#  stream-function waves, near-limiting waves and current cases can make the
-#  Jacobian ill-conditioned.
+#  current iterate and solves J dz = -F(z) using analytic derivatives and a
+#  column-equilibrated SVD. Failed height steps are retried with smaller increments.
+#  The Fourier order is limited by the conditioning of the equilibrated Jacobian;
+#  the report states the order used. Residual tolerances are independent of order.
 #
 #  Linear Airy/Fenton-McKee estimates are used only as initialization and checking
 #  aids.  The final result is the converged nonlinear stream-function / Fourier
@@ -179,7 +181,7 @@
 #  To create a single-file Windows GUI executable:
 #
 #      python -m pip install pyinstaller
-#      pyinstaller --onefile --noconsole fenton_gui.py
+#      python -m PyInstaller --noconfirm --clean --onefile --windowed --name fenton_gui.exe fenton_gui.py
 #
 #  The generated executable is written to the dist folder.
 # ==============================================================================
@@ -232,6 +234,121 @@ import numpy as np
 # NumPy compatibility:
 # - NumPy 2.x removed the legacy alias `numpy.trapz`.
 # - Prefer `numpy.trapezoid` when available, else fall back to `numpy.trapz`.
+# Outward-rounded arithmetic for independent finite-system evaluation.
+from decimal import Decimal, Context, ROUND_FLOOR, ROUND_CEILING, ROUND_HALF_EVEN, DecimalException
+from functools import lru_cache
+from math import factorial
+
+
+class _Interval:
+    down = Context(prec=50, rounding=ROUND_FLOOR)
+    up = Context(prec=50, rounding=ROUND_CEILING)
+    nearest = Context(prec=50, rounding=ROUND_HALF_EVEN)
+
+    def __init__(self, lower, upper=None):
+        def exact(value):
+            return Decimal.from_float(float(value)) if isinstance(value, (float, np.floating)) else Decimal(value)
+        self.lo = exact(lower)
+        self.hi = self.lo if upper is None else exact(upper)
+        if not self.lo.is_finite() or not self.hi.is_finite() or self.lo > self.hi:
+            raise FloatingPointError("Invalid interval endpoints.")
+
+    @staticmethod
+    def coerce(value):
+        return value if isinstance(value, _Interval) else _Interval(value)
+
+    def __add__(self, other):
+        other = self.coerce(other)
+        return _Interval(self.down.add(self.lo, other.lo), self.up.add(self.hi, other.hi))
+
+    __radd__ = __add__
+
+    def __neg__(self):
+        return _Interval(self.hi.copy_negate(), self.lo.copy_negate())
+
+    def __sub__(self, other):
+        return self + (-self.coerce(other))
+
+    def __rsub__(self, other):
+        return self.coerce(other) + (-self)
+
+    def __mul__(self, other):
+        other = self.coerce(other)
+        pairs = [(a, b) for a in (self.lo, self.hi) for b in (other.lo, other.hi)]
+        return _Interval(min(self.down.multiply(a, b) for a, b in pairs),
+                         max(self.up.multiply(a, b) for a, b in pairs))
+
+    __rmul__ = __mul__
+
+    def __truediv__(self, other):
+        other = self.coerce(other)
+        if other.lo <= 0 <= other.hi:
+            raise FloatingPointError("Interval division includes zero.")
+        return self * _Interval(self.down.divide(Decimal(1), other.hi),
+                                self.up.divide(Decimal(1), other.lo))
+
+    def __rtruediv__(self, other):
+        return self.coerce(other) / self
+
+    def square(self):
+        lower = Decimal(0) if self.lo <= 0 <= self.hi else min(self.lo.copy_abs(), self.hi.copy_abs())
+        upper = max(self.lo.copy_abs(), self.hi.copy_abs())
+        return _Interval(self.down.multiply(lower, lower), self.up.multiply(upper, upper))
+
+    def __pow__(self, exponent):
+        if not isinstance(exponent, int) or exponent < 0:
+            raise ValueError("Interval powers require a nonnegative integer.")
+        result, base = _Interval(1), self
+        while exponent:
+            if exponent % 2:
+                result = result * base
+            base = base.square()
+            exponent //= 2
+        return result
+
+    def exp(self):
+        return _Interval(self.nearest.next_minus(self.nearest.exp(self.lo)),
+                         self.nearest.next_plus(self.nearest.exp(self.hi)))
+
+    def sqrt(self):
+        if self.lo < 0:
+            raise FloatingPointError("Negative square-root interval.")
+        lower = max(Decimal(0), self.nearest.next_minus(self.nearest.sqrt(self.lo)))
+        return _Interval(lower, self.nearest.next_plus(self.nearest.sqrt(self.hi)))
+
+    def magnitude(self):
+        return max(self.lo.copy_abs(), self.hi.copy_abs())
+
+    def record(self):
+        return [str(self.lo), str(self.hi)]
+
+
+_PI_INTERVAL = _Interval("3.14159265358979323846", "3.14159265358979323847")
+
+
+@lru_cache(maxsize=16)
+def _collocation_intervals(order):
+    """Enclose sin(q*pi/N), cos(q*pi/N) using Taylor remainders on [-pi,pi]."""
+    table = []
+    for index in range(2*order):
+        q = index if index <= order else index-2*order
+        x = _PI_INTERVAL*q/order
+        sine, cosine = _Interval(0), _Interval(0)
+        st, ct = x, _Interval(1)
+        square = x.square()
+        for m in range(32):
+            sine, cosine = sine+st, cosine+ct
+            st = -st*square/((2*m+2)*(2*m+3))
+            ct = -ct*square/((2*m+1)*(2*m+2))
+        radius = _Interval(x.magnitude())
+        sin_error = (radius**65/factorial(65)).hi
+        cos_error = (radius**64/factorial(64)).hi
+        sine = sine+_Interval(sin_error.copy_negate(), sin_error)
+        cosine = cosine+_Interval(cos_error.copy_negate(), cos_error)
+        table.append((sine, cosine))
+    return tuple(table)
+
+
 def _np_trapz(y, x):
     trapezoid = getattr(np, "trapezoid", None)
     if trapezoid is not None:
@@ -251,10 +368,8 @@ def _np_trapz(y, x):
 #  NUMBA ACCELERATION LAYER (OPTIONAL, SAME RESIDUAL SYSTEM)
 # ==============================================================================
 #
-# The solver is dominated by repeated evaluations of the documented residual system
-# _eqns() inside a finite-difference Jacobian (≈ O(num^2) residual calls per Newton
-# step). Pure NumPy vectorisation creates many temporary arrays per collocation
-# node; Numba JIT removes those temporaries by compiling tight scalar loops.
+# Residual evaluation and field reconstruction use scalar collocation loops.
+# Numba JIT compiles these loops; the analytic Jacobian uses NumPy arrays.
 #
 # IMPORTANT:
 # - fastmath is NOT used (to avoid changing floating-point semantics).
@@ -340,21 +455,17 @@ def _eqns_numba(z, rhs, coeff, Tanh, cos_nm, sin_nm, n, num, Hoverd, height, Cur
 
         for jj in range(1, n + 1):
             cj = coeff[jj]
-            tj = Tanh[jj]
 
             x = jj * zsurf
             # Numerical safeguard for diverging trial free-surface ordinates
             if x > 60.0 or x < -60.0:
                 rhs[1] = np.inf
                 return np.inf
-            e = np.exp(x)
-            inv_e = 1.0 / e
-            sinhkd = 0.5 * (e - inv_e)
-            coshkd = 0.5 * (e + inv_e)
-
-            # Stable hyperbolic rewrite: S_j and C_j using tanh(jkd)
-            S = sinhkd + coshkd * tj
-            C = coshkd + sinhkd * tj
+            ep = np.exp(x)
+            em = np.exp(-x - 2.0 * jj * kd)
+            den = 1.0 + np.exp(-2.0 * jj * kd)
+            S = (ep - em) / den
+            C = (ep + em) / den
 
             ccos = cos_nm[m, jj - 1]
             ssin = sin_nm[m, jj - 1]
@@ -427,10 +538,14 @@ def _point_numba(X, Y, z, Tanh, B, n):
         Cos = np.cos(j * X)
         Sin = np.sin(j * X)
 
-        coshdelta = np.cosh(j * Y)
-        sinhdelta = np.sinh(j * Y)
-        C = coshdelta + sinhdelta * Tanh[j]
-        S = sinhdelta + coshdelta * Tanh[j]
+        # Scaled ratios avoid overflow and catastrophic cancellation at the bed.
+        a = j * Y
+        b = j * kd
+        ep = np.exp(a)
+        em = np.exp(-a - 2.0 * b)
+        den = 1.0 + np.exp(-2.0 * b)
+        C = (ep + em) / den
+        S = (ep - em) / den
 
         Bj = B[j]
         u  += j * Bj * C * Cos
@@ -470,7 +585,7 @@ def _point_numba(X, Y, z, Tanh, B, n):
 # state vector and residual system, including:
 #   - Unknown vector z[1..2N+10] with index 0 intentionally unused
 #   - Residual system F(z)=0 with eight global equations and two collocation blocks
-#   - Newton iteration with finite-difference Jacobian and SVD-stabilized solve
+#   - Newton iteration with analytic Jacobian and equilibrated SVD solve
 #   - Wave-height continuation from a near-linear seed to the target height
 #
 # Notes
@@ -490,7 +605,7 @@ class FentonStreamFunction:
 
     # --------------------------- construction and state-vector allocation ---------
 
-    def __init__(self, H, T, d, Uc=0.0):
+    def __init__(self, H, T, d, Uc=0.0, *, fourier_order=None):
         # Dimensional inputs: H, T, d and imposed Eulerian current Uc
         self.H_target = float(H)    # [m]
         self.T_target = float(T)    # [s]
@@ -499,13 +614,25 @@ class FentonStreamFunction:
 
         # Physical and numerical constants
         self.g = G_STD
-        self.N = N_FOURIER
+        self.N = N_FOURIER if fourier_order is None else int(fourier_order)
+        self.requested_order = self.N
+        self.jacobian_condition = 0.0
+        self.continuation_fraction = 0.0
+        self.numerical_note = ""
+        self.accuracy_verified = False
+        self.accuracy_metrics = {}
+        self.finite_system_verified = False
+        self.finite_system_certificate = {}
+        self.solution_status = "not_solved"
 
         # Solver control: continuation and Newton iteration tolerances
         self.nstep  = 4        # continuation steps in wave height
         self.number = 40       # max Newton iterations per step
         self.crit   = 1.0e-8   # intermediate-step convergence factor (C++: crit)
         self.criter_final = 1.0e-10  # final-step convergence factor
+        self.residual_tolerance = 1.0e-8
+        self.residual_tolerance_final = 1.0e-10
+        self.residual_max = float("inf")
 
         # Problem mode represented by this GUI: finite depth with period as input
         self.Depth = "Finite"
@@ -555,6 +682,7 @@ class FentonStreamFunction:
         self.u_bed = 0.0
         self.tau_bed = 0.0
         self.acc_max = 0.0
+        self.acc_bed_max = 0.0
         self.u_surf = 0.0
         self.w_max = 0.0
         self.asymmetry = 0.0
@@ -629,10 +757,10 @@ class FentonStreamFunction:
 
         # Initial current variables for the selected Fenton current criterion
         if self.Current_criterion == 1:
-            self.z[5] = self.Current * np.sqrt(self.z[2])
+            self.z[5] = self.Current * np.sqrt(self.z[1])
             self.z[6] = 0.0
         else:
-            self.z[6] = self.Current * np.sqrt(self.z[2])
+            self.z[6] = self.Current * np.sqrt(self.z[1])
             self.z[5] = 0.0
 
         self.z[7] = self.z[4]
@@ -710,7 +838,6 @@ class FentonStreamFunction:
         # r[9+m] and r[N+10+m]: streamline and Bernoulli residuals at m=0..N
         j = self._j                      # shape (n,)
         coeff = self.coeff[1:n + 1]      # shape (n,)
-        tanh = self.Tanh[1:n + 1]        # shape (n,)
         jcoeff = j * coeff               # shape (n,)
 
         for m in range(0, n + 1):
@@ -719,14 +846,11 @@ class FentonStreamFunction:
             x = j * zsurf
             if np.any(x > 60.0) or np.any(x < -60.0):
                 raise FloatingPointError("Divergence: exp(j*zsurf) out of safe range.")
-            e = np.exp(x)
-            inv_e = 1.0 / e
-            sinhkd = 0.5 * (e - inv_e)
-            coshkd = 0.5 * (e + inv_e)
-
-            # Stable hyperbolic rewrite: S_j and C_j using tanh(jkd)
-            S = sinhkd + coshkd * tanh
-            C = coshkd + sinhkd * tanh
+            ep = np.exp(x)
+            em = np.exp(-x - 2.0 * j * z[1])
+            den = 1.0 + np.exp(-2.0 * j * z[1])
+            S = (ep - em) / den
+            C = (ep + em) / den
 
             cosnm = self._cos_nm[m]
             sinnm = self._sin_nm[m]
@@ -739,12 +863,55 @@ class FentonStreamFunction:
             rhs[n + m + 10] = 0.5 * ((-z[7] + u) ** 2 + v * v) + z[m + 10] - z[9]
 
         return float(np.dot(rhs[1:num + 1], rhs[1:num + 1]))
-    @staticmethod
+    def _jacobian(self):
+        """Analytic derivatives of the full collocation residual vector."""
+        n, z, j = self.n, self.z, self._j
+        A = np.zeros((self.num + 1, self.num + 1), dtype=DTYPE)
+        A[1, 1], A[1, 2] = -self.Hoverd, 1.0
+        A[2, 2], A[2, 3] = 1.0, -2.0 * self.height * z[3]
+        A[3, 3], A[3, 4] = z[4], z[3]
+        A[4, 5], A[4, 7], A[4, 4] = 1.0, 1.0, -1.0
+        A[5, 1] = z[6] + z[7] - z[4]
+        A[5, 6], A[5, 7], A[5, 4], A[5, 8] = z[1], z[1], -z[1], -1.0
+        A[6, self.Current_criterion + 4] = 1.0
+        A[6, 1] = -0.5 * self.Current / np.sqrt(z[1])
+        A[7, 10:n + 11] = 2.0
+        A[7, 10] = A[7, n + 10] = 1.0
+        A[8, 10], A[8, n + 10], A[8, 2] = 1.0, -1.0, -1.0
 
-    def _svd_solve(A, b):
+        B = z[n + 11:]
+        a = z[10:n + 11, None] * j[None, :]
+        ep = np.exp(a)
+        depth_exp = np.exp(-2.0 * j * z[1])
+        em = np.exp(-a - 2.0 * j * z[1])
+        den = 1.0 + depth_exp
+        S, C = (ep - em) / den, (ep + em) / den
+        dS = 2.0 * j * (em + depth_exp * ep) / den ** 2
+        dC = 2.0 * j * (depth_exp * ep - em) / den ** 2
+        cos, sin = self._cos_nm, self._sin_nm
+        u = (C * cos) @ (j * B)
+        v = (S * sin) @ (j * B)
+        uw = u - z[7]
+        stream = slice(9, n + 10)
+        dynamic = slice(n + 10, 2 * n + 11)
+        modes = slice(n + 11, 2 * n + 11)
+        A[stream, 1] = (dS * cos) @ B
+        A[stream, 7] = -z[10:n + 11]
+        A[stream, 8] = -1.0
+        A[stream, modes] = S * cos
+        A[dynamic, 1] = uw * ((dC * cos) @ (j * B)) + v * ((dS * sin) @ (j * B))
+        A[dynamic, 7] = -uw
+        A[dynamic, 9] = -1.0
+        A[dynamic, modes] = j * (uw[:, None] * C * cos + v[:, None] * S * sin)
+        m = np.arange(n + 1)
+        A[9 + m, 10 + m] = uw
+        A[n + 10 + m, 10 + m] = 1.0 + uw * ((S * cos) @ (j * j * B)) + v * ((C * sin) @ (j * j * B))
+        return A[1:, 1:]
+
+    def _svd_solve(self, A, b):
         """
-        Solve A x = b via SVD with Press et al. truncation:
-          wmin = wmax * 1e-12
+        Solve the column-equilibrated system via SVD with truncation:
+          wmin = wmax * 1e-15
 
         Numerical safety:
         - Reject NaNs/Infs before entering LAPACK.
@@ -753,32 +920,30 @@ class FentonStreamFunction:
         if (not np.isfinite(A).all()) or (not np.isfinite(b).all()):
             raise FloatingPointError("Non-finite values in Jacobian system (A or b).")
 
+        scale = np.max(np.abs(A), axis=0)
+        scale[scale == 0.0] = 1.0
+        scaled_A = A / scale
         try:
-            U, s, Vt = np.linalg.svd(A, full_matrices=False)
+            U, s, Vt = np.linalg.svd(scaled_A, full_matrices=False)
             smax = np.max(s) if s.size else 0.0
-            wmin = smax * 1.0e-12
+            self.jacobian_condition = float(smax / s[-1]) if s[-1] > smax * 1.0e-300 else float("inf")
+            wmin = smax * 1.0e-15
 
             s_inv = np.zeros_like(s)
             mask = s > wmin
             s_inv[mask] = 1.0 / s[mask]
 
-            return (Vt.T @ (s_inv * (U.T @ b)))
+            return (Vt.T @ (s_inv * (U.T @ b))) / scale
 
         except np.linalg.LinAlgError:
             # Conservative fallback: least-squares solution of the same linearised system.
-            x, *_ = np.linalg.lstsq(A, b, rcond=1.0e-12)
-            return x
+            x, *_ = np.linalg.lstsq(scaled_A, b, rcond=1.0e-15)
+            return x / scale
 
 
 
     def _newton(self, iter_count):
-        """
-        Port of the C++ Newton(...) update with additional damping safeguards.
-
-        The governing residual equations are unchanged. The only additions are:
-        - Finite-difference step clamping (prevents extreme perturbations if z[i] diverges).
-        - Backtracking line-search (reduces step when a full Newton step increases residuals).
-        """
+        """Damped Newton iteration with an analytic, equilibrated Jacobian."""
         n = self.n
         num = self.num
 
@@ -789,24 +954,8 @@ class FentonStreamFunction:
 
         z0 = self.z.copy()
 
-        A = np.zeros((num, num), dtype=DTYPE)
-        b = np.zeros((num,), dtype=DTYPE)
-
-        # finite-difference Jacobian (column-wise)
-        for i in range(1, num + 1):
-            h = 0.01 * z0[i]
-            if abs(z0[i]) < 1.0e-4:
-                h = 1.0e-5
-            # clamp perturbation magnitude (purely numerical safeguard)
-            if abs(h) > 1.0:
-                h = np.copysign(1.0, h)
-
-            self.z[i] = z0[i] + h
-            self._eqns(self.rhs2)
-            self.z[i] = z0[i]
-
-            b[i - 1] = -self.rhs1[i]
-            A[:, i - 1] = (self.rhs2[1:num + 1] - self.rhs1[1:num + 1]) / h
+        A = self._jacobian()
+        b = -self.rhs1[1:num + 1]
 
         dx = self._svd_solve(A, b)
         if not np.isfinite(dx).all():
@@ -827,7 +976,13 @@ class FentonStreamFunction:
                 continue
 
             self.z[:] = z_try
-            ss1 = float(self._eqns(self.rhs2))
+            try:
+                ss1 = float(self._eqns(self.rhs2))
+            except FloatingPointError:
+                # A divergent trial is rejected; it is not a converged step.
+                self.z[:] = z0
+                alpha *= 0.5
+                continue
 
             if np.isfinite(ss1) and (ss1 <= ss_best):
                 ss_best = ss1
@@ -843,6 +998,15 @@ class FentonStreamFunction:
 
         corr = float(np.mean(np.abs((z_best[10:n + 11] - z0[10:n + 11]))))
         return corr
+
+    def _residual_max(self):
+        """Re-evaluate every dimensionless equation at the CURRENT full state."""
+        objective = self._eqns(self.rhs1)
+        active = self.rhs1[1:self.num + 1]
+        if not np.isfinite(objective) or not np.isfinite(active).all():
+            raise FloatingPointError("Non-finite residual at accepted state.")
+        self.residual_max = float(np.max(np.abs(active)))
+        return self.residual_max
 
 
     def _compute_Y_and_B(self):
@@ -914,10 +1078,13 @@ class FentonStreamFunction:
             Cos = np.cos(j * X)
             Sin = np.sin(j * X)
 
-            coshdelta = np.cosh(j * Y)
-            sinhdelta = np.sinh(j * Y)
-            C = coshdelta + sinhdelta * self.Tanh[j]
-            S = sinhdelta + coshdelta * self.Tanh[j]
+            a = j * Y
+            b = j * kd
+            ep = np.exp(a)
+            em = np.exp(-a - 2.0 * b)
+            den = 1.0 + np.exp(-2.0 * b)
+            C = (ep + em) / den
+            S = (ep - em) / den
 
             Bj = self.B[j]
             u  += j * Bj * C * Cos
@@ -956,6 +1123,51 @@ class FentonStreamFunction:
     # ----------------------------- public methods -----------------------------
 
     def solve(self):
+        """Use the largest Fourier order supported by binary64 conditioning."""
+        self.accuracy_verified = False
+        self.accuracy_metrics = {}
+        self.finite_system_verified = False
+        self.finite_system_certificate = {}
+        self.solution_status = "not_solved"
+        requested = self.requested_order
+        order = self.n
+        while True:
+            self._solve_at_order()
+            if self.converged:
+                A = self._jacobian()
+                scale = np.maximum(np.max(np.abs(A), axis=0), np.finfo(DTYPE).tiny)
+                singular = np.linalg.svd(A / scale, compute_uv=False)
+                self.jacobian_condition = float(singular[0] / singular[-1]) if singular[-1] > singular[0] * 1.0e-300 else float("inf")
+            if self.jacobian_condition <= 1.0e11 or order <= 12:
+                break
+            order = max(12, int(order * 0.8))
+            controls = (self.nstep, self.number, self.crit, self.criter_final,
+                        self.residual_tolerance, self.residual_tolerance_final,
+                        self.Current_criterion)
+            self.__init__(self.H_target, self.T_target, self.d, self.Uc, fourier_order=order)
+            (self.nstep, self.number, self.crit, self.criter_final,
+             self.residual_tolerance, self.residual_tolerance_final,
+             self.Current_criterion) = controls
+            self.requested_order = requested
+        if self.converged and self.jacobian_condition > 1.0e11:
+            self.converged = False
+            self.last_error = "The Fourier system is too ill-conditioned for a reliable binary64 solution."
+        if order != requested:
+            self.numerical_note = (f"Fourier order used: {order} (requested {requested}); "
+                                   "limited by numerical conditioning.")
+
+        if self.converged:
+            try:
+                self._verify_accuracy()
+            except (FloatingPointError, ValueError, DecimalException, np.linalg.LinAlgError) as exc:
+                self.converged = False
+                self.accuracy_verified = False
+                self.solution_status = "accuracy_failure"
+                self.last_error = "Accuracy verification failed: " + str(exc)
+        elif self.solution_status == "not_solved":
+            self.solution_status = "nonconvergence"
+
+    def _solve_at_order(self):
         """
         Solve the steady nonlinear wave problem using Fenton's Fourier / stream-function method.
 
@@ -972,10 +1184,15 @@ class FentonStreamFunction:
         # Default outcome: failure unless we reach the end successfully
         self.converged = False
         self.last_error = ""
+        self.residual_max = float("inf")
 
         # Basic input screening (physical requirements)
-        if self.H_target <= 0.0 or self.T_target <= 0.0 or self.d <= 0.0:
-            self.last_error = "Invalid inputs: H, T, and d must be > 0."
+        if (not np.isfinite([self.H_target, self.T_target, self.d, self.Uc]).all()
+                or self.H_target <= 0.0 or self.T_target <= 0.0 or self.d <= 0.0):
+            self.last_error = "Invalid inputs: H, T, d must be finite and > 0; Uc must be finite."
+            return
+        if self.Current_criterion not in (1, 2):
+            self.last_error = "Current criterion must be 1 (Eulerian) or 2 (Stokes)."
             return
 
         old_err = np.geterr()
@@ -983,74 +1200,64 @@ class FentonStreamFunction:
             # Make numerical faults explicit. Underflow is benign in this context.
             np.seterr(over="raise", invalid="raise", divide="raise", under="ignore")
 
-            # continuation step sizes
-            dhe = self.Height / self.nstep
-            dho = self.MaxH / self.nstep
-
-            # height stepping
-            for ns in range(1, self.nstep + 1):
-                self.height = ns * dhe
-                self.Hoverd = ns * dho
-
-                # initial/extrapolated guess
-                if ns == 1:
+            # Height continuation with rollback to the last converged state.
+            fraction = 0.0
+            increment = 1.0 / max(1, self.nstep)
+            previous_fraction = 0.0
+            previous_state = None
+            accepted_state = None
+            attempts = 0
+            while fraction < 1.0:
+                attempts += 1
+                target = min(1.0, fraction + increment)
+                self.height = target * self.Height
+                self.Hoverd = target * self.MaxH
+                if accepted_state is None:
                     self._init_linear()
                 else:
-                    # z[i] = 2*sol[i][2] - sol[i][1]
-                    self.z[1:self.num + 1] = 2.0 * self.sol[1:self.num + 1, 2] - self.sol[1:self.num + 1, 1]
-                    # Fallback: if extrapolation produces an invalid start state, use the last converged state.
-                    # This does not change any equations; it only prevents the Newton step from starting from NaN/Inf.
-                    if (not np.isfinite(self.z[1:self.num + 1]).all()) or (self.z[1] <= 0.0):
-                        self.z[1:self.num + 1] = self.sol[1:self.num + 1, 2]
-                    if (not np.isfinite(self.z[1:self.num + 1]).all()) or (self.z[1] <= 0.0):
-                        raise FloatingPointError("Invalid extrapolated start state for continuation step.")
+                    self.z[:] = accepted_state
+                    if previous_state is not None:
+                        ratio = (target - fraction) / (fraction - previous_fraction)
+                        self.z[:] += ratio * (accepted_state - previous_state)
+                    if self.z[1] <= 0.0 or not np.isfinite(self.z).all():
+                        self.z[:] = accepted_state
 
-                # Newton iterations
                 step_converged = False
+                residual_limit = (self.residual_tolerance_final if target == 1.0
+                                  else self.residual_tolerance)
+                criter = self.criter_final if target == 1.0 else self.crit
                 for it in range(1, self.number + 1):
-                    # Newton iteration. If the start state was poisoned by extrapolation,
-                    # retry once from the last converged state (no extrapolation).
                     try:
                         err = self._newton(it)
-                    except FloatingPointError:
-                        if (ns > 1) and (it == 1):
-                            self.z[1:self.num + 1] = self.sol[1:self.num + 1, 2]
-                            err = self._newton(it)
-                        else:
-                            raise
-
-                    if not np.isfinite(err):
-                        raise FloatingPointError("Non-finite Newton correction.")
-
-                    # -----------------------------------------------------------------
-                    # Continuation storage must be refreshed before leaving the converged step.
-                    # Otherwise sol[:,2] may hold an older z[i] state and corrupt the next
-                    # continuation extrapolation.
-                    # -----------------------------------------------------------------
-                    if ns == 1:
-                        self.sol[1:self.num + 1, 2] = self.z[1:self.num + 1]
-                    else:
-                        self.sol[1:self.num + 1, 1] = self.sol[1:self.num + 1, 2]
-                        self.sol[1:self.num + 1, 2] = self.z[1:self.num + 1]
-
-                    # Protect linear algebra calls on diverging states
-                    if (not np.isfinite(self.z[1:self.num + 1]).all()) or (self.z[1] <= 0.0):
-                        raise FloatingPointError("Divergence: non-finite/invalid state vector encountered.")
-
-                    criter = self.criter_final if (ns == self.nstep) else self.crit
-                    if (it > 1) and (err < criter * abs(self.z[1])):
+                        residual = self._residual_max()
+                    except (FloatingPointError, np.linalg.LinAlgError):
+                        break
+                    if ((it > 1) and err < criter * abs(self.z[1])
+                            and residual <= residual_limit):
                         step_converged = True
                         break
-
+                    if err == 0.0 and residual > residual_limit:
+                        break
 
                 if not step_converged:
-                    self.last_error = (
-                        f"Newton did not converge within {self.number} iterations "
-                        f"at continuation step {ns}/{self.nstep}."
-                    )
-                    return
+                    increment *= 0.5
+                    if increment < 1.0 / 4096.0 or attempts >= 80:
+                        reached = fraction * self.H_target
+                        self.last_error = (
+                            f"No converged solution at H={self.H_target:g} m, "
+                            f"T={self.T_target:g} s, Uc={self.Uc:g} m/s. "
+                            f"Height continuation reached H={reached:.6g} m; "
+                            f"max|F|={self.residual_max:.3e}. "
+                            "The requested wave may be near or beyond the limiting wave height; "
+                            "reduce H or increase T."
+                        )
+                        return
+                    continue
 
-                # Update Fourier surface coefficients Y_j and stream-function coefficients B_j
+                previous_fraction, previous_state = fraction, accepted_state
+                fraction, accepted_state = target, self.z.copy()
+                self.continuation_fraction = fraction
+                increment = min(increment * 1.5, 1.0 / max(1, self.nstep))
                 self._compute_Y_and_B()
 
             # ------------------------- dimensional post-processing -----------------------
@@ -1098,6 +1305,12 @@ class FentonStreamFunction:
                     self.z[7] = self.z[8] / self.z[1] - self.z[6] + self.z[4]
                     self.z[5] = self.z[4] - self.z[7]
 
+            # Reimposing exact reporting identities must not invalidate the solution.
+            if self._residual_max() > self.residual_tolerance_final:
+                self.last_error = ("Post-processing residual check failed: "
+                                   f"max|F|={self.residual_max:.3e}.")
+                return
+
             # Store B_j as a 0-based array for GUI/report access
             self.Bj = self.B[1:self.n + 1].copy()
 
@@ -1126,34 +1339,26 @@ class FentonStreamFunction:
             # Integral quantities from the k-based and d-based invariant scalings
             self._calc_integral_props_cpp()
 
-            # Kinematic summary at bed, crest and trough phases
-            self.u_bed, _, _ = self.get_kinematics(0.0, 0.0)
-
-            # Quadratic bed-shear estimate is an engineering diagnostic, not a Fenton residual
-            cf_est = 0.005
-            self.tau_bed = 0.5 * RHO * cf_est * (self.u_bed ** 2)
-
-            self.ExcursionBed = abs(self.u_bed) * self.T_target / (2.0 * np.pi)
-
-            # Crest and trough surface velocities in the fixed frame
-            self.u_surf, _, _ = self.get_kinematics(self.d + self.eta_crest, 0.0)
+            self.u_bed_crest, _, _ = self.get_kinematics(0.0, 0.0)
+            self.u_surf_crest, _, _ = self.get_kinematics(self.d + self.eta_crest, 0.0)
             u_trough, _, _ = self.get_kinematics(self.d + self.eta_trough, np.pi)
-            self.asymmetry = abs(self.u_surf / u_trough) if abs(u_trough) > 0 else 0.0
+            self.asymmetry = abs(self.u_surf_crest / u_trough) if abs(u_trough) > 0 else 0.0
+            self._compute_extrema()
+            cf_est = 0.005
+            self.tau_bed = 0.5 * RHO * cf_est * self.u_bed ** 2
+            orbital_amplitude = self._phase_maximum("bed_orbital")[0]
+            self.ExcursionBed = orbital_amplitude * self.T_target / (2.0 * np.pi)
 
-            # Phase scan for maximum surface vertical velocity and horizontal acceleration
-            scan_phases = np.linspace(0.0, np.pi, 40)
-            max_ax = 0.0
-            max_w  = 0.0
-            for X in scan_phases:
-                kEta = self._surface_keta(X)
-                z_surf = self.d * (1.0 + kEta / kd)  # absolute from bed [m]
-                _, w, ax = self.get_kinematics(z_surf, X)
-                max_ax = max(max_ax, abs(ax))
-                max_w  = max(max_w, abs(w))
-
-            self.acc_max = float(max_ax)
-            self.w_max   = float(max_w)
-
+            # The success flag is granted only to a finite, residual-checked result.
+            required_outputs = (self.L, self.k, self.c, self.Power, self.Sxx,
+                                self.EnergyDensity, self.Cg, self.Impulse,
+                                self.PotentialEnergy, self.KineticEnergy,
+                                self.MeanSquareBedVelocity, self.MomentumFlux,
+                                self.u_bed, self.u_surf, self.acc_max, self.acc_bed_max, self.w_max)
+            if not np.isfinite(required_outputs).all():
+                raise FloatingPointError("Non-finite dimensional output.")
+            if self._residual_max() > self.residual_tolerance_final:
+                raise FloatingPointError("Final residual exceeds tolerance.")
             self.converged = True
 
         except FloatingPointError as e:
@@ -1164,6 +1369,242 @@ class FentonStreamFunction:
             self.converged = False
         finally:
             np.seterr(**old_err)
+
+    def _phase_quantity(self, phase, quantity):
+        if quantity in ("bed", "bed_orbital", "bed_acceleration"):
+            values = self.get_kinematics(0.0, phase)
+            value = values[2] if quantity == "bed_acceleration" else values[0]
+            if quantity == "bed_orbital":
+                value -= self.EulerianCurrent
+        else:
+            top = self.d * (1.0 + self._surface_keta(phase) / self.z[1])
+            values = self.get_kinematics(top, phase)
+            value = values[{"surface": 0, "vertical": 1, "acceleration": 2}[quantity]]
+        if not np.isfinite(value):
+            raise FloatingPointError("Non-finite phase evaluation.")
+        return abs(float(value))
+
+    def _phase_maximum(self, quantity):
+        """Bracket phase peaks and refine each bracket by golden-section search."""
+        phases = np.linspace(0.0, np.pi, max(257, 8 * self.n + 1))
+        values = np.array([self._phase_quantity(x, quantity) for x in phases])
+        best_index = int(np.argmax(values))
+        best, phase = float(values[best_index]), float(phases[best_index])
+        golden = (np.sqrt(5.0) - 1.0) / 2.0
+        for i in range(1, len(phases) - 1):
+            if not (values[i] >= values[i-1] and values[i] >= values[i+1]
+                    and (values[i] > values[i-1] or values[i] > values[i+1])):
+                continue
+            left, right = float(phases[i-1]), float(phases[i+1])
+            x1, x2 = right - golden * (right-left), left + golden * (right-left)
+            f1, f2 = self._phase_quantity(x1, quantity), self._phase_quantity(x2, quantity)
+            for _ in range(64):
+                if right - left < 1e-12:
+                    break
+                if f1 < f2:
+                    left, x1, f1 = x1, x2, f2
+                    x2 = left + golden * (right-left)
+                    f2 = self._phase_quantity(x2, quantity)
+                else:
+                    right, x2, f2 = x2, x1, f1
+                    x1 = right - golden * (right-left)
+                    f1 = self._phase_quantity(x1, quantity)
+                if f1 > best:
+                    best, phase = f1, x1
+                if f2 > best:
+                    best, phase = f2, x2
+        return float(best), float(phase)
+
+    def _compute_extrema(self):
+        self.extrema_phases = {}
+        for quantity, attribute in (("bed", "u_bed"), ("surface", "u_surf"),
+                                    ("vertical", "w_max"), ("acceleration", "acc_max"),
+                                    ("bed_acceleration", "acc_bed_max")):
+            value, phase = self._phase_maximum(quantity)
+            setattr(self, attribute, value)
+            self.extrema_phases[quantity] = phase
+
+    def _defining_integrals(self, phase_count, vertical_count):
+        """Integrate the dimensional velocity and pressure definitions."""
+        phases = 2.0 * np.pi * np.arange(phase_count) / phase_count
+        j = self._j
+        coefficients = self.Y[1:self.n+1].copy()
+        coefficients[-1] *= 0.5
+        eta = (np.cos(phases[:, None] * j) @ coefficients) / self.k
+        nodes, weights = np.polynomial.legendre.leggauss(vertical_count)
+        thickness = (self.d + eta)[:, None] / 2.0
+        if np.any(thickness <= 0.0):
+            raise FloatingPointError("The interpolated surface intersects the bed.")
+        y = -self.d + thickness * (nodes[None, :] + 1.0)
+        a = self.k * y[:, :, None] * j
+        b = self.z[1] * j
+        denominator = 1.0 + np.exp(-2.0*b)
+        positive, reflected = np.exp(a), np.exp(-a-2.0*b)
+        C, S = (positive+reflected)/denominator, (positive-reflected)/denominator
+        amplitude = j * self.B[1:self.n+1] * np.sqrt(self.g/self.k)
+        u = self.EulerianCurrent + np.sum(C*amplitude*np.cos(phases[:, None, None]*j), axis=2)
+        v = np.sum(S*amplitude*np.sin(phases[:, None, None]*j), axis=2)
+        pressure = RHO * (self.Bernoulli_r-self.g*y-0.5*((u-self.c)**2+v*v))
+        def average_integral(values):
+            return float(np.mean(np.sum(values*weights[None, :]*thickness, axis=1)))
+        return {
+            "Impulse": average_integral(RHO*u),
+            "KineticEnergy": average_integral(0.5*RHO*(u*u+v*v)),
+            "PotentialEnergy": float(0.5*RHO*self.g*np.mean(eta*eta)),
+            "Sxx": average_integral(pressure+RHO*u*u)-0.5*RHO*self.g*self.d**2,
+            "Power": average_integral((pressure+RHO*self.g*y+0.5*RHO*(u*u+v*v))*u),
+        }
+
+    def _verify_finite_system(self):
+        """Enclose the finite equations at the stored state and selected output formulas."""
+        I = _Interval
+        z = list(map(I, self.z))
+        n = self.n
+        H, T, depth, current, gravity, density = map(I, (self.H_target, self.T_target, self.d, self.Uc, self.g, RHO))
+        F = [I(0) for _ in range(2*n+10)]
+        F[0] = z[2]-z[1]*H/depth
+        F[1] = z[2]-H/(gravity*T.square())*z[3].square()
+        F[2] = z[4]*z[3]-2*_PI_INTERVAL
+        F[3] = z[5]+z[7]-z[4]
+        F[4] = z[1]*(z[6]+z[7]-z[4])-z[8]
+        F[5] = z[self.Current_criterion+4]-current/(gravity*depth).sqrt()*z[1].sqrt()
+        F[6] = z[10]+z[n+10]+2*sum(z[11:n+10], I(0))
+        F[7] = z[10]-z[n+10]-z[2]
+        table = _collocation_intervals(n)
+        denominators = [1+(-2*j*z[1]).exp() for j in range(1, n+1)]
+        for m in range(n+1):
+            ordinate = z[m+10]
+            psi, u, v = I(0), I(0), I(0)
+            for j in range(1, n+1):
+                ep = (j*ordinate).exp()
+                em = (-j*ordinate-2*j*z[1]).exp()
+                S, C = (ep-em)/denominators[j-1], (ep+em)/denominators[j-1]
+                sine, cosine = table[(m*j) % (2*n)]
+                coefficient = z[n+10+j]
+                psi += coefficient*S*cosine
+                u += j*coefficient*C*cosine
+                v += j*coefficient*S*sine
+            F[8+m] = psi-z[8]-z[7]*ordinate
+            F[n+9+m] = ((u-z[7]).square()+v.square())/2+ordinate-z[9]
+
+        wave_number = z[1]/depth
+        speed_scale = (gravity/wave_number).sqrt()
+        energy_scale = density*gravity/wave_number.square()
+        pulse = z[8]+z[1]*z[5]
+        flux_scaled = z[7]*z[1]-z[8]
+        kinetic = (z[4]*pulse-z[5]*flux_scaled)/2
+        coefficients = list(map(I, self.Y))
+        potential = sum((coefficients[j].square()/4 for j in range(1,n)), I(0))+coefficients[n].square()/16
+        beta = 2*z[9]-z[4].square()+2*z[4]*z[5]
+        stress = 4*kinetic-3*potential+beta*z[1]-2*z[5]*pulse
+        power = z[4]*(3*kinetic-2*potential)+beta*(pulse+z[4]*z[1])/2-2*z[4]*z[5]*pulse
+        bed_sum = I(0)
+        for j in range(1,n+1):
+            inverse_cosh = 2*(-j*z[1]).exp()/denominators[j-1]
+            bed_sum += (j*z[n+10+j]*inverse_cosh).square()/2
+        outputs = {
+            "L": 2*_PI_INTERVAL/wave_number,
+            "c": z[4]*speed_scale,
+            "Impulse": density*speed_scale/wave_number*pulse,
+            "KineticEnergy": energy_scale*kinetic,
+            "PotentialEnergy": energy_scale*potential,
+            "EnergyDensity": energy_scale*(kinetic+potential),
+            "Sxx": energy_scale*stress,
+            "Power": energy_scale*speed_scale*power,
+            "MeanSquareBedVelocity": gravity/wave_number*bed_sum,
+        }
+        residual_upper = max(value.magnitude() for value in F)
+        tolerance = min(Decimal("1e-10"), Decimal.from_float(float(self.residual_tolerance_final)))
+        checks = {}
+        valid = residual_upper <= tolerance
+        for name, interval in outputs.items():
+            reported = I(getattr(self, name))
+            error = (reported-interval).magnitude()
+            minimum = Decimal(0) if interval.lo <= 0 <= interval.hi else min(interval.lo.copy_abs(), interval.hi.copy_abs())
+            budget = I.down.add(Decimal("1e-7"), I.down.multiply(Decimal("1e-8"), minimum))
+            checks[name] = {"interval": interval.record(), "reported": str(reported.lo),
+                            "error_upper": str(error), "budget_lower": str(budget)}
+            valid = valid and error <= budget
+        self.finite_system_certificate = {
+            "arithmetic": "50-digit outward-rounded Decimal intervals",
+            "scope": "Residual at the stored finite Fourier state; selected finite-formula output enclosures",
+            "root_existence_proved": False,
+            "order": n, "equation_count": len(F),
+            "residual_intervals": [value.record() for value in F],
+            "residual_upper": str(residual_upper), "residual_tolerance": str(tolerance),
+            "outputs": checks, "passed": bool(valid),
+        }
+        self.finite_system_verified = bool(valid)
+        return bool(valid)
+
+    def _verify_accuracy(self):
+        """Verify numerical budgets before exposing a successful solution."""
+        self.accuracy_verified = False
+        self.finite_system_verified = False
+        self.finite_system_certificate = {}
+        failures = []
+        metrics = {}
+        phases = np.arange(max(2048, 32*self.n)) * (2.0*np.pi/max(2048, 32*self.n))
+        j = self._j
+        coefficients = self.Y[1:self.n+1].copy()
+        coefficients[-1] *= 0.5
+        eta = np.cos(phases[:, None]*j) @ coefficients
+        a, b = eta[:, None]*j, self.z[1]*j
+        denominator = 1.0+np.exp(-2.0*b)
+        positive, reflected = np.exp(a), np.exp(-a-2.0*b)
+        S, C = (positive-reflected)/denominator, (positive+reflected)/denominator
+        cosine, sine = np.cos(phases[:, None]*j), np.sin(phases[:, None]*j)
+        B = self.B[1:self.n+1]
+        psi = (S*cosine) @ B
+        u, v = (C*cosine) @ (j*B), (S*sine) @ (j*B)
+        boundary = max(float(np.max(abs(psi-self.z[8]-self.z[7]*eta))),
+                       float(np.max(abs(0.5*((u-self.z[7])**2+v*v)+eta-self.z[9]))))
+        metrics["surface_residual"] = boundary
+        if not np.isfinite(boundary) or boundary > 1e-6:
+            failures.append("interpolated-surface residual exceeds 1e-6")
+
+        beta = self.MeanSquareBedAbsoluteVelocity
+        reference = {
+            "Power": self.c*(3*self.KineticEnergy-2*self.PotentialEnergy)
+                     +0.5*beta*(self.Impulse+RHO*self.c*self.d)
+                     -2*self.c*self.EulerianCurrent*self.Impulse,
+            "Sxx": 4*self.KineticEnergy-3*self.PotentialEnergy+RHO*beta*self.d
+                   -2*self.EulerianCurrent*self.Impulse,
+        }
+        for name, expected in reference.items():
+            error = abs(getattr(self, name)-expected)
+            budget = 1e-7+1e-8*abs(expected)
+            metrics[name+"_spectral_ratio"] = error/budget
+            if not np.isfinite(error) or error > budget:
+                failures.append(name+" spectral-bed comparison exceeds its budget")
+
+        coarse = self._defining_integrals(max(256, 8*self.n), 64)
+        fine = self._defining_integrals(max(512, 16*self.n), 96)
+        for name, expected in fine.items():
+            budget = 1e-7+1e-8*abs(expected)
+            difference = abs(fine[name]-coarse[name])
+            error = abs(getattr(self, name)-expected)
+            metrics[name+"_quadrature_ratio"] = difference/budget
+            metrics[name+"_integral_ratio"] = error/budget
+            if not np.isfinite([difference, error]).all() or max(error, difference) > budget:
+                failures.append(name+" defining-integral comparison exceeds its budget")
+        if not self._verify_finite_system():
+            failures.append("finite-system interval verification exceeds its budget")
+        metrics["finite_residual_ratio"] = float(_Interval.up.divide(
+            Decimal(self.finite_system_certificate["residual_upper"]),
+            Decimal(self.finite_system_certificate["residual_tolerance"])))
+        metrics["finite_output_ratio"] = max(float(_Interval.up.divide(
+            Decimal(check["error_upper"]), Decimal(check["budget_lower"])))
+            for check in self.finite_system_certificate["outputs"].values())
+        self.accuracy_metrics = metrics
+        if failures:
+            self.converged = False
+            self.solution_status = "resolution_failure"
+            self.last_error = ("The collocation system converged, but the available Fourier resolution "
+                               "does not satisfy the output accuracy budgets: "+"; ".join(failures)+".")
+            return
+        self.accuracy_verified = True
+        self.solution_status = "verified_numerically"
 
     def get_kinematics(self, z_bed, phase=0.0):
         """
@@ -1211,22 +1652,21 @@ class FentonStreamFunction:
         -----
         - This matches the standard RMS-orbital-velocity concept used in coastal
           engineering and sediment/force calculations: U_rms = sqrt(<u^2>).
-        - Computed numerically by sampling phase uniformly.
+        - Evaluated analytically for the finite Fourier series by orthogonality.
         """
         if self.d <= 0.0 or self.T_target <= 0.0:
             return 0.0
 
-        # Sample one full cycle in phase X. For a steady periodic wave,
-        # spatial averaging over one wavelength is equivalent to temporal averaging.
-        phases = np.linspace(0.0, 2.0 * np.pi, int(max(36, nph)), endpoint=False)
-
-        ub2 = 0.0
-        for ph in phases:
-            u_abs, _, _ = self.get_kinematics(z_bed=0.0, phase=float(ph))  # bed: z_bed=0
-            u_orb = u_abs - float(self.Uc)  # Remove imposed Eulerian current to isolate the orbital component
-            ub2 += u_orb * u_orb
-
-        return float(ub2 / len(phases))
+        # Exact phase mean for the finite Fourier series (cosine orthogonality).
+        # nph is retained for API compatibility; no phase quadrature is needed.
+        kd = float(self.z[1])
+        if kd <= 0.0:
+            return 0.0
+        j = np.arange(1, self.n + 1, dtype=DTYPE)
+        e = np.exp(-j * kd)
+        sech = 2.0 * e / (1.0 + e * e)
+        amplitudes = j * self.B[1:self.n + 1] * sech
+        return float(0.5 * self.g * self.d / kd * np.dot(amplitudes, amplitudes))
 
 
     # ------------------------ integral quantities and depth-scaled output ---------
@@ -1293,14 +1733,22 @@ class FentonStreamFunction:
         ke = 0.5 * (self.z[4] * pulse - self.z[5] * Q_dimless * (kd ** 1.5))
 
         pe = 0.0
-        for i in range(1, self.n + 1):
+        for i in range(1, self.n):
             pe += 0.25 * (self.Y[i] ** 2)
+        pe += (self.Y[self.n] ** 2) / 16.0  # reconstructed amplitude is Y_N/2
 
-        ub2 = float(2.0 * self.z[9] - self.z[4] * self.z[4])
+        # Fenton (1990), online edition, section 7:
+        # beta = <u_bed^2>*k/g is ABSOLUTE, including the Eulerian current.
+        # It is different from the separately reported orbital mean square.
+        ub2_absolute = float(2.0 * self.z[9] - self.z[4] ** 2
+                             + 2.0 * self.z[4] * self.z[5])
         q_term = float(self.z[7] * kd - self.z[8])
 
-        sxx = float(4.0 * ke - 3.0 * pe + ub2 * kd + 2.0 * self.z[5] * q_term)
-        f = float(self.z[4] * (3.0 * ke - 2.0 * pe) + 0.5 * ub2 * (pulse + self.z[4] * kd) + self.z[4] * self.z[5] * q_term)
+        sxx = float(4.0 * ke - 3.0 * pe + ub2_absolute * kd
+                    - 2.0 * self.z[5] * pulse)
+        f = float(self.z[4] * (3.0 * ke - 2.0 * pe)
+                  + 0.5 * ub2_absolute * (pulse + self.z[4] * kd)
+                  - 2.0 * self.z[4] * self.z[5] * pulse)
 
         # Convert to the depth-scaled nondimensional output system
         E_depth = float((ke + pe) / (kd ** 2))
@@ -1332,7 +1780,7 @@ class FentonStreamFunction:
         self.MassTransport = float(cs_dimless * np.sqrt(self.g * self.d))          # [m/s] (Stokes current)
 
         # Values reported using Fenton current, flux and Bernoulli notation
-        self.EulerianCurrent = float(self.Uc)                              # u1 [m/s]
+        self.EulerianCurrent = float(ce_dimless * np.sqrt(self.g * self.d)) # u1 [m/s]
         self.StokesCurrent = float(self.MassTransport)                      # u2 [m/s]
         self.MeanFluidSpeed = float(ubar_dimless * np.sqrt(self.g * self.d))  # Ū [m/s]
         self.VolumeFluxQ = float(Q_dimless * np.sqrt(self.g * (self.d ** 3))) # Q [m^2/s]
@@ -1344,6 +1792,8 @@ class FentonStreamFunction:
         # Mean square bed orbital velocity for the Solution-Flat output row:
         # u_b^2 = <(u_b(t)-ubar_1)^2>, removing the Eulerian current component
         self.MeanSquareBedVelocity = float(self._mean_square_bed_orbital_velocity(nph=720))   # [m^2/s^2]
+        self.MeanSquareBedAbsoluteVelocity = float(self.MeanSquareBedVelocity
+                                                  + self.EulerianCurrent ** 2)
 
         self.Cg = float(self.Power / self.EnergyDensity) if abs(self.EnergyDensity) > 1e-12 else 0.0
 
@@ -1355,7 +1805,6 @@ class FentonStreamFunction:
 class FentonApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Fenton Wave Solver")
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
         w = min(1600, sw - 80)
@@ -1454,6 +1903,7 @@ class FentonApp(tk.Tk):
 
         # Print the error
         self.log(f"{title}\n\n")
+        self.log(_runtime_diagnostics() + "\n\n")
         if details:
             self.log(details + "\n")
 
@@ -1561,7 +2011,9 @@ class FentonApp(tk.Tk):
             if sC:
                 issues.append(sC)
 
-        if issues:
+        valid0 = not s0
+        validC = float(Uc_in) != 0.0 and not _solver_status(solverC, "With current")
+        if issues and not (valid0 or validC):
             # Close file logging before returning
             if f_log:
                 try:
@@ -1570,6 +2022,12 @@ class FentonApp(tk.Tk):
                     pass
             self._finalize_error("Numerical failure / non-convergence.", "\n".join(issues))
             return
+
+        # A converged state supplies shared input scales while failed columns stay empty.
+        if not valid0:
+            solver0 = solverC
+        if not validC:
+            solverC = solver0
 
         # ---------------------------- formatting helpers ----------------------------
 
@@ -1695,8 +2153,21 @@ class FentonApp(tk.Tk):
         box_text(f"Water depth (d)             : {d_in} m")
         box_text(f"Eulerian current ū₁         : {Uc_in} m/s (positive with wave propagation)")
         hline("-")
-        box_text("Status: Full nonlinear system solved successfully.")
+        box_text("Status: Results shown for converged cases only." if issues
+                 else "Status: Finite-system and output accuracy checks passed.")
+        for valid, slv, label in ((valid0, solver0, "No current"),
+                                  (validC, solverC, "With current")):
+            if valid:
+                box_text(f"{label}: N={slv.n}; max|F|={slv.residual_max:.3e}")
+                certificate = slv.finite_system_certificate
+                if certificate.get("passed"):
+                    upper = float(certificate["residual_upper"])
+                    box_text(f"Finite-system interval residual bound: {upper:.3e}; nine output bounds checked.")
+                if slv.numerical_note:
+                    box_text(slv.numerical_note)
         hline("-")
+        for issue in issues:
+            log_wrapper(issue + "\n")
         log_wrapper("\n")
 
         # ---------------------------- hydrodynamic summary ---------------------------
@@ -1769,22 +2240,23 @@ class FentonApp(tk.Tk):
             ("Radiation stress (Sₓₓ)", solver0.Sxx / 1000.0, wc(solverC.Sxx / 1000.0), "kN/m"),
             ("Impulse (I)", solver0.Impulse / 1000.0, wc(solverC.Impulse / 1000.0), "10³ kg/(m·s)"),
             ("Wave power (F)", solver0.Power / 1000.0, wc(solverC.Power / 1000.0), "kW/m"),
-            ("Group velocity (C𝗀 = F/E)\u3164", solver0.Cg, wc(solverC.Cg), "m/s"),
+            ("Energy-flux velocity (F/E)\u3164", solver0.Cg, wc(solverC.Cg), "m/s"),
         ]
 
         rows.append({"_section": "KINEMATICS (EXTREMES / BED ORBITAL MOTION)"})
         rows += [
-            ("Max surface horiz. vel |u|", solver0.u_surf, wc(solverC.u_surf), "m/s"),
-            ("Max bed horiz. vel |u|", solver0.u_bed, wc(solverC.u_bed), "m/s"),
-            ("Max horiz. accel |aₓ|", solver0.acc_max, wc(solverC.acc_max), "m/s²"),
+            ("Surface max |u|", solver0.u_surf, wc(solverC.u_surf), "m/s"),
+            ("Bed max |u|", solver0.u_bed, wc(solverC.u_bed), "m/s"),
+            ("Surface max |aₓ|", solver0.acc_max, wc(solverC.acc_max), "m/s²"),
+            ("Bed max |aₓ|", solver0.acc_bed_max, wc(solverC.acc_bed_max), "m/s²"),
             ("Velocity asymmetry |uc|/|ut|", solver0.asymmetry, wc(solverC.asymmetry), "-"),
             ("Mean square bed orbital vel ub²", solver0.MeanSquareBedVelocity, wc(solverC.MeanSquareBedVelocity), "m²/s²"),
             ("Bed orbital RMS velocity ub,rms", np.sqrt(max(0.0, solver0.MeanSquareBedVelocity)), wc(np.sqrt(max(0.0, solverC.MeanSquareBedVelocity))), "m/s"),
         ]
 
         rows.append({"_section": "NONLINEARITY / BREAKING DIAGNOSTICS"})
-        warn0 = "BREAKING" if solver0.is_breaking else "STABLE"
-        warnC = ("BREAKING" if solverC.is_breaking else "STABLE") if has_current else "-"
+        warn0 = "BREAKING" if solver0.is_breaking else "BELOW MICHE"
+        warnC = ("BREAKING" if solverC.is_breaking else "BELOW MICHE") if has_current else "-"
         rows += [
             ("Miche breaking limit (Hmax)", solver0.breaking_limit_miche, wc(solverC.breaking_limit_miche), "m"),
             ("Saturation (H/Hmax)", solver0.breaking_index, wc(solverC.breaking_index), "-"),
@@ -1793,6 +2265,9 @@ class FentonApp(tk.Tk):
             ("Regime (by d/L)", solver0.regime, wc(solverC.regime), "-"),
         ]
 
+        rows = [row if isinstance(row, dict) else
+                (row[0], row[1] if valid0 else None, row[2] if validC else None, row[3])
+                for row in rows]
         print_table("CALCULATED HYDRODYNAMIC PARAMETERS", headers, col_w, aligns, rows)
 
         # ------------------------ SOLUTION-FLAT tables (exact set) -------------------
@@ -1834,7 +2309,7 @@ class FentonApp(tk.Tk):
                 (14, "Impulse",                              f"{(slv.Impulse/1000.0):.5f}",    "I/(ρ√(gd³))",                     f"{(slv.I_depth):.5f}"),
                 (15, "Kinetic energy",                       f"{kJ(slv.KineticEnergy):.5f}",   "T/ρgd²",                          f"{(slv.KE_depth):.5f}"),
                 (16, "Potential energy",                     f"{kJ(slv.PotentialEnergy):.5f}", "V/ρgd²",                          f"{(slv.PE_depth):.5f}"),
-                (17, "Mean square of bed velocity",          f"{slv.MeanSquareBedVelocity:.5f}","ub²/gd",                         f"{(slv.MeanSquareBedVelocity/(g*d)):.5f}"),
+                (17, "Mean square of bed velocity (absolute)", f"{slv.MeanSquareBedAbsoluteVelocity:.5f}","ub²/gd", f"{(slv.MeanSquareBedAbsoluteVelocity/(g*d)):.5f}"),
                 (18, "Radiation stress",                     f"{kN(slv.Sxx):.5f}",             "S_xx/ρgd²",                       f"{(slv.Sxx_depth):.5f}"),
                 (19, "Wave power",                           f"{kW(slv.Power):.5f}",           "F/(ρg³ᐟ²d⁵ᐟ²)\u3164\u3164",           f"{(slv.F_depth):.5f}"),
             ]
@@ -1843,8 +2318,9 @@ class FentonApp(tk.Tk):
             out_rows = [(a, b, c, d_, e) for (a, b, c, d_, e) in rows]
             print_table(title, headers, col_w, aligns, out_rows)
 
-        print_solution_flat(solver0, "SOLUTION.RES (NO CURRENT)")
-        if has_current:
+        if valid0:
+            print_solution_flat(solver0, "SOLUTION.RES (NO CURRENT)")
+        if validC:
             print_solution_flat(solverC, "SOLUTION.RES (WITH CURRENT)")
 
         # --------------------------------- glossary --------------------------------
@@ -1875,13 +2351,14 @@ class FentonApp(tk.Tk):
             ("V", "Potential energy density.", "kJ/m² ; V/(ρgd²)"),
             ("E", "Total energy density E = T + V.", "kJ/m²"),
             ("F", "Wave power (energy flux).", "kW/m ; F/(ρg³ᐟ²d⁵ᐟ²)\u3164"),
-            ("Cg", "Group velocity, defined here as Cg = F/E.", "m/s"),
+            ("Cg", "Energy-flux / energy-density ratio F/E.", "m/s"),
             ("Sₓₓ", "Radiation stress component in wave direction.", "kN/m ; Sₓₓ/(ρgd²)"),
             ("ub²", "Mean square *orbital* bed velocity: ub² = <(ub(t) − ū₁)²>. Non-negative by definition; computed by phase averaging.", "m²/s² ; /gd"),
             ("ub,rms", "Root-mean-square orbital bed velocity: ub,rms = √(ub²).", "m/s"),
-            ("usurf,max", "Maximum horizontal velocity at free surface (scanned over phase).", "m/s"),
-            ("ubed,max", "Maximum horizontal velocity at seabed (scanned over phase).", "m/s"),
-            ("a_x,max", "Maximum horizontal acceleration magnitude.", "m/s²"),
+            ("usurf,max", "Maximum absolute surface horizontal velocity over phase.", "m/s"),
+            ("ubed,max", "Maximum absolute bed horizontal velocity over phase.", "m/s"),
+            ("a_x,surf,max", "Maximum absolute surface material horizontal acceleration over phase.", "m/s²"),
+            ("a_x,bed,max", "Maximum absolute bed material horizontal acceleration over phase.", "m/s²"),
             ("Asymmetry", "Velocity asymmetry indicator |uc|/|ut|.", "-"),
             ("Hmax", "Miche breaking limit used as stability diagnostic.", "m"),
             ("Ursell", "Ursell number, a shallow-water nonlinearity measure.", "-"),
@@ -1899,6 +2376,65 @@ class FentonApp(tk.Tk):
 
         # Scroll to top
         self.txt_output.yview_moveto(0)
+def _runtime_diagnostics():
+    """Identify the actual running file, including packaged Windows programs."""
+    import hashlib
+    path = os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__)
+    try:
+        with open(path, "rb") as source:
+            digest = hashlib.file_digest(source, "sha256").hexdigest() if hasattr(hashlib, "file_digest") else hashlib.sha256(source.read()).hexdigest()
+    except OSError:
+        digest = "unavailable"
+    return (f"Running file: {path}\nSHA256: {digest}\n"
+            f"Python: {sys.version.split()[0]}; NumPy: {np.__version__}; "
+            f"Numba active: {NUMBA_AVAILABLE}")
+
+
+def _self_test():
+    """Exercise default and short-period waves without opening a window."""
+    global NUMBA_AVAILABLE
+    print(_runtime_diagnostics(), flush=True)
+    original_backend = NUMBA_AVAILABLE
+    backends = [False, True] if original_backend else [False]
+    all_ok = True
+    cases = [(3.0, 9.0, 5.0, u) for u in (0.0, 1.0)]
+    cases += [(h, t, 5.0, u) for h in (1.0, 2.0)
+              for t in (3.0, 4.0) for u in (0.0, 1.0)]
+    cases.append((3.0, 4.0, 5.0, 1.0))
+    resolution_limited = {(2.0, 3.0, 5.0, 0.0), (3.0, 4.0, 5.0, 1.0)}
+    try:
+        for use_numba in backends:
+            NUMBA_AVAILABLE = use_numba
+            for h, t, d, current in cases:
+                solver = FentonStreamFunction(h, t, d, current)
+                solver.solve()
+                if (h, t, d, current) in resolution_limited:
+                    ok = (not solver.converged and not solver.accuracy_verified
+                          and solver.solution_status == "resolution_failure"
+                          and bool(solver.last_error))
+                else:
+                    ok = (solver.converged and solver.accuracy_verified
+                          and np.isfinite(solver.residual_max)
+                          and solver.residual_max <= solver.residual_tolerance_final)
+                all_ok = all_ok and bool(ok)
+                print(f"{'Numba' if use_numba else 'NumPy'}: H={h:g}, T={t:g}, "
+                      f"d={d:g}, Uc={current:g}; N={solver.n}; "
+                      f"{'PASS' if ok else 'FAIL'}; {solver.solution_status}; "
+                      f"max|F|={solver.residual_max:.6e}", flush=True)
+                if not ok:
+                    print(solver.last_error, flush=True)
+    finally:
+        NUMBA_AVAILABLE = original_backend
+    print("ALL SOLVER TESTS PASSED" if all_ok else "SOLVER TEST FAILED", flush=True)
+    return 0 if all_ok else 1
+
+
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Fenton Wave Solver ")
+    parser.add_argument("--self-test", action="store_true", help="test default and short-period waves without opening a window")
+    args = parser.parse_args()
+    if args.self_test:
+        raise SystemExit(_self_test())
     app = FentonApp()
     app.mainloop()

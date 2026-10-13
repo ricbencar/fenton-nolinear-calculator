@@ -25,20 +25,23 @@ where $H$ is wave height, $T$ is the apparent period in the fixed frame, $d$ is 
 
 | Group | Files | Role in the toolchain |
 | --- | --- | --- |
-| Main GUI solver | `fenton_gui.py` | Python GUI nonlinear solver and report writer. |
-| Native GUI solver | `fenton_gui.cpp` | Windows C++ GUI implementation. |
+| Main GUI solver | `fenton_gui.py` | Python nonlinear solver, GUI, numerical acceptance checks and interval certificates. |
+| Native GUI solver | `fenton_gui.cpp` | Windows C++ GUI with finite-system interval and output-accuracy checks. |
 | Android app | `fenton.apk` | Fenton App for Android. |
 | Wavelength API | `function.py` | Callable wavelength function `L(H,T,d,Uc)`. |
-| Reference-style solver | `fourier.cpp` | Fenton-style standalone output files. |
+| Browser solver | `fenton.html` | Self-contained worker-based solver, accuracy checks and TXT/JSON reports. |
+| Standalone precision solver | `fourier.cpp`, `fourier_precision.cpp` | Analytic Jacobian, adaptive continuation, conditioning-based Fourier order and four result/audit files. |
+| Standalone SVD solver | `fourier_carvalho.cpp` | Analytic Jacobian, damped SVD Newton steps, adaptive continuation and three Fenton-style result files. |
 | Tables | `tables.py` | Batch wavelength-table generation. |
 | Pade surrogate | `pade.py`, `pade.bas` | Rational approximation model. |
 | Neural surrogate | `neural.py`, `neural.bas` | Tanh-network approximation model. |
 | Genetic model | `genetic.py`, `genetic.bas` | Explicit symbolic-regression wavelength formula. |
 | Effective-variable model | `effective.bas` | Effective-period/effective-depth wavelength approximation. |
 | Nomograms | `nomogram_plots.py`, `nomogen_plots.py` | Printable design-chart generation. |
-| Excel/VBA | `*.bas`, `wavelenght.xlsm` | Spreadsheet implementation layer. |
+| Nonlinear Excel/VBA solver | `fenton.bas` | `L_fenton` wavelength function and `Fenton_report` numerical verification report, with prescribed Eulerian current. |
+| Spreadsheet deployment | Other `*.bas` modules, `wavelenght.xlsm` | Spreadsheet implementation layer for the respective methods. |
 
-The hierarchy is intentional. The stream-function / Fourier solver is the physical reference model. The API, Excel modules, surrogate formulas and nomograms are operational derivatives intended for faster wavelength estimation, tabulation, spreadsheet use or graphical design work.
+The hierarchy is intentional. The stream-function / Fourier solver is the physical reference model. `fenton.bas` solves the coupled nonlinear Fourier system and checks selected integral outputs internally, even when the worksheet requests only wavelength. The separate API, approximation modules and nomograms provide their documented interfaces for wavelength estimation, tabulation or graphical design work.
 
 ***
 
@@ -165,10 +168,10 @@ $$
 In the frame moving with the wave, the dynamic condition on the free surface can be written as
 
 $$
-\frac{1}{2}\left[(u-c)^2+v^2\right]+g\eta=R,
+\frac{1}{2}\left[(u-c)^2+v^2\right]+g\eta=r,
 $$
 
-where the arbitrary datum in the gravitational term is absorbed into the Bernoulli constant. This is the main nonlinear boundary condition: velocities are squared and evaluated on the unknown free-surface elevation. The nonlinear solver must therefore find the surface and the velocity field simultaneously.
+where $r$ uses the still-water-level datum; the corresponding bed-origin constant is $R=r+gd$. This is the main nonlinear boundary condition: velocities are squared and evaluated on the unknown free-surface elevation. The nonlinear solver must therefore find the surface and the velocity field simultaneously.
 
 ### 3.4 Linear dispersion as initialization only
 
@@ -305,10 +308,10 @@ $$
 The dynamic boundary condition becomes
 
 $$
-\frac{1}{2}\left(\Psi_X^2+\Psi_Y^2\right)+\zeta(X)=\frac{Rk}{g},
+\frac{1}{2}\left(\Psi_X^2+\Psi_Y^2\right)+\zeta(X)=\frac{rk}{g},
 $$
 
-or, if the Bernoulli offset $r=R$ is measured relative to the selected vertical datum,
+or, in residual form with the same mean-level constant $r$,
 
 $$
 \frac{1}{2}\left(\Psi_X^2+\Psi_Y^2\right)+\zeta(X)-\frac{rk}{g}=0.
@@ -357,36 +360,26 @@ $$
 \end{array}
 $$
 
-For numerical stability, the hyperbolic ratio is evaluated in the equivalent form
+The equivalent hyperbolic identities are
 
 $$
-\frac{\sinh[j(Y+kd)]}{\cosh(jkd)}
-=\sinh(jY)+\cosh(jY)\tanh(jkd).
+S_j(Y)=\frac{\sinh[j(Y+kd)]}{\cosh(jkd)}
+      =\sinh(jY)+\cosh(jY)\tanh(jkd),
 $$
 
-The reusable finite-depth function is therefore
-
 $$
-S_j(Y)=\sinh(jY)+\cosh(jY)\tanh(jkd).
-$$
-
-Similarly,
-
-$$
-C_j(Y)=\cosh(jY)+\sinh(jY)\tanh(jkd).
+C_j(Y)=\frac{\cosh[j(Y+kd)]}{\cosh(jkd)}
+      =\cosh(jY)+\sinh(jY)\tanh(jkd).
 $$
 
-For large $jkd$, the code avoids overflow by using
+The numerical kernels evaluate these ratios with scaled exponentials. With $a=jY$ and $b=jkd$,
 
 $$
-\tanh(jkd)\to1,
+S_j(Y)=\frac{e^a-e^{-a-2b}}{1+e^{-2b}},\qquad
+C_j(Y)=\frac{e^a+e^{-a-2b}}{1+e^{-2b}}.
 $$
 
-which gives the stable limiting behavior
-
-$$
-S_j(Y)\to e^{jY}, \qquad C_j(Y)\to e^{jY}.
-$$
+This avoids forming large hyperbolic functions and subtracting nearly equal terms at the bed. In particular, $S_j(-kd)=0$ and $C_j(-kd)=1/\cosh(jkd)$. At fixed $Y$, the deep-water limit is $S_j(Y),C_j(Y)\to e^{jY}$; the finite-depth kernel retains the reflected exponential so that the bed condition remains satisfied.
 
 ### 5.2 Free-surface representation
 
@@ -459,7 +452,7 @@ This separation is important when current is prescribed because the same relativ
 
 ***
 
-## 6. Dimensionless variables and `SOLUTION.RES` interpretation
+## 6. Dimensionless variables and `solution.res` interpretation
 
 The solver reports quantities using two nondimensional systems: one based on wave number $k$, and one based on water depth $d$. The $k$-based form is natural for Fourier theory, while the $d$-based form is convenient for engineering interpretation and comparison between depths.
 
@@ -535,10 +528,17 @@ $$
 | Impulse | $I\sqrt{k^3}/(\rho\sqrt{g})$ | $I/(\rho\sqrt{gd^3})$ |
 | Kinetic energy | $T_k k^2/(\rho g)$ | $T_k/(\rho gd^2)$ |
 | Potential energy | $V_p k^2/(\rho g)$ | $V_p/(\rho gd^2)$ |
-| Bed velocity square | $u_b^2 k/g$ | $u_b^2/(gd)$ |
+| Mean square orbital bed velocity | $\langle(u_b-\bar u_1)^2\rangle k/g$ | $\langle(u_b-\bar u_1)^2\rangle/(gd)$ |
 | Radiation stress | $S_{xx}k^2/(\rho g)$ | $S_{xx}/(\rho gd^2)$ |
 | Wave power | $Fk^{5/2}/(\rho g^{3/2})$ | $F/(\rho g^{3/2}d^{5/2})$ |
-| Fourier coefficients | $B_j$ | $E_j$ |
+
+The Fourier coefficient table is separate: its two columns contain the native stream-function coefficients $B_j$ and surface coefficients $E_j$, not two alternative scalings of one quantity. The surface reconstruction is
+
+$$
+\zeta(X)=\sum_{j=1}^{N-1}E_j\cos(jX)+\frac{E_N}{2}\cos(NX).
+$$
+
+Thus the terminal cosine amplitude is $E_N/2$. The dimensional surface elevation is $\eta=\zeta/k$; the bed-based ordinate in the standalone surface and flow files is $y/d=1+\zeta/(kd)$.
 
 The current definitions used by Fenton can be summarized as
 
@@ -605,7 +605,7 @@ $$
 | Free surface | `z[10]...z[N+10]` | Nodal ordinates $k\eta_m$ from crest to trough. |
 | Fourier modes | `z[N+11]...z[2N+10]` | Harmonic stream-function coefficients $B_j$. |
 
-For the default $N=50$, this indexing corresponds to 110 active 1-based state entries in the Fenton-style indexing convention used by the code. Some ports pack only the independent optimization variables into a shorter zero-based vector; the physical meaning remains the same.
+At the requested order $N=50$, this indexing corresponds to 110 active 1-based state entries in the Fenton-style indexing convention used by the code. Some ports pack only the independent optimization variables into a shorter zero-based vector; the physical meaning remains the same.
 
 ### 7.2 Current definitions inside the state vector
 
@@ -651,7 +651,7 @@ $$
 8+(N+1)+(N+1)=2N+10
 $$
 
-equations. For the default value $N=50$, this gives 110 nonlinear algebraic equations.
+equations. The requested order $N=50$ gives 110 equations. If conditioning requires a lower order, the active state and residual system are rebuilt for that order; for example, $N=32$ gives 74 equations.
 
 | Residual group | Number of equations | Unknowns constrained | Physical purpose |
 | --- | ---: | --- | --- |
@@ -669,7 +669,7 @@ $$
 \displaystyle r_3&=&\displaystyle z_4z_3-2\pi,\\[3pt]
 \displaystyle r_4&=&\displaystyle z_5+z_7-z_4,\\[3pt]
 \displaystyle r_5&=&\displaystyle z_1(z_6+z_7-z_4)-z_8,\\[3pt]
-\displaystyle r_6&=&\displaystyle z_{c+4}-U_c\sqrt{z_1},\\[3pt]
+\displaystyle r_6&=&\displaystyle z_{c+4}-\frac{U_c}{\sqrt{gd}}\sqrt{z_1},\\[3pt]
 \displaystyle r_7&=&\displaystyle z_{10}+z_{N+10}+2\sum_{i=1}^{N-1}z_{10+i},\\[3pt]
 \displaystyle r_8&=&\displaystyle z_{10}-z_{N+10}-z_2,\\[3pt]
 \displaystyle r_{9+m}&=&\displaystyle \psi_m-z_8-z_7z_{10+m},\\[3pt]
@@ -677,7 +677,13 @@ $$
 \end{array}
 $$
 
-where $m=0,1,\ldots,N$ in the two collocation blocks.
+where $m=0,1,\ldots,N$ in the two collocation blocks. These expressions describe a finite-depth, period-specified case. With wavelength input, the second residual is instead
+
+$$
+r_2=z_2-2\pi H_s,\qquad H_s=H/L
+$$
+
+at the current continuation height. The current selector in $r_6$ is 1 for Eulerian current and 2 for mass-transport current.
 
 #### 7.3.1 Notation used in the residual equations
 
@@ -716,7 +722,7 @@ The two collocation residual families are applied at every node $m=0,1,\ldots,N$
 | Residual family | Number of equations | Boundary condition represented | What zero residual means |
 | --- | ---: | --- | --- |
 | $r_{9+m}$ | $N+1$ | Kinematic free-surface condition | The unknown free surface is a streamline in the moving frame. No fluid crosses the solved surface. |
-| $r_{N+10+m}$ | $N+1$ | Dynamic free-surface condition | Bernoulli head is constant along the whole solved surface, so pressure is atmospheric at every free-surface node. |
+| $r_{N+10+m}$ | $N+1$ | Dynamic free-surface condition | Enforce constant Bernoulli head and atmospheric pressure at the free-surface nodes; between-node accuracy is checked separately. |
 
 The collocation residuals are the part of the system that makes the solution fully nonlinear. The surface ordinates are unknown, and the velocities are evaluated on that unknown surface. Newton iteration therefore updates the surface profile, the Fourier coefficients, the celerity/current variables and the Bernoulli offset simultaneously.
 
@@ -765,7 +771,7 @@ $$
 \mathbf J_{ij}=\frac{\partial F_i}{\partial z_j}.
 $$
 
-Fenton's 1988 program evaluates the derivatives numerically, which simplifies coding when different choices are allowed for finite/deep water, wavelength/period input and Eulerian/Stokes current specification. Some ports may use analytic or mixed analytic/numerical derivatives, but the Newton correction has the same interpretation.
+The maintained GUI, browser and standalone solvers assemble analytic derivatives of the global constraints and free-surface equations. The derivatives use the same scaled-exponential basis as the residual evaluation.
 
 The most sensitive entries involve derivatives of the streamline and Bernoulli residuals with respect to Fourier coefficients, surface ordinates, $kd$, celerity variables and the Bernoulli offset. Typical derivative families are
 
@@ -776,19 +782,19 @@ $$
 and
 
 $$
-\frac{\partial R_m^{(B)}}{\partial B_n}, \qquad \frac{\partial R_m^{(B)}}{\partial \eta_j}, \qquad \frac{\partial R_m^{(B)}}{\partial R}, \qquad \frac{\partial R_m^{(B)}}{\partial c}.
+\frac{\partial R_m^{(B)}}{\partial B_n}, \qquad \frac{\partial R_m^{(B)}}{\partial \eta_j}, \qquad \frac{\partial R_m^{(B)}}{\partial r}, \qquad \frac{\partial R_m^{(B)}}{\partial c}.
 $$
 
 For a dimensional Bernoulli residual,
 
 $$
-R_m^{(B)}=\frac{1}{2}\left[(u_m-c)^2+v_m^2\right]+g\eta_m-R,
+R_m^{(B)}=\frac{1}{2}\left[(u_m-c)^2+v_m^2\right]+g\eta_m-r,
 $$
 
 a representative chain-rule derivative is
 
 $$
-\frac{\partial R_m^{(B)}}{\partial z_j}=(u_m-c)\frac{\partial u_m}{\partial z_j}+v_m\frac{\partial v_m}{\partial z_j}+g\frac{\partial\eta_m}{\partial z_j}-\frac{\partial R}{\partial z_j}.
+\frac{\partial R_m^{(B)}}{\partial z_j}=(u_m-c)\left(\frac{\partial u_m}{\partial z_j}-\frac{\partial c}{\partial z_j}\right)+v_m\frac{\partial v_m}{\partial z_j}+g\frac{\partial\eta_m}{\partial z_j}-\frac{\partial r}{\partial z_j}.
 $$
 
 Because near-limiting waves and adverse-current cases can make the Jacobian ill-conditioned, the solvers use stabilized linear algebra. When singular value decomposition is used,
@@ -803,13 +809,169 @@ $$
 \Delta\mathbf z=-\mathbf V\Sigma^{-1}\mathbf U^T\mathbf F.
 $$
 
-Small singular values may be truncated or damped. In addition, continuation in wave height solves a sequence of easier problems before the final target wave height is reached. This follows Fenton's practical strategy for high or long waves: a direct jump from a linear initial solution may fail, while a sequence of increasing-height solves can converge robustly.
+The numerical implementations share the governing equations but use different linear and globalization strategies:
+
+| Implementation | Linear solve and nonlinear step control |
+| --- | --- |
+| `fourier.cpp` / `fourier_precision.cpp` | Row/column equilibration, LU with iterative refinement, pivoted QR and regularized least-squares fallbacks; trust-region dogleg steps and positive-variable retraction. |
+| `fourier_carvalho.cpp` | Column-equilibrated SVD, relative singular-value cutoff $10^{-15}$ and residual-decreasing backtracking. |
+| `fenton_gui.py`, `fenton_gui.cpp`, `fenton.html` | Analytic Jacobian, scaled SVD-based correction and safeguarded adaptive continuation. |
+| `fenton.bas` | Analytic Jacobian, column-equilibrated SVD, backtracking and adaptive height continuation. |
+
+Continuation increases wave height from a small-amplitude seed. A failed trial restores the last accepted state and reduces the height increment. Convergence is assessed at the requested final height, rather than at an intermediate wave reached before failure.
+
+### 7.5 Fourier order and short-period robustness
+
+The requested Fourier order is an upper resolution target. The solvers assess the condition number of the analytic Jacobian after column equilibration:
+
+$$
+s_j=\max_i|J_{ij}|,\qquad
+\widetilde J_{ij}=\frac{J_{ij}}{s_j},\qquad
+\kappa_2(\widetilde{\mathbf J})=\frac{\sigma_{\max}}{\sigma_{\min}}.
+$$
+
+A zero column or singular system is treated as ill-conditioned. If the condition exceeds $10^{11}$, the calculation restarts at a lower Fourier order. Starting from 50 modes, the available sequence is
+
+$$
+50\to40\to32\to25\to20\to16\to12.
+$$
+
+Each restart solves the original target wave again with the active state-vector size $2N+10$. It does not reduce the requested physical wave height or relax the final residual tolerance. `fourier_carvalho.cpp` starts at its user-requested order and uses $N_{\mathrm{next}}=\max(12,\lfloor0.8N\rfloor)$ when the requested order is at least 12; a smaller requested order is not increased.
+
+Short periods such as 3 s and 4 s can make high Fourier orders poorly conditioned for otherwise solvable waves. Adaptive height continuation, scaled basis functions and conditioning-based order selection address this numerical difficulty. A shorter period can also make the specified wave approach or exceed the limiting steady-wave height. Non-convergence is reported if the requested target cannot be verified; an intermediate-height solution is not presented as the requested result.
+
+### 7.6 Convergence, conditioning and spectral resolution
+
+Residual norms refer to the implemented nondimensional equations, with $M=2N+10$:
+
+$$
+F_{\mathrm{RMS}}=\sqrt{\frac{1}{M}\sum_{i=1}^{M}F_i^2},\qquad
+F_{\max}=\max_i|F_i|.
+$$
+
+| Implementation | Intermediate residual limits | Final residual limits |
+| --- | --- | --- |
+| `fourier.cpp` / `fourier_precision.cpp` | $F_{\mathrm{RMS}}\le10^{-10}$ and $F_{\max}\le10^{-9}$ | $F_{\mathrm{RMS}}\le10^{-12}$ and $F_{\max}\le10^{-11}$ |
+| `fourier_carvalho.cpp` | $F_{\max}\le10^{-10}$ | $F_{\max}\le10^{-10}$ |
+| Python/C++ GUI and HTML solvers | $F_{\max}\le10^{-8}$, together with their step checks | $F_{\max}\le10^{-10}$, rechecked after post-processing and enclosed independently |
+| `fenton.bas` | $F_{\max}\le10^{-10}$ | $F_{\max}\le10^{-10}$ after dimensional normalization, plus independent interval checks |
+
+The accepted state must also satisfy the finite-value and admissibility checks and the $10^{11}$ Jacobian-conditioning limit. These are numerical acceptance criteria for a finite Fourier system, not a proof of exact agreement with the continuous free-boundary problem.
+
+The precision driver writes independent diagnostics to `solver.res`:
+
+| Diagnostic | Interpretation |
+| --- | --- |
+| Requested and accepted Fourier order | Identifies the resolution actually used. |
+| Fourier order attempts | Lists each attempted order, its acceptance status and condition number. |
+| Adaptive continuation history | Records accepted/rejected height trials for the final order. Earlier order attempts are summarized separately. |
+| Complete state and residual vectors | Provides all $2N+10$ unknowns and residuals for inspection. |
+| Overall nonlinear convergence | Requires an independently verified final state at the requested height. |
+| Spectral resolution check | Compares the maximum between-node boundary defect with $10^{-9}$. |
+
+For the precision driver's spectral check, the cosine surface supplies the initial ordinate at each off-grid phase. A safeguarded correction locates the free-surface streamline before the Bernoulli defect is evaluated. The surface output file instead samples the cosine reconstruction directly, so its pressure check need not equal the off-grid diagnostic in `solver.res`.
+
+`fourier_carvalho.cpp` reports the accepted order, maximum residual, Jacobian condition and between-node defect in `solution.res`. Its between-node check evaluates both boundary equations directly on the cosine surface. Consequently its defect is not numerically interchangeable with the precision driver's streamline-corrected diagnostic.
+
+For the standalone drivers described above, a spectral `FAIL` is a separate resolution warning: nonlinear convergence may still be `PASS`. Both statuses must be considered when assessing a result. A failed nonlinear or conditioning check prevents the standalone solvers from writing a new result set; existing files from an earlier run may remain on disk.
+
+### 7.7 Acceptance of the finite Fourier system and selected outputs
+
+`fenton_gui.py`, `fenton_gui.cpp`, `fenton.html` and `fenton.bas` apply an output-accuracy gate after the nonlinear solve. A result is accepted only when the requested target state satisfies the conditioning, finite-value, residual, spatial-resolution and output checks. These requirements supplement the nonlinear residual limits in §7.6.
+
+| Check | Evaluation | Acceptance requirement |
+| --- | --- | --- |
+| Finite-system residual | Independent interval evaluation of all $2N+10$ equations at the stored state, reconstructing the dimensionless groups from the physical inputs. | Every residual interval lies inside $[-10^{-10},10^{-10}]$. |
+| Interpolated free surface | Both boundary residuals evaluated on the cosine surface at $\max(2048,32N)$ uniformly spaced phases over one wavelength. | Maximum sampled nondimensional residual no greater than $10^{-6}$. |
+| Spectral bed-velocity identities | Compare power and radiation stress with expressions using the independently evaluated absolute mean-square bed velocity. | Each difference fits the output budget below. |
+| Defining integrals | Integrate dimensional velocity and Bernoulli pressure to obtain impulse, kinetic energy, potential energy, radiation stress and power. | Each reported quantity agrees with the finer quadrature within its output budget. |
+| Quadrature refinement | Compare $\max(256,8N)$ phases and 64 Gauss-Legendre depth points with $\max(512,16N)$ phases and 96 depth points. | The difference between the two quadratures fits the same output budget. |
+| Selected-output enclosures | Independently enclose nine finite-formula outputs at the stored coefficients. | The worst-case distance from the reported value to its enclosure fits a conservative output budget. |
+
+For a dimensional reference quantity $q$, the comparison budget is
+
+$$
+\varepsilon(q)=10^{-7}+10^{-8}|q|.
+$$
+
+The absolute term is expressed in the SI units of the quantity being compared. The residual limits are nondimensional. These values are explicit implementation acceptance choices, rather than tolerances prescribed by Fenton for every application.
+
+If the reference is enclosed in $[q_-,q_+]$, the interval check uses
+
+$$
+e_{\max}=\max\bigl(|q_{\mathrm{reported}}-q_-|,|q_{\mathrm{reported}}-q_+|\bigr),
+\qquad
+e_{\max}\le 10^{-7}+10^{-8}\min_{q\in[q_-,q_+]}|q|,
+$$
+
+with outward rounding for the error bound and downward rounding for the budget. The minimum magnitude is zero when the interval contains zero.
+
+The nine enclosed outputs are **wavelength, celerity, impulse, kinetic energy, potential energy, total energy density, radiation stress, wave power and mean-square orbital bed velocity**. These enclosures describe formula evaluation at the stored finite Fourier state. The surface scan and quadrature-refinement comparisons provide additional numerical resolution checks; they are not rigorous bounds over every phase or on quadrature truncation error.
+
+| Implementation | Independent enclosure arithmetic |
+| --- | --- |
+| Python | 50-digit outward-rounded `Decimal` intervals; the binary64 inputs are interpreted exactly. |
+| C++ | Outward-rounded IEEE binary64 intervals using adjacent representable endpoints. |
+| HTML/JavaScript | Outward-rounded IEEE binary64 intervals with explicitly constructed adjacent endpoints. |
+| VBA | Binary64 interval endpoints enlarged by conservative rounding margins, including a margin for subnormal results. |
+
+The interval evaluators use bounded trigonometric series independently of the ordinary collocation sine/cosine evaluations. The C++, JavaScript and VBA exponential enclosures use Taylor bounds and range reduction; their square-root endpoint checks validate the initial root estimates.
+
+In the Python, C++ and JavaScript solver objects, successful acceptance sets `converged`, `accuracy_verified` and `finite_system_verified`. The `accuracy_metrics` object records the sampled surface residual and comparison ratios; a ratio at or below one satisfies its budget. `finite_system_certificate` records the residual and output enclosures, budgets and their scope.
+
+| `solution_status` | Meaning |
+| --- | --- |
+| `not_solved` | No completed calculation is available. |
+| `verified_numerically` | The nonlinear solution and all implemented acceptance checks passed. |
+| `nonconvergence` | The requested target was not obtained within the solver's admissibility, convergence or conditioning requirements. |
+| `resolution_failure` | The collocation solve completed, but one or more resolution or output-accuracy budgets were exceeded. |
+| `accuracy_failure` | The verification calculation could not be completed, for example because of a numerical exception. |
+
+`finite_system_verified` alone does not imply overall acceptance. A finite state can have very small collocation residuals while failing the between-node or integral checks. The GUI and browser display engineering values only for accepted cases, assessing the no-current and imposed-current solutions separately. VBA returns an `Err: ` message instead of a wavelength when a check fails; `Fenton_report` exposes the reason and available diagnostics.
+
+### 7.8 Verification evidence and Lean scope
+
+**The Python solver computes accurately for most configurations in the benchmark matrix:** 19 of 21 physical cases satisfy all acceptance requirements on both NumPy and Numba. These cases include the default wave, several small period waves, opposing current and both current conventions in the solver core. This is evidence for the tested configurations, not a statistical success rate for arbitrary inputs.
+
+| Implementation tested | Benchmark coverage | Result |
+| --- | --- | --- |
+| Python, NumPy and Numba | 21 physical cases on each backend; 42 runs. | 38 accepted runs covering 19 cases; four accuracy rejections covering two cases. |
+| Native C++ solver core | The same 21 physical cases. | Acceptance decisions and active orders match Python; 21 compared outputs meet the comparison budget for all 19 accepted cases. |
+| JavaScript solver under Node.js | The same 21 physical cases. | Acceptance decisions and active orders match Python; 21 compared outputs meet the comparison budget for all 19 accepted cases. |
+| VBA through a mechanical C++ translation | 18 Eulerian-current cases. | Acceptance decisions and active orders match Python; nine compared outputs meet the comparison budget for all 16 accepted cases. Native Excel/VBA execution remains untested. |
+
+Independent 80-digit calculations confirm the recorded finite-residual and nine selected-output enclosures for each implementation's tested states. The C++, JavaScript and translated VBA interval arithmetic also pass 911 arithmetic checks. Solver-core verification is distinct from testing every native GUI, spreadsheet host or browser environment.
+
+Two steep-wave configurations are deliberately rejected by the accuracy gate:
+
+| $H$ (m) | $T$ (s) | $d$ (m) | Eulerian $U_c$ (m/s) | Active $N$ | Sampled surface residual, approximately |
+| --- | --- | --- | --- | --- | --- |
+| 2 | 3 | 5 | 0 | 32 | $1.18\times10^{-5}$ |
+| 3 | 4 | 5 | 1 | 40 | $7.82\times10^{-5}$ |
+
+Their collocation residuals are small, but the reconstructed surface and integral comparisons exceed the accuracy budgets. Rejection identifies insufficient numerical accuracy at the available resolution; it does not by itself establish that the physical wave cannot exist.
+
+The companion Python verification package contains five Lean modules:
+
+| Module | Formal scope | Theorems |
+| --- | --- | ---: |
+| `FentonProduction.lean` | Governing formula, differential and scaling identities. | 62 |
+| `ProductionAcceptance.lean` | Acceptance rules and contracts for evaluated maxima. | 13 |
+| `FiniteSystem.lean` | Enclosure arithmetic, pi bounds and finite residual/output-budget implications. | 29 |
+| `NumericalCertificates.lean` | Exact rational checks on recorded numerical observations. | 314 |
+| `FiniteCertificates.lean` | Exact integer checks of recorded residual-enclosure and output-budget inequalities. | 420 |
+| **Total** | **All modules compiled successfully.** | **838** |
+
+The Lean evidence is tied to the source snapshots and recorded states identified by the verification package. Lean checks the mathematical statements, enclosure implications and recorded inequalities. The source-to-model correspondence and runtime interval construction are reviewed and numerically tested; the complete Python, C++, JavaScript and VBA programs are not extracted from Lean or certified as executable programs. The evidence also does not prove existence or uniqueness of an exact nonlinear root, or a continuous water-wave truncation-error bound. This scope is compatible with the demonstrated accuracy of the accepted benchmark calculations.
+
+The verification results in this section apply to the named implementations and their recorded tests. They do not certify the Android binary, separate standalone drivers, wavelength API or surrogate models.
+
 
 ***
 
 ## 8. Post-processing and engineering outputs
 
-After convergence, the nondimensional state is converted back to dimensional engineering quantities. The fundamental conversions are
+After successful numerical acceptance, the GUI and browser report dimensional engineering quantities. The standalone solvers retain their documented nondimensional output scalings and separate diagnostics. The fundamental dimensional conversions are
 
 $$
 k=\frac{2\pi}{L}, \qquad c=\frac{L}{T}.
@@ -858,19 +1020,52 @@ In the GUI report, the main integral quantities are evaluated with the following
 $$
 \begin{array}{rcl}
 \displaystyle I&=&\displaystyle \rho(cd-Q),\\[3pt]
-\displaystyle T_k&=&\displaystyle \frac{1}{2}(cI-Q\rho U_c),\\[3pt]
+\displaystyle T_k&=&\displaystyle \frac{1}{2}(cI-Q\rho\bar u_1),\\[3pt]
 \displaystyle V_p&=&\displaystyle \frac{1}{2}\rho g\langle\eta^2\rangle,\\[3pt]
 \displaystyle E&=&\displaystyle T_k+V_p,\\[3pt]
-\displaystyle F&=&\displaystyle c(3T_k-2V_p)+\frac{1}{2}\langle u_b^2\rangle(I+\rho cd)+\frac{1}{2}\rho Q U_c^2,\\[3pt]
-\displaystyle S_{xx}&=&\displaystyle 4T_k-3V_p+\rho\langle u_b^2\rangle d+2\rho I U_c,\\[3pt]
+\displaystyle F&=&\displaystyle c(3T_k-2V_p)+\frac{1}{2}\langle u_{b,\mathrm{abs}}^2\rangle(I+\rho cd)-2c\bar u_1 I,\\[3pt]
+\displaystyle S_{xx}&=&\displaystyle 4T_k-3V_p+\rho\langle u_{b,\mathrm{abs}}^2\rangle d-2\bar u_1 I,\\[3pt]
 \displaystyle U_{\text{drift}}&=&\displaystyle \frac{I}{\rho d},\\[3pt]
 \displaystyle C_g&=&\displaystyle \frac{F}{E}.
 \end{array}
 $$
 
+The integral formulas use the **absolute** bed velocity, including Eulerian
+current, following Fenton's online [*Nonlinear wave theories*, §7](https://johndfenton.com/Papers/Fenton90b-Nonlinear-wave-theories.pdf).
+The density factor in kinetic energy is explicit here because I includes density.
+The invariant and absolute-bed-velocity expressions coincide for an exact steady wave. At a stored finite Fourier state, the invariant formulas supply the main outputs, and the independently evaluated spectral bed-velocity formulas are compared against them within the budgets in §7.7.
+
+$$
+\langle u_{b,\mathrm{abs}}^2\rangle
+=2r-c(c-2\bar u_1)
+=\bar u_1^2+\langle(u_b-\bar u_1)^2\rangle.
+$$
+
+The orbital mean square reported separately by the GUI is not interchangeable with this absolute mean square in $F$ or $S_{xx}$. When criterion 2 is selected in a supporting solver interface, $U_c$ is the prescribed Stokes current; the integral formulas still use the solved Eulerian current, $\bar u_1$.
+
+The field `Cg` is labelled **energy-flux velocity**, $F/E$. It is an energy-flux-to-energy-density ratio; it is not a general evaluation of the dispersion derivative $d\omega/dk$ for finite-amplitude waves with current.
+
+For the implemented cosine reconstruction, the last mode has amplitude $Y_N/2$, where $Y_j$ denotes the surface coefficient $E_j$.
+Consequently the potential energy of that reconstructed surface is
+
+$$
+V_p=\frac{\rho g}{k^2}\left(\frac14\sum_{j=1}^{N-1}Y_j^2+
+\frac{Y_N^2}{16}\right).
+$$
+
+Acceptance in the Python/C++ GUI, HTML and VBA solvers requires the residual limits in §7.6 and the resolution and output-accuracy checks in §7.7. A small Newton correction alone is insufficient. The complete target state is checked before accepted engineering outputs are exposed.
+
+The point kernel evaluates the hyperbolic ratios with scaled exponentials to
+avoid cancellation and overflow at the bed:
+
+$$
+S(a,b)=\frac{e^a-e^{-a-2b}}{1+e^{-2b}},\qquad
+C(a,b)=\frac{e^a+e^{-a-2b}}{1+e^{-2b}},\qquad a=jY,\ b=jkd.
+$$
+
 These quantities should be interpreted with the same current convention used in the solve. The Eulerian-current and Stokes-current closures lead to different fixed-frame flux and drift interpretations even when the relative wave form is similar.
 
-The mean square bed velocity diagnostic is evaluated after subtracting the imposed Eulerian current:
+The orbital mean square bed velocity diagnostic removes the solved Eulerian current:
 
 $$
 u_{b2}=\left\langle\left(u_{\text{bed}}(t)-\bar u_1\right)^2\right\rangle.
@@ -897,6 +1092,70 @@ The Miche estimate is a practical screening formula rather than the exact limiti
 | Kinematics | $u$, $v$, acceleration | Loads, velocity checks and flow fields. |
 | Integrals | $I$, $E$, $F$, $S_{xx}$ | Momentum, energy, power and radiation-stress diagnostics. |
 | Stability | $Ur$, $H_{\text{Miche}}$, saturation | Practical validity screening. |
+
+### 8.1 Independent pressure and integral checks
+
+Using the mean-level Bernoulli constant $r$, the dimensional pressure is reconstructed as
+
+$$
+p=\rho\left[r-gy-\frac12\left((u-c)^2+v^2\right)\right].
+$$
+
+With $\langle\cdot\rangle$ denoting an average over one wavelength, the independent defining-integral checks include
+
+$$
+I=\left\langle\int_{-d}^{\eta}\rho u\,dy\right\rangle,
+$$
+
+$$
+S_{xx}=\left\langle\int_{-d}^{\eta}\left(p+\rho u^2\right)\,dy\right\rangle
+-\frac12\rho gd^2,
+$$
+
+$$
+F=\left\langle\int_{-d}^{\eta}
+\left[p+\rho gy+\frac12\rho(u^2+v^2)\right]u\,dy\right\rangle.
+$$
+
+The kinetic- and potential-energy integrals are defined above. These checks use fixed-frame absolute velocities, including the solved Eulerian current. `MomentumFlux`, a separate moving-frame momentum-flux diagnostic, is not interchangeable with `Sxx` and is not one of the nine interval-enclosed outputs.
+
+### 8.2 Phase extrema and engineering estimates
+
+The Python/C++ GUI and HTML solvers estimate phase maxima by sampling $\max(257,8N+1)$ points on the symmetric half-wave and refining each detected local-maximum bracket with golden-section search. Refinement uses at most 64 iterations or stops when the phase bracket is narrower than $10^{-12}$ radians. The largest evaluated magnitude is retained. This provides refined numerical estimates, rather than a proof of the global maximum between all sampled points.
+
+| Field | Meaning |
+| --- | --- |
+| `u_bed` | Estimated maximum absolute horizontal velocity at the bed, including current. |
+| `u_surf` | Estimated maximum absolute horizontal velocity evaluated on the reconstructed surface. |
+| `w_max` | Estimated maximum absolute vertical velocity evaluated on that surface. |
+| `acc_max` | Estimated maximum absolute material horizontal acceleration evaluated on that surface. |
+| `u_bed_crest`, `u_surf_crest` | Signed horizontal velocities at crest phase; distinct from magnitude maxima. |
+| `extrema_phases` | Phases at which the retained maxima estimates were evaluated. |
+
+The material horizontal acceleration used by the GUI and browser is
+
+$$
+a_x=\frac{\partial u}{\partial t}
++u\frac{\partial u}{\partial x}+v\frac{\partial u}{\partial y}
+=(u-c)\frac{\partial u}{\partial x}+v\frac{\partial u}{\partial y}.
+$$
+
+This differs from the local acceleration $\partial u/\partial t=-c\,\partial u/\partial x$ written by the standalone flow-field drivers in §11.6.
+
+The engineering bed diagnostics are
+
+$$
+\tau_{\mathrm{bed,est}}=\frac12\rho C_f\,u_{\mathrm{bed}}^2,
+\qquad C_f=0.005,
+$$
+
+$$
+A_{\mathrm{bed,est}}=\frac{T}{2\pi}
+U_{b,\mathrm{orb,est}}.
+$$
+
+Here $U_{b,\mathrm{orb,est}}$ is the estimated phase maximum of $|u_b(X)-\bar u_1|$. `ExcursionBed` therefore uses the orbital velocity after removing the Eulerian current. It is an amplitude-based excursion estimate, not direct integration of the nonlinear particle trajectory. Bed shear likewise remains an estimate using a fixed friction coefficient. Miche screening, bed shear and phase extrema are engineering diagnostics outside the nine selected-output interval checks.
+
 
 ***
 
@@ -1152,12 +1411,15 @@ $$
 | --- | --- |
 | Fully nonlinear stream-function solve | Solves surface shape, velocity field, wavelength and integral quantities. |
 | Current-aware formulation | Separates Eulerian, Stokes, mean-flow and flux conventions. |
-| Continuation | Ramps wave height to improve nonlinear convergence. |
-| Fourier order | Default $N=50$ for high-resolution free-surface representation. |
-| GUI output | Reports geometry, kinematics, integrals, stability and classification. |
+| Continuation | Adapts height increments and restores the last accepted state after a failed trial. |
+| Fourier order | Requested $N=50$ in the precision driver; the accepted order is limited by Jacobian conditioning and reported explicitly. |
+| Numerical verification | GUI, HTML and VBA: finite-state interval enclosures, surface-resolution checks and independent output comparisons. Standalone drivers: their documented residual and spectral diagnostics. |
+| Lean evidence | Mathematical identities, finite-system implications and recorded inequalities; scope and benchmark coverage in §7.8. |
+| Short-period calculations | Stable vertical basis and adaptive continuation/order control support tested 3 s and 4 s cases without guaranteeing every height/current combination. |
+| GUI output | Reports accepted geometry, estimated phase extrema, integrals, accuracy diagnostics and breaking-screening quantities. |
 | Wavelength API | Provides callable `L(H,T,d,Uc)` for scripts and tables. |
 | Surrogates | Provides Pade, neural, symbolic-regression and effective-variable approximations. |
-| Excel/VBA support | Allows spreadsheet deployment of linear, nonlinear and surrogate methods. |
+| Excel/VBA support | `L_fenton` returns an accepted nonlinear wavelength; `Fenton_report` exposes checks and enclosures. Separate modules provide their respective approximations. |
 | Android availability | Fenton App is also available as the installable package `fenton.apk`. |
 | Nomograms | Generates design charts for rapid engineering use. |
 
@@ -1176,18 +1438,19 @@ python -m pip install -U "numba>=0.57"
 python fenton_gui.py
 ```
 
-Numba is optional. If Numba is unavailable, the solver falls back to the pure-NumPy path.
+Numba is optional. If Numba is unavailable, the solver falls back to the pure-NumPy path. The interval checker uses the standard-library `decimal` module. Tk bindings are required by the GUI; the independent verification package additionally requires its listed audit dependencies.
 
 ### 11.2 Build the C++ GUI executable
 
 ```bash
 g++ fenton_gui.cpp -o fenton_gui.exe -O3 -std=c++20 ^
+   -fno-fast-math -ffp-contract=off ^
    -march=native -flto=auto -fopenmp -static -static-libgcc ^
    -static-libstdc++ -mwindows -pthread ^
    -lgdi32 -luser32 -lkernel32 -lcomctl32
 ```
 
-For reproducible no-current and current-case comparisons, keep the same CPU family, compiler family and optimization flags.
+Use a Windows toolchain providing the listed libraries. The interval checker requires IEEE binary64 round-to-nearest arithmetic: do not enable `-ffast-math`, `-Ofast` or floating-point reassociation. The source rejects fast-math builds and checks the arithmetic environment at runtime. Cross-implementation comparisons use explicit tolerances rather than requiring identical last digits.
 
 ### 11.3 Build a Python standalone executable
 
@@ -1241,6 +1504,141 @@ adb install -r fenton.apk
 
 This command prints the precise Android package-manager error when a graphical installer shows only a generic failure message. It is not required for normal installation.
 
+### 11.6 Standalone precision solver
+
+Compile the `fourier.cpp` source with a C++20 compiler:
+
+```bash
+g++ -std=c++20 -O3 -Wall -Wextra -pedantic fourier.cpp -o fourier
+```
+
+Add `-fopenmp` for an OpenMP build where supported. On Windows, use `-o fourier.exe`. The source named `fourier_precision.cpp` uses the same driver and result-file contract; substitute that source filename when compiling it.
+
+The program reads `data.dat` from the working directory or, if absent there, beside the executable. If no file is found, it requests all required case values interactively. Physical inputs have no silent defaults.
+
+`data.dat` contains exactly seven non-empty lines:
+
+| Line | Contents |
+| ---: | --- |
+| 1 | Case title |
+| 2 | Relative wave height $H/d>0$ |
+| 3 | `Period` or `Wavelength` |
+| 4 | $T\sqrt{g/d}>0$ for `Period`, or $L/d>0$ for `Wavelength` |
+| 5 | Current criterion: `1` for Eulerian, `2` for mass transport |
+| 6 | Signed prescribed current divided by $\sqrt{gd}$ |
+| 7 | `FINISH` |
+
+The requested order is 50; the driver selects its initial continuation subdivision internally. Do not add Fourier-order or height-step lines to this file format.
+
+For $H=3$ m, $T=9$ s, $d=5$ m, zero Eulerian current and $g=9.80665$ m/s², use:
+
+```text
+H=3 m, T=9 s, d=5 m, no current
+0.6
+Period
+12.604274275022739
+1
+0.0
+FINISH
+```
+
+Run:
+
+```bash
+./fourier
+```
+
+On Windows, run `fourier.exe`. `fourier --help` displays the input contract. When using `data.dat`, results are written beside that file; interactive runs use the working directory.
+
+| File | Contents |
+| --- | --- |
+| `solution.res` | Wave geometry, currents, integral quantities and native Fourier coefficients. |
+| `solver.res` | Order selection, conditioning, continuation history, complete state/residual vectors and convergence/resolution checks. |
+| `surface.res` | Surface samples: $X_{\mathrm{dim}}/d$, bed-based elevation $y/d$, and pressure divided by $\rho gd$. |
+| `flowfield.res` | Bed-to-surface profiles of velocity, local acceleration, velocity gradients and Bernoulli diagnostics. |
+
+The `eta/d` label in `surface.res` denotes the **bed-based** ordinate $y/d=1+\eta/d$: the bed is at 0 and the mean water level at 1. Local accelerations in `flowfield.res` are $\partial u/\partial t$ and $\partial v/\partial t$, not material accelerations including convective terms. The orbital bed-velocity statistic excludes the solved Eulerian current.
+
+Inspect the process exit status and `solver.res` before using results. A nonzero exit status means the requested run did not complete successfully; old `.res` files are not evidence of a successful new calculation.
+
+### 11.7 Standalone SVD solver
+
+`fourier_carvalho.cpp` retains a separate command-line and file interface:
+
+```bash
+g++ -std=c++20 -O3 -Wall -Wextra -pedantic fourier_carvalho.cpp -o fourier_carvalho
+./fourier_carvalho 0.6 Period 12.604274275022739 1 0.0 50 4
+```
+
+The arguments are `H_over_d Case Value CurrentCriterion [CurrentValue] N Steps`. `CurrentValue`, when present, follows the current criterion. `N` is the requested Fourier order, from 1 to 512; `Steps` is the initial height subdivision, from 1 to 4096, and continuation subsequently adapts its increments. If `CurrentValue` is omitted, the current is zero.
+
+A discovered `data.dat` takes precedence over positional arguments. This driver reads the title and the same five physical fields as above, followed by **two additional lines**, `N` and `Steps`; a trailing `FINISH` may follow. Use the format for the executable being run: this input is not interchangeable with the precision driver's seven-line file. The SVD driver also retains its separate deep-water branch.
+
+Successful runs write `solution.res`, `surface.res` and `flowfield.res`. Numerical diagnostics are included in `solution.res`; this driver does not produce `solver.res`.
+
+### 11.8 Browser interface
+
+Open the self-contained `fenton.html` file in a browser and enter $H$, $T$, $d$ and Eulerian current $U_c$ in SI units. Calculation runs in a Web Worker. The interface shows accepted engineering values, the active Fourier order, residual bounds and output-accuracy diagnostics. The no-current and imposed-current cases are accepted separately; a rejected column is suppressed without hiding an accepted comparison case.
+
+Use **Full report** for the numerical method, diagnostic ratios and selected-output enclosures. **Download TXT** exports the readable report; **Download JSON** exports the input, solver statuses, Fourier state and verification data. JSON may contain diagnostic states for rejected cases; use the acceptance flags before treating any values as engineering results. **Clear output** cancels a pending calculation and clears the displayed results.
+
+JavaScript uses binary64 arithmetic, so final machine-level digits can vary between engines. The recorded numerical comparison in §7.8 executes the solver under Node.js; it does not assert identical execution in every browser.
+
+### 11.9 Excel/VBA nonlinear wavelength and verification report
+
+Import `fenton.bas` into a **standard VBA module** through the Visual Basic Editor's **File > Import File** command, and save the workbook as `.xlsm`. The module uses SI inputs, $g=9.80665$ m/s² and, for the internal integral checks, $\rho=1025$ kg/m³. Its prescribed current is Eulerian.
+
+The wavelength function retains this interface:
+
+```vb
+L_fenton(H, T, d, [U], [UseHomotopy])
+```
+
+`U` defaults to zero. `UseHomotopy` is retained for worksheet compatibility; adaptive height continuation is always applied. A successful call returns wavelength in metres. A failed nonlinear solve, inadmissible state or failed accuracy check returns an `Err: ` text message, rather than a partial or unverified wavelength.
+
+```excel
+=L_fenton(3,9,5)
+=L_fenton(3,9,5,1)
+=Fenton_report(3,9,5,1)
+```
+
+Use semicolons instead of commas if required by Excel's regional settings. `Fenton_report(H,T,d,[U])` returns a multiline text report; enable **Wrap Text** in its cell. It includes the acceptance outcome, active order, conditioning, residual and comparison diagnostics. For accepted cases it also lists the nine checked outputs and their enclosures. Each call performs its own solve and verification, so extensive worksheet tables can take appreciable time to recalculate.
+
+For the default wave $H=3$ m, $T=9$ s and $d=5$ m, representative accepted wavelengths are:
+
+| Eulerian current (m/s) | Wavelength (m), approximately |
+| ---: | ---: |
+| 0 | 68.706761529 |
+| 1 | 78.827222116 |
+
+The VBA numerical comparison uses a mechanical C++ translation of the module, with independent high-precision enclosure checks. Native Excel compilation and execution have not been run in that verification environment.
+
+### 11.10 Python and Lean verification
+
+Run the Python solver's built-in acceptance/rejection checks with:
+
+```bash
+python fenton_gui.py --self-test
+```
+
+The companion verification package contains its own source snapshots, dependency requirements, manifests, numerical audit and Lean build configuration. From that package directory, its reproduction sequence is:
+
+```bash
+python -m pip install -r requirements.txt
+python audit.py
+python check_intervals.py
+python check_report.py
+python inputs/fenton_gui.py --self-test
+python build_certificates.py
+python build_finite_certificates.py
+lake update
+lake exe cache get
+lake build
+```
+
+The package pins Lean 4.34.0 and Mathlib commit `5ed2965256430c3649e86755f9576b54eca72435`. The audit checks the source identities before generating recorded certificates. Successful reproduction requires both the numerical tests and all five Lean modules to pass. Deliberate rejection of an under-resolved case is a passing acceptance test when that rejection is the expected outcome. Read §7.8 for the exact scope of the resulting evidence.
+
+
 ***
 
 ## 12. Validity and numerical cautions
@@ -1250,12 +1648,17 @@ This command prints the precise Android package-manager error when a graphical i
 | Non-breaking steady waves | The formulation is for a periodic wave of permanent form; breaking, strong turbulence and air entrainment are outside the model. |
 | Irrotational flow | Strong shear, vorticity, boundary-layer dominance or rapidly varying currents require a different model. |
 | Horizontal-bed assumption | The steady solver is a local horizontal-bed theory; shoaling over variable bathymetry requires an additional propagation/shoaling model or a local approximation. |
-| Very long waves | Fourier coefficients become broad-banded as the solitary-wave limit is approached; increase $N$ and inspect coefficient decay. |
-| Near highest waves | Sharp crests degrade convergence and conditioning; use continuation and inspect the free-surface shape. |
+| Very long waves | Fourier coefficients become broad-banded near the solitary-wave limit. Inspect coefficient decay and between-node defects; a larger requested $N$ is useful only while the system remains well-conditioned. |
+| Near highest waves | Sharp crests degrade convergence and conditioning; inspect the achieved height, active Fourier order, residuals and free-surface shape. |
+| Short periods | For fixed height and depth, a shorter period can produce a much steeper wave. Automatic order reduction addresses conditioning, but cannot establish the existence of a steady solution. |
+| Resolution and acceptance | Small collocation residuals alone do not establish between-node accuracy. GUI/HTML/VBA results are rejected when their accuracy budgets fail. Standalone spectral `FAIL` and nonlinear `PASS` remain separate diagnostics under their documented contracts. |
+| Finite-system verification | Enclosures concern equation and output evaluation at the stored coefficients; they do not include physical-input uncertainty, an exact-root error bound or continuous Fourier-truncation error. |
+| Estimated extrema | Refined phase searches estimate maxima. Bed shear and excursion are engineering estimates with the definitions in §8.2. |
+| Comparing implementations | Match height, depth, period or wavelength, current definition, current value, gravity, active order and tolerances. Differences in quadrature and floating-point linear algebra can prevent exact numerical equality. |
 | Opposing current | Wave blocking, multiple branches or no physical branch may occur; the chosen root must be checked. |
 | Current criterion | Do not mix Eulerian-current and Stokes/mass-transport current definitions. |
 | Surrogate use | Do not extrapolate outside the training/calibration range. Surrogates are wavelength-estimation tools, not replacements for the nonlinear kinematic solution. |
-| Units | Use coherent SI inputs throughout. |
+| Units | GUI inputs use coherent SI units; standalone `data.dat` inputs are the dimensionless groups specified in §11.6. |
 
 Fenton's theory comparisons give the following practical hierarchy. Fifth-order Stokes theory is useful for shorter waves, cnoidal theory for sufficiently long waves, with the Ursell number often used as a regime guide. The Fourier approximation method is the preferred reference method when high accuracy is required over a broad range of depths and heights, especially for velocities, pressures, integral quantities or waves close to the boundary of the perturbation theories.
 

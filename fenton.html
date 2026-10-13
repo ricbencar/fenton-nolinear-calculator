@@ -75,7 +75,7 @@ canvas{display:block;width:100%;height:420px}
 <header>
   <div>
     <h1>Fenton Nonlinear Wave Calculator</h1>
-    <div class="subtitle">50-mode stream-function/Fourier solver for steady, finite-amplitude waves with optional collinear current. It solves the nonlinear state vector using height continuation, finite-difference Jacobians, SVD-stabilised Newton iteration, line search, admissibility checks and engineering post-processing.</div>
+    <div class="subtitle">Stream-function/Fourier solver for steady, finite-amplitude waves with optional collinear current. Adaptive height continuation and Fourier resolution support short-period calculations. Accepted results satisfy finite-system, surface-resolution and selected-output accuracy checks.</div>
   </div>
 </header>
 <div class="layout">
@@ -145,226 +145,202 @@ function maxAbsRange(a, start = 0, end = a.length) {
 }
 
 const LinAlg = (() => {
-  function jacobiEigenSym(Ain, n, maxSweeps = 60) {
-    if (Ain.length !== n * n) return null;
-    const A = new Float64Array(Ain);
-    const w = new Float64Array(n);
-    const V = new Float64Array(n * n);
-    for (let i = 0; i < n; ++i) V[i * n + i] = 1.0;
-    const eps = Number.EPSILON;
-
-    for (let sweep = 0; sweep < maxSweeps; ++sweep) {
-      let off = 0.0;
-      for (let p = 0; p < n; ++p) {
-        const po = p * n;
-        for (let q = p + 1; q < n; ++q) off += Math.abs(A[po + q]);
+  // Column-equilibrated Jacobi SVD: W = (A/D) V has column norms sigma_j.
+  function svdSolve(matrix, rhs, n) {
+    const W = new Float64Array(n*n), V = new Float64Array(n*n), scale = new Float64Array(n);
+    for (let j=0; j<n; ++j) {
+      let maximum=0;
+      for (let i=0; i<n; ++i) maximum=Math.max(maximum,Math.abs(matrix[i*n+j]));
+      scale[j]=maximum>0?maximum:1;
+    }
+    for (let j=0; j<n; ++j) {
+      V[j*n+j] = 1.0;
+      if (!Number.isFinite(rhs[j])) throw new Error('Non-finite linear right-hand side.');
+      for (let i=0; i<n; ++i) {
+        const value = matrix[i*n+j];
+        if (!Number.isFinite(value)) throw new Error('Non-finite Jacobian.');
+        W[j*n+i] = value/scale[j];
       }
-      if (off <= eps) break;
-
-      for (let p = 0; p < n; ++p) {
-        for (let q = p + 1; q < n; ++q) {
-          const pq = p * n + q;
-          const apq = A[pq];
-          if (Math.abs(apq) <= eps) continue;
-
-          const pp = p * n + p;
-          const qq = q * n + q;
-          const app = A[pp];
-          const aqq = A[qq];
-          const tau = (aqq - app) / (2.0 * apq);
-          const sign = tau < 0.0 ? -1.0 : 1.0;
-          const t = sign / (Math.abs(tau) + Math.sqrt(1.0 + tau * tau));
-          const c = 1.0 / Math.sqrt(1.0 + t * t);
-          const s = t * c;
-
-          A[pq] = 0.0;
-          A[q * n + p] = 0.0;
-          A[pp] = app - t * apq;
-          A[qq] = aqq + t * apq;
-
-          for (let k = 0; k < n; ++k) {
-            if (k === p || k === q) continue;
-            const pk = p * n + k;
-            const qk = q * n + k;
-            const aik = A[pk];
-            const aqk = A[qk];
-            const newP = c * aik - s * aqk;
-            const newQ = s * aik + c * aqk;
-            A[pk] = newP;
-            A[k * n + p] = newP;
-            A[qk] = newQ;
-            A[k * n + q] = newQ;
-          }
-
-          for (let k = 0; k < n; ++k) {
-            const kp = k * n + p;
-            const kq = k * n + q;
-            const vip = V[kp];
-            const viq = V[kq];
-            V[kp] = c * vip - s * viq;
-            V[kq] = s * vip + c * viq;
-          }
+    }
+    const tolerance = 32.0*Number.EPSILON;
+    let orthogonal = false;
+    for (let sweep=0; sweep<100; ++sweep) {
+      orthogonal = true;
+      for (let p=0; p<n; ++p) for (let q=p+1; q<n; ++q) {
+        let pp=0, qq=0, pq=0;
+        for (let i=0; i<n; ++i) {
+          const a=W[p*n+i], b=W[q*n+i];
+          pp+=a*a; qq+=b*b; pq+=a*b;
+        }
+        if (!(pp>0) || !(qq>0) || Math.abs(pq)<=tolerance*Math.sqrt(pp)*Math.sqrt(qq)) continue;
+        orthogonal = false;
+        const tau=(qq-pp)/(2.0*pq);
+        const t=(tau<0?-1.0:1.0)/(Math.abs(tau)+Math.hypot(1.0,tau));
+        const c=1.0/Math.hypot(1.0,t), sn=t*c;
+        for (let i=0; i<n; ++i) {
+          const a=W[p*n+i], b=W[q*n+i];
+          W[p*n+i]=c*a-sn*b; W[q*n+i]=sn*a+c*b;
+          const vp=V[p*n+i], vq=V[q*n+i];
+          V[p*n+i]=c*vp-sn*vq; V[q*n+i]=sn*vp+c*vq;
         }
       }
+      if (orthogonal) break;
     }
-
-    for (let i = 0; i < n; ++i) w[i] = A[i * n + i];
-    return { w, V };
+    if (!orthogonal) throw new Error('Jacobi SVD did not converge.');
+    const sigma=new Float64Array(n), x=new Float64Array(n);
+    let largest=0;
+    for (let j=0; j<n; ++j) {
+      for (let i=0; i<n; ++i) sigma[j]=Math.hypot(sigma[j],W[j*n+i]);
+      largest=Math.max(largest,sigma[j]);
+    }
+    if (!Number.isFinite(largest)) throw new Error('Non-finite singular value.');
+    const smallest=Math.min(...sigma);
+    x.condition=smallest>largest*1e-300?largest/smallest:Infinity;
+    for (let j=0; j<n; ++j) {
+      const sj=sigma[j];
+      if (!(sj>largest*1e-15)) continue;
+      let projection=0;
+      for (let i=0; i<n; ++i) projection+=(W[j*n+i]/sj)*rhs[i];
+      for (let i=0; i<n; ++i) x[i]+=V[j*n+i]*(projection/sj);
+    }
+    for(let j=0;j<n;++j) x[j]/=scale[j];
+    return x;
   }
+  return {svdSolve};
+})();
 
-  function jtJ(m, n, J) {
-    const A = new Float64Array(n * n);
-    for (let i = 0; i < m; ++i) {
-      const row = i * n;
-      for (let a = 0; a < n; ++a) {
-        const Jia = J[row + a];
-        if (Jia === 0.0) continue;
-        const ao = a * n;
-        for (let b = a; b < n; ++b) A[ao + b] += Jia * J[row + b];
-      }
-    }
-    for (let a = 0; a < n; ++a) {
-      for (let b = a + 1; b < n; ++b) A[b * n + a] = A[a * n + b];
-    }
-    return A;
+// Outward enclosures use adjacent IEEE 754 binary64 values.
+const Verified = (() => {
+  const bits = new DataView(new ArrayBuffer(8));
+  function up(x) {
+    if (Number.isNaN(x) || x === Infinity) return x;
+    if (x === 0) return Number.MIN_VALUE;
+    bits.setFloat64(0,x,false);
+    let hi=bits.getUint32(0,false), lo=bits.getUint32(4,false);
+    if (x>0) { lo=(lo+1)>>>0; if(lo===0) hi=(hi+1)>>>0; }
+    else { if(lo===0) hi=(hi-1)>>>0; lo=(lo-1)>>>0; }
+    bits.setUint32(0,hi,false);bits.setUint32(4,lo,false);
+    return bits.getFloat64(0,false);
   }
-
-  function svdViaJtj(m, n, J) {
-    const A = jtJ(m, n, J);
-    const eig = jacobiEigenSym(A, n, 60);
-    if (!eig) return null;
-    const w = eig.w;
-    const V = eig.V;
-    for (let i = 0; i < n; ++i) {
-      if (w[i] < 0.0 && w[i] > -1e-14) w[i] = 0.0;
+  const down = x => -up(-x);
+  class Interval {
+    constructor(lo=0,hi=lo) {
+      if(!Number.isFinite(lo)||!Number.isFinite(hi)||lo>hi) throw new Error('Invalid interval endpoints.');
+      this.lo=lo;this.hi=hi;
     }
-    const idx = Array.from({ length: n }, (_, i) => i);
-    idx.sort((a, b) => w[b] - w[a]);
-    const Vs = new Float64Array(n * n);
-    const s = new Float64Array(n);
-    for (let col = 0; col < n; ++col) {
-      const src = idx[col];
-      s[col] = Math.sqrt(Math.max(0.0, w[src]));
-      for (let r = 0; r < n; ++r) Vs[r * n + col] = V[r * n + src];
+    static of(x) { return x instanceof Interval ? x : new Interval(x); }
+    add(value) { const b=Interval.of(value);return new Interval(down(this.lo+b.lo),up(this.hi+b.hi)); }
+    neg() { return new Interval(-this.hi,-this.lo); }
+    sub(value) { return this.add(Interval.of(value).neg()); }
+    mul(value) {
+      const b=Interval.of(value),p=[this.lo*b.lo,this.lo*b.hi,this.hi*b.lo,this.hi*b.hi];
+      if(!p.every(Number.isFinite)) throw new Error('Interval product overflow.');
+      return new Interval(down(Math.min(...p)),up(Math.max(...p)));
     }
-    return { s, V: Vs };
-  }
-
-  function svdJacobiOneSided(m, n, J) {
-    if (m < n || m <= 0 || n <= 0) return null;
-    const A = new Float64Array(m * n); // column-major
-    for (let i = 0; i < m; ++i) {
-      for (let j = 0; j < n; ++j) A[j * m + i] = J[i * n + j];
+    div(value) {
+      const b=Interval.of(value);
+      if(b.lo<=0 && b.hi>=0) throw new Error('Interval divisor contains zero.');
+      return this.mul(new Interval(down(1/b.hi),up(1/b.lo)));
     }
-    const Vcol = new Float64Array(n * n); // columns contiguous
-    for (let i = 0; i < n; ++i) Vcol[i * n + i] = 1.0;
-
-    const colDot = (p, q) => {
-      const po = p * m, qo = q * m;
-      let sum = 0.0;
-      for (let i = 0; i < m; ++i) sum += A[po + i] * A[qo + i];
+    magnitude() { return Math.max(Math.abs(this.lo),Math.abs(this.hi)); }
+    square() {
+      const lower=this.lo<=0 && this.hi>=0 ? 0 : Math.min(Math.abs(this.lo),Math.abs(this.hi));
+      const upper=this.magnitude();
+      return new Interval(Math.max(0,down(lower*lower)),up(upper*upper));
+    }
+    power(n) {
+      let value=new Interval(1),base=this;
+      while(n>0) { if(n%2) value=value.mul(base);n=Math.floor(n/2);if(n)base=base.square(); }
+      return value;
+    }
+    static expPoint(x) {
+      if(x===0) return new Interval(1);
+      let reduced=Math.abs(x),halvings=0;
+      while(reduced>.125) { reduced*=.5;++halvings; }
+      const r=new Interval(Math.max(0,down(reduced)),up(reduced));
+      let sum=new Interval(1),term=new Interval(1);
+      for(let j=1;j<=32;++j) { term=term.mul(r).div(j);sum=sum.add(term); }
+      // For 0 <= r <= 1/4, exp(r) < 2 bounds the Taylor remainder.
+      let remainder=r.power(33).mul(2);
+      for(let j=2;j<=33;++j) remainder=remainder.div(j);
+      sum=new Interval(sum.lo,up(sum.hi+remainder.hi));
+      if(x<0) sum=new Interval(1).div(sum);
+      for(let j=0;j<halvings;++j) sum=sum.square();
       return sum;
-    };
-    const colNorm2 = (p) => {
-      const po = p * m;
-      let sum = 0.0, compensation = 0.0;
-      for (let i = 0; i < m; ++i) {
-        const product = A[po + i] * A[po + i];
-        const y = product - compensation;
-        const t = sum + y;
-        compensation = (t - sum) - y;
-        sum = t;
-      }
-      return sum;
-    };
-
-    const eps = Math.sqrt(Number.EPSILON);
-    const maxSweeps = 30;
-    const norm2Cache = new Float64Array(n);
-    for (let j = 0; j < n; ++j) norm2Cache[j] = colNorm2(j);
-
-    for (let sweep = 0; sweep < maxSweeps; ++sweep) {
-      let maxCorr = 0.0;
-      for (let p = 0; p < n; ++p) {
-        const app = norm2Cache[p];
-        if (app <= 0.0) continue;
-        for (let q = p + 1; q < n; ++q) {
-          const aqq = norm2Cache[q];
-          if (aqq <= 0.0) continue;
-          const apq = colDot(p, q);
-          const denom = Math.sqrt(app * aqq);
-          if (denom <= 0.0) continue;
-          const corr = Math.abs(apq) / denom;
-          if (corr > maxCorr) maxCorr = corr;
-          if (corr < 10.0 * eps) continue;
-
-          const tau = (aqq - app) / (2.0 * apq);
-          const sign = tau < 0.0 ? -1.0 : 1.0;
-          const t = sign / (Math.abs(tau) + Math.sqrt(1.0 + tau * tau));
-          const c = 1.0 / Math.sqrt(1.0 + t * t);
-          const s = t * c;
-
-          const po = p * m, qo = q * m;
-          let normP = 0.0, compP = 0.0, normQ = 0.0, compQ = 0.0;
-          for (let i = 0; i < m; ++i) {
-            const aip = A[po + i], aiq = A[qo + i];
-            const newP = c * aip - s * aiq;
-            const newQ = s * aip + c * aiq;
-            A[po + i] = newP;
-            A[qo + i] = newQ;
-
-            let prod = newP * newP;
-            let y = prod - compP;
-            let tt = normP + y;
-            compP = (tt - normP) - y;
-            normP = tt;
-
-            prod = newQ * newQ;
-            y = prod - compQ;
-            tt = normQ + y;
-            compQ = (tt - normQ) - y;
-            normQ = tt;
-          }
-          norm2Cache[p] = normP;
-          norm2Cache[q] = normQ;
-
-          const vp = p * n, vq = q * n;
-          for (let i = 0; i < n; ++i) {
-            const vip = Vcol[vp + i], viq = Vcol[vq + i];
-            Vcol[vp + i] = c * vip - s * viq;
-            Vcol[vq + i] = s * vip + c * viq;
-          }
-        }
-      }
-      if (maxCorr < 10.0 * eps) break;
     }
-
-    const s = new Float64Array(n);
-    for (let j = 0; j < n; ++j) s[j] = Math.sqrt(Math.max(0.0, norm2Cache[j]));
-    const idx = Array.from({ length: n }, (_, i) => i);
-    idx.sort((a, b) => s[b] - s[a]);
-    const ss = new Float64Array(n);
-    const V = new Float64Array(n * n);
-    for (let col = 0; col < n; ++col) {
-      const src = idx[col];
-      ss[col] = s[src];
-      const sourceCol = src * n;
-      for (let row = 0; row < n; ++row) V[row * n + col] = Vcol[sourceCol + row];
+    exp() { return new Interval(Interval.expPoint(this.lo).lo,Interval.expPoint(this.hi).hi); }
+    sqrt() {
+      if(this.lo<0) throw new Error('Negative square-root interval.');
+      if(this.hi===0) return new Interval(0);
+      let lower=this.lo===0 ? 0 : Math.max(0,down(Math.sqrt(this.lo))),upper=up(Math.sqrt(this.hi));
+      // Squared endpoint tests validate the initial root estimates.
+      for(let i=0;i<16 && lower>0 && up(lower*lower)>this.lo;++i) lower=Math.max(0,down(lower));
+      for(let i=0;i<16 && down(upper*upper)<this.hi;++i) upper=up(upper);
+      if((lower>0 && up(lower*lower)>this.lo)||down(upper*upper)<this.hi) throw new Error('Square-root enclosure failed.');
+      return new Interval(lower,upper);
     }
-    return { s: ss, V };
+    record() { return [this.lo,this.hi]; }
   }
+  const pi = () => new Interval(down(Math.PI),up(Math.PI));
+  const tables=new Map();
+  function collocation(n) {
+    if(tables.has(n)) return tables.get(n);
+    const table=[];
+    for(let index=0;index<2*n;++index) {
+      const q=index<=n ? index : index-2*n,x=pi().mul(q).div(n),xx=x.square();
+      let sine=new Interval(0),cosine=new Interval(0),st=x,ct=new Interval(1);
+      for(let m=0;m<32;++m) {
+        sine=sine.add(st);cosine=cosine.add(ct);
+        st=st.neg().mul(xx).div((2*m+2)*(2*m+3));
+        ct=ct.neg().mul(xx).div((2*m+1)*(2*m+2));
+      }
+      let se=new Interval(x.magnitude()).power(65),ce=new Interval(x.magnitude()).power(64);
+      for(let j=2;j<=65;++j) se=se.div(j);
+      for(let j=2;j<=64;++j) ce=ce.div(j);
+      table.push([sine.add(new Interval(-se.hi,se.hi)),cosine.add(new Interval(-ce.hi,ce.hi))]);
+    }
+    tables.set(n,table);return table;
+  }
+  return {Interval,up,down,pi,collocation};
+})();
 
-  return { jacobiEigenSym, jtJ, svdViaJtj, svdJacobiOneSided };
+const gaussLegendre = (() => {
+  const cache=new Map();
+  return function(n) {
+    if(cache.has(n)) return cache.get(n);
+    const nodes=new Float64Array(n),weights=new Float64Array(n);
+    const evaluate=x=>{
+      let p0=1,p1=x;
+      for(let j=2;j<=n;++j) { const p=((2*j-1)*x*p1-(j-1)*p0)/j;p0=p1;p1=p; }
+      return [p1,n*(x*p1-p0)/(x*x-1)];
+    };
+    for(let i=0;i<Math.ceil(n/2);++i) {
+      let x=Math.cos(Math.PI*(i+.75)/(n+.5)),converged=false;
+      for(let iteration=0;iteration<100;++iteration) {
+        const [p,derivative]=evaluate(x),next=x-p/derivative;
+        if(Math.abs(next-x)<=4*Number.EPSILON) { x=next;converged=true;break; }
+        x=next;
+      }
+      if(!converged) throw new Error('Gauss-Legendre nodes did not converge.');
+      const derivative=evaluate(x)[1],w=2/((1-x*x)*derivative*derivative);
+      nodes[i]=-x;nodes[n-1-i]=x;weights[i]=weights[n-1-i]=w;
+    }
+    const result={nodes,weights};cache.set(n,result);return result;
+  };
 })();
 
 class FentonStreamFunction {
-  constructor(H, T, depth, current = 0.0) {
+  constructor(H, T, depth, current = 0.0, fourierOrder = 50) {
     this.H_target = H;
     this.T_target = T;
     this.d = depth;
     this.Uc = current;
     this.g = Phys.G_STD;
-    this.N = 50;
+    this.N = Math.max(1,Math.trunc(fourierOrder));
+    this.requested_order=this.N;
+    this.jacobian_condition=0;
+    this.continuation_fraction=0;
+    this.numerical_note='';
     this.nstep = 4;
     this.number = 40;
     this.crit = 1e-8;
@@ -414,27 +390,71 @@ class FentonStreamFunction {
       'BernoulliR','Bernoulli_r','KineticEnergy','PotentialEnergy','EnergyDensity',
       'MomentumFlux','MomentumFluxDepth','Sxx','Sxx_depth','Impulse','I_depth','Power','F_depth','Cg',
       'E_depth','KE_depth','PE_depth','MassTransport','MeanSquareBedVelocity','u_bed','u_surf',
-      'acc_max','w_max','asymmetry','tau_bed','ExcursionBed'
+      'acc_max','acc_bed_max','w_max','asymmetry','tau_bed','ExcursionBed','breaking_limit_miche','breaking_index','MeanSquareBedAbsoluteVelocity'
     ];
     for (const f of fields) this[f] = 0.0;
     this.regime = '';
+    this.is_breaking = false;
     this.near_limiting_wave = false;
     this.practical_breaking_risk = false;
     this.converged = false;
     this.last_error = '';
+    this.resetVerification();
     this.initTrigTables();
   }
 
-  static get HIGHEST_SOLITARY_H_OVER_D() { return 0.83322; }
   static get FOURIER_APPLICABILITY_FRACTION() { return 0.98; }
-  static get FINAL_RESIDUAL_TOLERANCE() { return 1e-8; }
-  static get INTERMEDIATE_RESIDUAL_TOLERANCE() { return 1e-7; }
-  static get SURFACE_TAIL_TOLERANCE() { return 1e-4; }
+  static get FINAL_RESIDUAL_TOLERANCE() { return 1e-10; }
+  static get INTERMEDIATE_RESIDUAL_TOLERANCE() { return 1e-8; }
 
   SOL(i, k) { return this.sol[i * 3 + k]; }
   setSOL(i, k, v) { this.sol[i * 3 + k] = v; }
 
+  resetVerification() {
+    this.accuracy_verified=false;
+    this.accuracy_metrics={};
+    this.finite_system_verified=false;
+    this.finite_system_certificate={};
+    this.solution_status='not_solved';
+    this.extrema_phases={};
+  }
+
   solve() {
+    this.resetVerification();
+    const requested=this.requested_order;
+    let order=this.N;
+    while(true) {
+      this.solveAtOrder();
+      if(this.converged) {
+        try {
+          this.jacobian_condition=LinAlg.svdSolve(this.jacobian(),new Float64Array(this.num),this.num).condition;
+        } catch(e) {
+          this.converged=false; this.last_error=String(e.message||e); this.jacobian_condition=Infinity;
+        }
+      }
+      if(this.jacobian_condition<=1e11 || order<=12) break;
+      order=Math.max(12,Math.trunc(order*.8));
+      const next=new FentonStreamFunction(this.H_target,this.T_target,this.d,this.Uc,order);
+      for(const key of ['nstep','number','crit','criter_final','Current_criterion']) next[key]=this[key];
+      next.requested_order=requested;
+      Object.assign(this,next);
+    }
+    if(this.converged && this.jacobian_condition>1e11) {
+      this.converged=false;
+      this.last_error='The Fourier system is too ill-conditioned for a reliable binary64 solution.';
+    }
+    if(this.converged) {
+      try { this.verifyAccuracy(); }
+      catch(error) {
+        this.converged=false;this.accuracy_verified=false;this.finite_system_verified=false;
+        this.solution_status='accuracy_failure';
+        this.last_error='Accuracy verification failed: '+String(error.message||error);
+      }
+    } else this.solution_status='nonconvergence';
+    if(order!==requested) this.numerical_note=`Fourier order used: ${order} (requested ${requested}); limited by numerical conditioning.`;
+  }
+
+  solveAtOrder() {
     this.converged = false;
     this.last_error = '';
     if (![this.H_target, this.T_target, this.d, this.Uc].every(Number.isFinite) ||
@@ -442,13 +462,11 @@ class FentonStreamFunction {
       this.last_error = 'Invalid inputs: H, T, and d must be finite and > 0; current must be finite.';
       return;
     }
-    if (!(this.MaxH < FentonStreamFunction.HIGHEST_SOLITARY_H_OVER_D)) {
-      this.last_error = `Physically inadmissible regular wave: H/d = ${this.MaxH.toFixed(6)} is not below the theoretical upper bound 0.833220.`;
+    this.max_residual = Infinity;
+    if (this.Current_criterion !== 1 && this.Current_criterion !== 2) {
+      this.last_error = 'Current criterion must be 1 (Eulerian) or 2 (Stokes).';
       return;
     }
-    if (this.MaxH > 0.70) this.nstep = Math.max(this.nstep, 20);
-    else if (this.MaxH > 0.55) this.nstep = Math.max(this.nstep, 12);
-    else if (this.MaxH > 0.40) this.nstep = Math.max(this.nstep, 8);
 
     try {
       this.solveInternal();
@@ -510,10 +528,10 @@ class FentonStreamFunction {
     this.z[4] = Math.sqrt(Math.tanh(this.z[1]));
     this.z[3] = 2.0 * Phys.PI / this.z[4];
     if (this.Current_criterion === 1) {
-      this.z[5] = this.Current * Math.sqrt(this.z[2]);
+      this.z[5] = this.Current * Math.sqrt(this.z[1]);
       this.z[6] = 0.0;
     } else {
-      this.z[6] = this.Current * Math.sqrt(this.z[2]);
+      this.z[6] = this.Current * Math.sqrt(this.z[1]);
       this.z[5] = 0.0;
     }
     this.z[7] = this.z[4];
@@ -549,13 +567,9 @@ class FentonStreamFunction {
       for (let j = 1; j <= this.n; ++j) {
         const x = j * zsurf;
         if (x > 60.0 || x < -60.0) throw new Error('Divergence: exp(j*zsurf) out of safe range.');
-        const e = Math.exp(x);
-        const invE = 1.0 / e;
-        const sinhkd = 0.5 * (e - invE);
-        const coshkd = 0.5 * (e + invE);
-        const tanhJkd = tanhWorkspace[j];
-        const S = sinhkd + coshkd * tanhJkd;
-        const C = coshkd + sinhkd * tanhJkd;
+        const ep=Math.exp(x), em=Math.exp(-x-2*j*state[1]);
+        const den=1+Math.exp(-2*j*state[1]);
+        const S=(ep-em)/den, C=(ep+em)/den;
         const cNm = this.cos_nm[row + j - 1];
         const sNm = this.sin_nm[row + j - 1];
         const cj = state[this.n + j + 10];
@@ -576,163 +590,68 @@ class FentonStreamFunction {
     return this.eqnsForState(this.z, rhsOut, new Float64Array(this.n + 1));
   }
 
-  static svdSolve(A, b, n) {
-    let spectrum = LinAlg.svdViaJtj(n, n, A);
-    let usedFastPath = spectrum !== null;
-    if (usedFastPath) {
-      let smax = 0.0;
-      for (const si of spectrum.s) {
-        if (!Number.isFinite(si) || si < 0.0) { usedFastPath = false; break; }
-        smax = Math.max(smax, si);
-      }
-      if (!(smax > 0.0)) usedFastPath = false;
-    }
-    if (!usedFastPath) {
-      spectrum = LinAlg.svdJacobiOneSided(n, n, A);
-      if (!spectrum) throw new Error('SVD failure in both fast and robust solve paths.');
-    }
-
-    const Atb = new Float64Array(n);
-    for (let j = 0; j < n; ++j) {
-      let sum = 0.0;
-      for (let i = 0; i < n; ++i) sum += A[i * n + j] * b[i];
-      Atb[j] = sum;
-    }
-
-    const solveFromSpectrum = (singularValues, rightVectors) => {
-      let wmax = 0.0;
-      for (const si of singularValues) wmax = Math.max(wmax, si);
-      if (!(wmax > 0.0) || !Number.isFinite(wmax)) throw new Error('Invalid singular spectrum in Newton solve.');
-      const wmin = wmax * 1e-12;
-      const tmp = new Float64Array(n);
-      for (let i = 0; i < n; ++i) {
-        let sum = 0.0;
-        for (let j = 0; j < n; ++j) sum += rightVectors[j * n + i] * Atb[j];
-        tmp[i] = sum;
-      }
-      const scale = new Float64Array(n);
-      for (let i = 0; i < n; ++i) {
-        const si = singularValues[i];
-        scale[i] = si > wmin ? tmp[i] / (si * si) : 0.0;
-      }
-      const result = new Float64Array(n);
-      for (let j = 0; j < n; ++j) {
-        let sum = 0.0;
-        for (let i = 0; i < n; ++i) sum += rightVectors[j * n + i] * scale[i];
-        result[j] = sum;
-      }
-      return result;
-    };
-
-    const relativeLinearResidual = (correction) => {
-      let residualSq = 0.0, rhsSq = 0.0;
-      for (let i = 0; i < n; ++i) {
-        let ax = 0.0;
-        for (let j = 0; j < n; ++j) ax += A[i * n + j] * correction[j];
-        const ri = ax - b[i];
-        residualSq += ri * ri;
-        rhsSq += b[i] * b[i];
-      }
-      return Math.sqrt(residualSq / Math.max(rhsSq, 1e-300));
-    };
-
-    let x = solveFromSpectrum(spectrum.s, spectrum.V);
-    let linearError = relativeLinearResidual(x);
-    if (usedFastPath && (!Number.isFinite(linearError) || linearError > 1e-6)) {
-      spectrum = LinAlg.svdJacobiOneSided(n, n, A);
-      if (!spectrum) throw new Error('Robust SVD fallback failed after fast-path rejection.');
-      x = solveFromSpectrum(spectrum.s, spectrum.V);
-      linearError = relativeLinearResidual(x);
-    }
-    if (!Number.isFinite(linearError) || linearError > 1e-4) {
-      throw new Error('Newton linear solve failed its residual verification.');
-    }
+  svdSolve(A,b,n) {
+    const x=LinAlg.svdSolve(A,b,n);
+    this.jacobian_condition=x.condition;
     return x;
   }
 
+  jacobian() {
+    const n=this.n,num=this.num,z=this.z,A=new Float64Array(num*num);
+    const put=(r,c,v)=>{A[(r-1)*num+c-1]=v;};
+    put(1,1,-this.Hoverd);put(1,2,1);
+    put(2,2,1);put(2,3,-2*this.height*z[3]);
+    put(3,3,z[4]);put(3,4,z[3]);
+    put(4,5,1);put(4,7,1);put(4,4,-1);
+    put(5,1,z[6]+z[7]-z[4]);put(5,6,z[1]);put(5,7,z[1]);put(5,4,-z[1]);put(5,8,-1);
+    put(6,this.Current_criterion+4,1);put(6,1,-.5*this.Current/Math.sqrt(z[1]));
+    for(let m=0;m<=n;++m)put(7,10+m,m===0||m===n?1:2);
+    put(8,10,1);put(8,n+10,-1);put(8,2,-1);
+    for(let m=0;m<=n;++m) {
+      const sr=9+m,dr=n+10+m,surface=z[10+m],S=new Float64Array(n),C=new Float64Array(n);
+      let u=0,v=0,duk=0,dvk=0,duy=0,dvy=0,psik=0;
+      for(let j=1;j<=n;++j) {
+        const idx=m*n+j-1,co=this.cos_nm[idx],si=this.sin_nm[idx],bj=z[n+10+j];
+        const ep=Math.exp(j*surface),q=Math.exp(-2*j*z[1]),em=Math.exp(-j*surface-2*j*z[1]),den=1+q;
+        const sj=(ep-em)/den,cj=(ep+em)/den,ds=2*j*(em+q*ep)/(den*den),dc=2*j*(q*ep-em)/(den*den);
+        S[j-1]=sj;C[j-1]=cj;
+        u+=j*bj*cj*co;v+=j*bj*sj*si;psik+=bj*ds*co;
+        duk+=j*bj*dc*co;dvk+=j*bj*ds*si;duy+=j*j*bj*sj*co;dvy+=j*j*bj*cj*si;
+        put(sr,n+10+j,sj*co);
+      }
+      const uw=u-z[7];
+      put(sr,1,psik);put(sr,7,-surface);put(sr,8,-1);put(sr,10+m,uw);
+      put(dr,1,uw*duk+v*dvk);put(dr,7,-uw);put(dr,9,-1);put(dr,10+m,1+uw*duy+v*dvy);
+      for(let j=1;j<=n;++j) {
+        const idx=m*n+j-1;
+        put(dr,n+10+j,j*(uw*C[j-1]*this.cos_nm[idx]+v*S[j-1]*this.sin_nm[idx]));
+      }
+    }
+    return A;
+  }
+
   newtonStep() {
-    const ss0 = this.eqns(this.rhs1);
-    if (!Number.isFinite(ss0)) throw new Error('Non-finite residual norm at start of Newton step.');
-    const residual0 = this.residualInfNorm(this.rhs1);
-    if (residual0 <= FentonStreamFunction.FINAL_RESIDUAL_TOLERANCE) return 0.0;
-    const z0 = copyArray(this.z);
-    const A = new Float64Array(this.num * this.num);
-    const b = new Float64Array(this.num);
-    for (let i = 1; i <= this.num; ++i) b[i - 1] = -this.rhs1[i];
-
-    const zPerturbed = new Float64Array(this.num + 1);
-    const rhsColumn = new Float64Array(this.num + 1);
-    const rhsMinus = new Float64Array(this.num + 1);
-    const tanhWorkspace = new Float64Array(this.n + 1);
-    const centralDifference = residual0 < 1e-1;
-
-    for (let i = 1; i <= this.num; ++i) {
-      if (centralDifference) {
-        let h = 1e-5 * Math.max(Math.abs(z0[i]), 1.0);
-        if (i === 1) h = Math.min(h, 0.25 * z0[1]);
-        if (!(h > 0.0)) h = 1e-7;
-        zPerturbed.set(z0);
-        zPerturbed[i] += h;
-        this.eqnsForState(zPerturbed, rhsColumn, tanhWorkspace);
-        zPerturbed.set(z0);
-        zPerturbed[i] -= h;
-        this.eqnsForState(zPerturbed, rhsMinus, tanhWorkspace);
-        const inv2h = 0.5 / h;
-        for (let r = 1; r <= this.num; ++r) A[(r - 1) * this.num + (i - 1)] = (rhsColumn[r] - rhsMinus[r]) * inv2h;
-      } else {
-        let h = 0.01 * z0[i];
-        if (Math.abs(z0[i]) < 1e-4) h = 1e-5;
-        if (Math.abs(h) > 1.0) h = h < 0 ? -1.0 : 1.0;
-        zPerturbed.set(z0);
-        zPerturbed[i] += h;
-        this.eqnsForState(zPerturbed, rhsColumn, tanhWorkspace);
-        const invH = 1.0 / h;
-        for (let r = 1; r <= this.num; ++r) A[(r - 1) * this.num + (i - 1)] = (rhsColumn[r] - this.rhs1[r]) * invH;
-      }
+    const ss0=this.eqns(this.rhs1);
+    if (!Number.isFinite(ss0)) throw new Error('Non-finite initial residual.');
+    const z0=copyArray(this.z),A=this.jacobian(),b=new Float64Array(this.num);
+    for(let i=1;i<=this.num;++i)b[i-1]=-this.rhs1[i];
+    const trial=copyArray(z0),work=new Float64Array(this.n+1);
+    const dx=this.svdSolve(A,b,this.num);
+    if (!dx.every(Number.isFinite)) throw new Error('Non-finite Newton step.');
+    let best=copyArray(z0);
+    for (let alpha=1.0; alpha>=1e-4; alpha*=0.5) {
+      trial.set(z0);
+      for (let i=1; i<=this.num; ++i) trial[i]+=alpha*dx[i-1];
+      if (!(trial[1]>0) || !trial.every(Number.isFinite)) continue;
+      try {
+        const ss=this.eqnsForState(trial,this.rhs2,work);
+        if (Number.isFinite(ss) && ss<=ss0) { best=copyArray(trial); break; }
+      } catch (e) { continue; }
     }
-
-    const dx = FentonStreamFunction.svdSolve(A, b, this.num);
-    let dxInf = 0.0;
-    for (const value of dx) {
-      if (!Number.isFinite(value)) throw new Error('Non-finite Newton correction vector (dx).');
-      dxInf = Math.max(dxInf, Math.abs(value));
-    }
-    if (!(dxInf > 0.0)) throw new Error('Newton correction vanished while residuals remained non-zero.');
-
-    let alpha = 1.0;
-    let ssBest = ss0;
-    let zBest = copyArray(z0);
-    let improved = false;
-    while (alpha >= 1e-6) {
-      const zTry = copyArray(z0);
-      for (let i = 1; i <= this.num; ++i) zTry[i] = z0[i] + alpha * dx[i - 1];
-      let ok = zTry[1] > 0.0;
-      if (ok) for (let i = 1; i <= this.num; ++i) if (!Number.isFinite(zTry[i])) { ok = false; break; }
-      if (!ok) { alpha *= 0.5; continue; }
-      this.z = zTry;
-      const ss1 = this.eqns(this.rhs2);
-      if (Number.isFinite(ss1) && ss1 < ssBest) {
-        ssBest = ss1;
-        zBest = copyArray(zTry);
-        improved = true;
-      }
-      const armijoLimit = ss0 * (1.0 - 1e-4 * alpha);
-      if (Number.isFinite(ss1) && (ss1 <= armijoLimit || this.residualInfNorm(this.rhs2) <= FentonStreamFunction.FINAL_RESIDUAL_TOLERANCE)) {
-        zBest = copyArray(zTry);
-        ssBest = ss1;
-        improved = true;
-        break;
-      }
-      alpha *= 0.5;
-    }
-    this.z = zBest;
-    if (!improved || !(ssBest < ss0)) {
-      this.z = z0;
-      throw new Error(`Newton line search failed to reduce residuals; ||F||inf = ${residual0.toExponential(3)}, ||F||2^2 = ${ss0.toExponential(3)}.`);
-    }
-    let corr = 0.0;
-    for (let i = 10; i <= this.n + 10; ++i) corr += Math.abs(zBest[i] - z0[i]);
-    return corr / (this.n + 1);
+    let correction=0;
+    for (let i=10; i<=this.n+10; ++i) correction+=Math.abs(best[i]-z0[i]);
+    this.z=best;
+    return correction/(this.n+1);
   }
 
   computeYAndB() {
@@ -764,9 +683,9 @@ class FentonStreamFunction {
     let u = 0.0, v = 0.0, ux = 0.0, vx = 0.0;
     for (let j = 1; j <= this.n; ++j) {
       const Cos = Math.cos(j * X), Sin = Math.sin(j * X);
-      const coshdelta = Math.cosh(j * Yloc), sinhdelta = Math.sinh(j * Yloc);
-      const C = coshdelta + sinhdelta * this.Tanh[j];
-      const S = sinhdelta + coshdelta * this.Tanh[j];
+      const a=j*Yloc, b=j*kd;
+      const ep=Math.exp(a), em=Math.exp(-a-2*b), denominator=1+Math.exp(-2*b);
+      const C=(ep+em)/denominator, S=(ep-em)/denominator;
       const Bj = this.B[j];
       u += j * Bj * C * Cos;
       v += j * Bj * S * Sin;
@@ -795,16 +714,14 @@ class FentonStreamFunction {
   }
 
   meanSquareBedOrbitalVelocity(nph = 720) {
-    if (!(this.d > 0.0) || !(this.T_target > 0.0)) return 0.0;
-    const Nph = Math.max(36, nph);
-    let ub2 = 0.0;
-    for (let i = 0; i < Nph; ++i) {
-      const ph = 2.0 * Phys.PI * i / Nph;
-      const kin = this.getKinematics(0.0, ph);
-      const uOrb = kin.u - this.Uc;
-      ub2 += uOrb * uOrb;
+    if (!(this.d>0) || !(this.T_target>0) || !(this.z[1]>0)) return 0;
+    let sum=0;
+    for (let j=1; j<=this.n; ++j) {
+      const e=Math.exp(-j*this.z[1]), sech=2*e/(1+e*e);
+      const amplitude=j*this.B[j]*sech;
+      sum+=amplitude*amplitude;
     }
-    return ub2 / Nph;
+    return 0.5*this.g*this.d/this.z[1]*sum;
   }
 
   momentumFluxSDepth(phase = 0.0, npts = 1200) {
@@ -838,7 +755,6 @@ class FentonStreamFunction {
       return;
     }
     const kdSqrt = Math.sqrt(kd);
-    const cDimless = this.z[4] / kdSqrt;
     const ceDimless = this.z[5] / kdSqrt;
     const csDimless = this.z[6] / kdSqrt;
     const ubarDimless = this.z[7] / kdSqrt;
@@ -848,11 +764,11 @@ class FentonStreamFunction {
     const pulse = this.z[8] + kd * this.z[5];
     const ke = 0.5 * (this.z[4] * pulse - this.z[5] * QDimless * kd32);
     let pe = 0.0;
-    for (let i = 1; i <= this.n; ++i) pe += 0.25 * this.Y[i] * this.Y[i];
-    const ub2Alg = 2.0 * this.z[9] - this.z[4] * this.z[4];
-    const qTerm = this.z[7] * kd - this.z[8];
-    const sxx = 4.0 * ke - 3.0 * pe + ub2Alg * kd + 2.0 * this.z[5] * qTerm;
-    const f = this.z[4] * (3.0 * ke - 2.0 * pe) + 0.5 * ub2Alg * (pulse + this.z[4] * kd) + this.z[4] * this.z[5] * qTerm;
+    for (let i=1; i<this.n; ++i) pe+=0.25*this.Y[i]*this.Y[i];
+    pe+=this.Y[this.n]*this.Y[this.n]/16;
+    const beta=2*this.z[9]-this.z[4]*this.z[4]+2*this.z[4]*this.z[5];
+    const sxx=4*ke-3*pe+beta*kd-2*this.z[5]*pulse;
+    const f=this.z[4]*(3*ke-2*pe)+0.5*beta*(pulse+this.z[4]*kd)-2*this.z[4]*this.z[5]*pulse;
     const kd2 = kd * kd;
     const kd25 = kd2 * kdSqrt;
     this.E_depth = (ke + pe) / kd2;
@@ -869,7 +785,7 @@ class FentonStreamFunction {
     this.Impulse = Phys.RHO * Math.sqrt(this.g * Math.pow(this.d, 3.0)) * this.I_depth;
     this.BernoulliR = RDimless * this.g * this.d;
     this.MassTransport = csDimless * Math.sqrt(this.g * this.d);
-    this.EulerianCurrent = this.Uc;
+    this.EulerianCurrent = ceDimless*Math.sqrt(this.g*this.d);
     this.StokesCurrent = this.MassTransport;
     this.MeanFluidSpeed = ubarDimless * Math.sqrt(this.g * this.d);
     this.VolumeFluxQ = QDimless * Math.sqrt(this.g * Math.pow(this.d, 3.0));
@@ -878,73 +794,49 @@ class FentonStreamFunction {
     this.KineticEnergy = Phys.RHO * this.g * this.d * this.d * this.KE_depth;
     this.PotentialEnergy = Phys.RHO * this.g * this.d * this.d * this.PE_depth;
     this.MeanSquareBedVelocity = this.meanSquareBedOrbitalVelocity(720);
+    this.MeanSquareBedAbsoluteVelocity = this.MeanSquareBedVelocity+this.EulerianCurrent*this.EulerianCurrent;
     this.Cg = Math.abs(this.EnergyDensity) > 1e-12 ? this.Power / this.EnergyDensity : 0.0;
-    void cDimless; void ceDimless;
   }
 
   solveInternal() {
-    const dhe = this.Height / this.nstep;
-    const dho = this.MaxH / this.nstep;
-    for (let ns = 1; ns <= this.nstep; ++ns) {
-      this.height = ns * dhe;
-      this.Hoverd = ns * dho;
-      if (ns === 1) {
-        this.initLinear();
-      } else {
-        for (let i = 1; i <= this.num; ++i) this.z[i] = 2.0 * this.SOL(i, 2) - this.SOL(i, 1);
-        if (!(this.z[1] > 0.0)) for (let i = 1; i <= this.num; ++i) this.z[i] = this.SOL(i, 2);
-        if (!(this.z[1] > 0.0)) throw new Error('Invalid extrapolated start state for continuation step.');
-        let invalid = false;
-        for (let i = 1; i <= this.num; ++i) if (!Number.isFinite(this.z[i])) { invalid = true; break; }
-        if (invalid) for (let i = 1; i <= this.num; ++i) this.z[i] = this.SOL(i, 2);
-        for (let i = 1; i <= this.num; ++i) if (!Number.isFinite(this.z[i])) throw new Error('Invalid extrapolated start state for continuation step.');
+    let fraction=0,increment=1/Math.max(1,this.nstep),previousFraction=0,attempts=0;
+    let accepted=null,previous=null;
+    while(fraction<1) {
+      ++attempts;
+      const target=Math.min(1,fraction+increment);
+      this.height=target*this.Height;this.Hoverd=target*this.MaxH;
+      if(!accepted)this.initLinear();
+      else {
+        this.z.set(accepted);
+        if(previous) {
+          const ratio=(target-fraction)/(fraction-previousFraction);
+          for(let i=1;i<=this.num;++i)this.z[i]+=ratio*(accepted[i]-previous[i]);
+        }
+        if(!(this.z[1]>0)||!this.z.every(Number.isFinite))this.z.set(accepted);
       }
-
-      let stepConverged = false;
-      for (let it = 1; it <= this.number; ++it) {
+      let stepConverged=false;
+      const residualLimit=target===1?FentonStreamFunction.FINAL_RESIDUAL_TOLERANCE:FentonStreamFunction.INTERMEDIATE_RESIDUAL_TOLERANCE;
+      const correctionLimit=target===1?this.criter_final:this.crit;
+      for(let it=1;it<=this.number;++it) {
         let err;
         try {
-          err = this.newtonStep(it);
-        } catch (e) {
-          if (ns > 1 && it === 1) {
-            for (let i = 1; i <= this.num; ++i) this.z[i] = this.SOL(i, 2);
-            err = this.newtonStep(it);
-          } else throw e;
+          err=this.newtonStep();
+          if(!Number.isFinite(this.eqns(this.rhs1)))break;
+          this.max_residual=this.residualInfNorm(this.rhs1);
+        } catch(e) {break;}
+        if(it>1&&err<correctionLimit*Math.abs(this.z[1])&&this.max_residual<=residualLimit) {
+          stepConverged=true;break;
         }
-        if (!Number.isFinite(err)) throw new Error('Non-finite Newton correction.');
-        if (ns === 1) {
-          for (let i = 1; i <= this.num; ++i) this.setSOL(i, 2, this.z[i]);
-        } else {
-          for (let i = 1; i <= this.num; ++i) this.setSOL(i, 1, this.SOL(i, 2));
-          for (let i = 1; i <= this.num; ++i) this.setSOL(i, 2, this.z[i]);
-        }
-        if (!(this.z[1] > 0.0)) throw new Error('Divergence: invalid state vector encountered.');
-        for (let i = 1; i <= this.num; ++i) if (!Number.isFinite(this.z[i])) throw new Error('Divergence: non-finite state vector encountered.');
-        const residualSS = this.eqns(this.rhs2);
-        if (!Number.isFinite(residualSS)) throw new Error('Non-finite nonlinear residual after Newton update.');
-        const residualNow = this.residualInfNorm(this.rhs2);
-        this.max_residual = residualNow;
-        const correctionCriterion = ns === this.nstep ? this.criter_final : this.crit;
-        const residualCriterion = ns === this.nstep ? FentonStreamFunction.FINAL_RESIDUAL_TOLERANCE : FentonStreamFunction.INTERMEDIATE_RESIDUAL_TOLERANCE;
-        if (it > 1 && err < correctionCriterion * Math.max(Math.abs(this.z[1]), 1.0) && residualNow <= residualCriterion) {
-          stepConverged = true;
-          break;
-        }
+        if(err===0&&this.max_residual>residualLimit)break;
       }
-      if (!stepConverged) {
-        if (this.z[1] > 0.0 && Number.isFinite(this.z[1])) {
-          const candidateLambdaOverD = 2.0 * Phys.PI / this.z[1];
-          const candidateHmOverD = FentonStreamFunction.fentonHighestHoverd(candidateLambdaOverD);
-          if (candidateHmOverD > 0.0 && Number.isFinite(candidateHmOverD)) {
-            const candidateRatio = this.Hoverd / candidateHmOverD;
-            if (candidateRatio >= 1.0) throw new Error(`Continuation reached the highest-wave boundary: H/Hm = ${candidateRatio.toFixed(6)}.`);
-            if (ns === this.nstep && candidateRatio > FentonStreamFunction.FOURIER_APPLICABILITY_FRACTION) {
-              throw new Error(`Target is outside the accepted Fourier range: H/Hm = ${candidateRatio.toFixed(6)} exceeds 0.980000.`);
-            }
-          }
-        }
-        throw new Error('Newton did not converge within iteration budget.');
+      if(!stepConverged) {
+        increment*=.5;
+        if(increment<1/4096||attempts>=80)throw new Error(`No converged solution at H=${this.H_target} m, T=${this.T_target} s, Uc=${this.Uc} m/s. Height continuation reached H=${(fraction*this.H_target).toPrecision(6)} m; max|F|=${this.max_residual.toExponential(3)}. The requested wave may be near or beyond the limiting wave height; reduce H or increase T.`);
+        continue;
       }
+      previousFraction=fraction;previous=accepted;
+      fraction=target;accepted=copyArray(this.z);this.continuation_fraction=fraction;
+      increment=Math.min(increment*1.5,1/Math.max(1,this.nstep));
       this.computeYAndB();
     }
 
@@ -952,13 +844,9 @@ class FentonStreamFunction {
     if (!Number.isFinite(finalSS)) throw new Error('Final nonlinear residual norm is non-finite.');
     this.max_residual = this.residualInfNorm(this.rhs1);
     if (this.max_residual > FentonStreamFunction.FINAL_RESIDUAL_TOLERANCE) {
-      throw new Error(`False convergence rejected: maximum residual = ${this.max_residual.toExponential(3)}, tolerance = 1.000e-8.`);
+      throw new Error(`False convergence rejected: maximum residual = ${this.max_residual.toExponential(3)}, tolerance = 1.000e-10.`);
     }
     this.surface_tail_coefficient = Math.abs(this.Y[this.n]);
-    if (!Number.isFinite(this.surface_tail_coefficient) || this.surface_tail_coefficient > FentonStreamFunction.SURFACE_TAIL_TOLERANCE) {
-      throw new Error(`Fourier order N=${this.n} is insufficient: |E_N| = ${this.surface_tail_coefficient.toExponential(3)} exceeds 1.000e-4.`);
-    }
-
     const kd = this.z[1];
     if (!(kd > 0.0) || !Number.isFinite(kd)) throw new Error('Invalid wavenumber (kd).');
     const kPhys = kd / this.d;
@@ -1002,22 +890,6 @@ class FentonStreamFunction {
     this.ursell = this.H_target * this.L * this.L / (this.d * this.d * this.d);
     this.regime = this.rel_depth < 0.05 ? 'Shallow' : (this.rel_depth < 0.5 ? 'Intermediate' : 'Deep');
 
-    const heightError = Math.abs((this.eta_crest - this.eta_trough) - this.H_target);
-    const heightTolerance = 1e-7 * Math.max(1.0, this.H_target);
-    if (heightError > heightTolerance) throw new Error('Converged state failed the dimensional wave-height closure check.');
-    let minWaterColumn = Infinity;
-    for (const e of this.eta_nodes) minWaterColumn = Math.min(minWaterColumn, e);
-    if (!(minWaterColumn > 0.0) || !Number.isFinite(minWaterColumn)) throw new Error('Physically inadmissible surface: the free surface reaches or crosses the bed.');
-    let previous = this.surfaceKeta(0.0);
-    const monotonicTolerance = 1e-7 * Math.max(1.0, Math.abs(this.z[2]));
-    for (let i = 1; i <= 1000; ++i) {
-      const X = Phys.PI * i / 1000.0;
-      const currentSurface = this.surfaceKeta(X);
-      if (!Number.isFinite(currentSurface)) throw new Error('Non-finite reconstructed free surface.');
-      if (currentSurface > previous + monotonicTolerance) throw new Error('Non-physical or aliased free surface: profile is not monotonic from crest to trough.');
-      previous = currentSurface;
-    }
-
     const highestHoverd = FentonStreamFunction.fentonHighestHoverd(this.L / this.d);
     if (!(highestHoverd > 0.0) || !Number.isFinite(highestHoverd)) throw new Error('Could not evaluate the theoretical highest-wave limit.');
     this.highest_wave_limit_fenton = highestHoverd * this.d;
@@ -1025,44 +897,225 @@ class FentonStreamFunction {
     this.highest_wave_ratio = this.H_target / this.highest_wave_limit_fenton;
     this.near_limiting_wave = this.highest_wave_ratio >= 0.90;
     this.practical_breaking_risk = this.MaxH > 0.55;
-    if (!(this.highest_wave_ratio < 1.0)) throw new Error(`No regular steady-wave solution exists at the computed wavelength: H/Hm = ${this.highest_wave_ratio.toFixed(6)} (Hm = ${this.highest_wave_limit_fenton.toFixed(6)} m).`);
-    if (this.highest_wave_ratio > FentonStreamFunction.FOURIER_APPLICABILITY_FRACTION) throw new Error(`Target wave is too close to the theoretical limiting wave for a rigorous N=${this.n} solution: H/Hm = ${this.highest_wave_ratio.toFixed(6)} exceeds the 0.980000 acceptance limit.`);
+    this.breaking_limit_miche = 0.142*this.L*Math.tanh(this.k*this.d);
+    this.breaking_index = this.breaking_limit_miche>0 ? this.H_target/this.breaking_limit_miche : 0;
+    this.is_breaking = this.breaking_limit_miche>0 && this.H_target>this.breaking_limit_miche;
 
     this.calcIntegralProps();
-    this.u_bed = this.getKinematics(0.0, 0.0).u;
-    const cfEst = 0.005;
-    this.tau_bed = 0.5 * Phys.RHO * cfEst * this.u_bed * this.u_bed;
-    this.ExcursionBed = Math.abs(this.u_bed) * this.T_target / (2.0 * Phys.PI);
-    this.u_surf = this.getKinematics(this.d + this.eta_crest, 0.0).u;
-    const uTrough = this.getKinematics(this.d + this.eta_trough, Phys.PI).u;
-    this.asymmetry = Math.abs(uTrough) > 0.0 ? Math.abs(this.u_surf / uTrough) : 0.0;
-    const intrinsicPhaseSpeed = this.c - this.Uc;
-    if (!(intrinsicPhaseSpeed > 0.0) || !Number.isFinite(intrinsicPhaseSpeed)) throw new Error('No propagating-wave solution: intrinsic phase speed c-Uc is not positive.');
-    this.crest_stagnation_margin = this.c - this.u_surf;
-    const stagnationTolerance = 1e-8 * Math.max(Math.sqrt(this.g * this.d), Math.abs(this.c));
-    if (!(this.crest_stagnation_margin > stagnationTolerance) || !Number.isFinite(this.crest_stagnation_margin)) throw new Error('Limiting-wave stagnation reached: crest particle velocity is not below wave celerity.');
-    this.acc_max = 0.0;
-    this.w_max = 0.0;
-    for (let i = 0; i < 40; ++i) {
-      const X = i * Phys.PI / 39.0;
-      const kEta = this.surfaceKeta(X);
-      const zSurf = this.d * (1.0 + kEta / kd);
-      const kin = this.getKinematics(zSurf, X);
-      this.acc_max = Math.max(this.acc_max, Math.abs(kin.ax));
-      this.w_max = Math.max(this.w_max, Math.abs(kin.w));
+    this.u_bed_crest=this.getKinematics(0,0).u;
+    this.u_surf_crest=this.getKinematics(this.d+this.eta_crest,0).u;
+    this.computeExtrema();
+    this.tau_bed=.5*Phys.RHO*.005*this.u_bed*this.u_bed;
+    this.ExcursionBed=this.phaseMaximum('bed_orbital')[0]*this.T_target/(2*Math.PI);
+    const uTrough=this.getKinematics(this.d+this.eta_trough,Math.PI).u;
+    this.asymmetry=Math.abs(uTrough)>0 ? Math.abs(this.u_surf_crest/uTrough) : 0;
+    this.crest_stagnation_margin=this.c-this.u_surf_crest;
+    const outputs=['L','k','c','Power','Sxx','EnergyDensity','Cg','Impulse',
+      'PotentialEnergy','KineticEnergy','MeanSquareBedVelocity','MomentumFlux',
+      'u_bed','u_surf','acc_max','acc_bed_max','w_max'];
+    if (!outputs.every(key=>Number.isFinite(this[key]))) throw new Error('Non-finite dimensional output.');
+    if (!Number.isFinite(this.eqns(this.rhs1))) throw new Error('Non-finite final residual.');
+    this.max_residual=this.residualInfNorm(this.rhs1);
+    if (this.max_residual>FentonStreamFunction.FINAL_RESIDUAL_TOLERANCE) throw new Error('Final residual exceeds tolerance.');
+  }
+
+  phaseQuantity(phase,quantity) {
+    let value;
+    if(quantity==='bed' || quantity==='bed_orbital' || quantity==='bed_acceleration') {
+      const values=this.getKinematics(0,phase);
+      value=quantity==='bed_acceleration' ? values.ax : values.u;
+      if(quantity==='bed_orbital') value-=this.EulerianCurrent;
+    } else {
+      const top=this.d*(1+this.surfaceKeta(phase)/this.z[1]);
+      value=this.getKinematics(top,phase)[{surface:'u',vertical:'w',acceleration:'ax'}[quantity]];
     }
+    if(!Number.isFinite(value)) throw new Error('Non-finite phase evaluation.');
+    return Math.abs(value);
+  }
+
+  phaseMaximum(quantity) {
+    const count=Math.max(257,8*this.n+1),phases=[],values=[];
+    let best=-Infinity,phase=0;
+    const retain=(value,x)=>{if(value>best){best=value;phase=x;}};
+    for(let i=0;i<count;++i) {
+      const x=i*Math.PI/(count-1),value=this.phaseQuantity(x,quantity);
+      phases.push(x);values.push(value);retain(value,x);
+    }
+    const golden=(Math.sqrt(5)-1)/2;
+    for(let i=1;i<count-1;++i) {
+      if(!(values[i]>=values[i-1] && values[i]>=values[i+1] && (values[i]>values[i-1]||values[i]>values[i+1]))) continue;
+      let left=phases[i-1],right=phases[i+1],x1=right-golden*(right-left),x2=left+golden*(right-left);
+      let f1=this.phaseQuantity(x1,quantity),f2=this.phaseQuantity(x2,quantity);
+      retain(f1,x1);retain(f2,x2);
+      for(let step=0;step<64 && right-left>=1e-12;++step) {
+        if(f1<f2) { left=x1;x1=x2;f1=f2;x2=left+golden*(right-left);f2=this.phaseQuantity(x2,quantity); }
+        else { right=x2;x2=x1;f2=f1;x1=right-golden*(right-left);f1=this.phaseQuantity(x1,quantity); }
+        retain(f1,x1);retain(f2,x2);
+      }
+    }
+    return [best,phase];
+  }
+
+  computeExtrema() {
+    this.extrema_phases={};
+    for(const [quantity,attribute] of [['bed','u_bed'],['surface','u_surf'],['vertical','w_max'],['acceleration','acc_max'],['bed_acceleration','acc_bed_max']]) {
+      const [value,phase]=this.phaseMaximum(quantity);
+      this[attribute]=value;this.extrema_phases[quantity]=phase;
+    }
+  }
+
+  definingIntegrals(phaseCount,verticalCount) {
+    const {nodes,weights}=gaussLegendre(verticalCount),n=this.n;
+    const totals={Impulse:0,KineticEnergy:0,PotentialEnergy:0,Sxx:0,Power:0};
+    const amplitudes=new Float64Array(n+1),denominators=new Float64Array(n+1);
+    for(let j=1;j<=n;++j) { amplitudes[j]=j*this.B[j]*Math.sqrt(this.g/this.k);denominators[j]=1+Math.exp(-2*j*this.z[1]); }
+    for(let m=0;m<phaseCount;++m) {
+      const phase=2*Math.PI*m/phaseCount,eta=this.surfaceKeta(phase)/this.k,thickness=(this.d+eta)/2;
+      if(!(thickness>0) || !Number.isFinite(thickness)) throw new Error('The interpolated surface intersects the bed.');
+      const cosine=new Float64Array(n+1),sine=new Float64Array(n+1);
+      for(let j=1;j<=n;++j) { cosine[j]=Math.cos(j*phase);sine[j]=Math.sin(j*phase); }
+      totals.PotentialEnergy+=.5*Phys.RHO*this.g*eta*eta/phaseCount;
+      for(let l=0;l<verticalCount;++l) {
+        const y=-this.d+thickness*(nodes[l]+1),weight=weights[l]*thickness/phaseCount;
+        let u=this.EulerianCurrent,v=0;
+        for(let j=1;j<=n;++j) {
+          const a=j*this.k*y,b=j*this.z[1],positive=Math.exp(a),reflected=Math.exp(-a-2*b);
+          u+=amplitudes[j]*(positive+reflected)/denominators[j]*cosine[j];
+          v+=amplitudes[j]*(positive-reflected)/denominators[j]*sine[j];
+        }
+        const pressure=Phys.RHO*(this.Bernoulli_r-this.g*y-.5*((u-this.c)**2+v*v));
+        const kinetic=.5*Phys.RHO*(u*u+v*v);
+        totals.Impulse+=weight*Phys.RHO*u;
+        totals.KineticEnergy+=weight*kinetic;
+        totals.Sxx+=weight*(pressure+Phys.RHO*u*u);
+        totals.Power+=weight*(pressure+Phys.RHO*this.g*y+kinetic)*u;
+      }
+    }
+    totals.Sxx-=.5*Phys.RHO*this.g*this.d*this.d;
+    return totals;
+  }
+
+  verifyFiniteSystem() {
+    const I=x=>new Verified.Interval(x),z=Array.from(this.z,I),n=this.n;
+    const H=I(this.H_target),T=I(this.T_target),depth=I(this.d),current=I(this.Uc),gravity=I(this.g),density=I(Phys.RHO);
+    const F=Array.from({length:2*n+10},()=>I(0));
+    F[0]=z[2].sub(z[1].mul(H).div(depth));
+    F[1]=z[2].sub(H.div(gravity.mul(T.square())).mul(z[3].square()));
+    F[2]=z[4].mul(z[3]).sub(Verified.pi().mul(2));
+    F[3]=z[5].add(z[7]).sub(z[4]);
+    F[4]=z[1].mul(z[6].add(z[7]).sub(z[4])).sub(z[8]);
+    F[5]=z[this.Current_criterion+4].sub(current.div(gravity.mul(depth).sqrt()).mul(z[1].sqrt()));
+    let middle=I(0);
+    for(let m=11;m<n+10;++m) middle=middle.add(z[m]);
+    F[6]=z[10].add(z[n+10]).add(middle.mul(2));
+    F[7]=z[10].sub(z[n+10]).sub(z[2]);
+    const table=Verified.collocation(n),denominators=[];
+    for(let j=1;j<=n;++j) denominators.push(z[1].mul(-2*j).exp().add(1));
+    for(let m=0;m<=n;++m) {
+      const ordinate=z[m+10];let psi=I(0),u=I(0),v=I(0);
+      for(let j=1;j<=n;++j) {
+        const ep=ordinate.mul(j).exp(),em=ordinate.mul(-j).sub(z[1].mul(2*j)).exp();
+        const S=ep.sub(em).div(denominators[j-1]),C=ep.add(em).div(denominators[j-1]);
+        const [sine,cosine]=table[(m*j)%(2*n)],coefficient=z[n+10+j];
+        psi=psi.add(coefficient.mul(S).mul(cosine));
+        u=u.add(coefficient.mul(j).mul(C).mul(cosine));
+        v=v.add(coefficient.mul(j).mul(S).mul(sine));
+      }
+      F[8+m]=psi.sub(z[8]).sub(z[7].mul(ordinate));
+      F[n+9+m]=u.sub(z[7]).square().add(v.square()).div(2).add(ordinate).sub(z[9]);
+    }
+    const k=z[1].div(depth),speed=gravity.div(k).sqrt(),scale=density.mul(gravity).div(k.square());
+    const pulse=z[8].add(z[1].mul(z[5])),flux=z[7].mul(z[1]).sub(z[8]);
+    const kinetic=z[4].mul(pulse).sub(z[5].mul(flux)).div(2);
+    let potential=I(0);
+    for(let j=1;j<n;++j) potential=potential.add(I(this.Y[j]).square().div(4));
+    potential=potential.add(I(this.Y[n]).square().div(16));
+    const beta=z[9].mul(2).sub(z[4].square()).add(z[4].mul(2).mul(z[5]));
+    const stress=kinetic.mul(4).sub(potential.mul(3)).add(beta.mul(z[1])).sub(z[5].mul(2).mul(pulse));
+    const power=z[4].mul(kinetic.mul(3).sub(potential.mul(2))).add(beta.mul(pulse.add(z[4].mul(z[1]))).div(2)).sub(z[4].mul(2).mul(z[5]).mul(pulse));
+    let bed=I(0);
+    for(let j=1;j<=n;++j) {
+      const inverseCosh=z[1].mul(-j).exp().mul(2).div(denominators[j-1]);
+      bed=bed.add(z[n+10+j].mul(j).mul(inverseCosh).square().div(2));
+    }
+    const outputs={L:Verified.pi().mul(2).div(k),c:z[4].mul(speed),Impulse:density.mul(speed).div(k).mul(pulse),
+      KineticEnergy:scale.mul(kinetic),PotentialEnergy:scale.mul(potential),EnergyDensity:scale.mul(kinetic.add(potential)),
+      Sxx:scale.mul(stress),Power:scale.mul(speed).mul(power),MeanSquareBedVelocity:gravity.div(k).mul(bed)};
+    const upper=Math.max(...F.map(value=>value.magnitude())),tolerance=Verified.down(1e-10),checks={};
+    let passed=upper<=tolerance;
+    for(const [name,enclosure] of Object.entries(outputs)) {
+      const error=I(this[name]).sub(enclosure).magnitude();
+      const minimum=enclosure.lo<=0 && enclosure.hi>=0 ? 0 : Math.min(Math.abs(enclosure.lo),Math.abs(enclosure.hi));
+      const budget=Verified.down(Verified.down(1e-7)+Verified.down(Verified.down(1e-8)*minimum));
+      checks[name]={interval:enclosure.record(),reported:this[name],error_upper:error,budget_lower:budget};
+      passed=passed && error<=budget;
+    }
+    this.finite_system_certificate={
+      arithmetic:'Outward-rounded IEEE binary64 intervals',
+      scope:'Residual at the stored finite Fourier state; nine selected finite-formula output enclosures',
+      root_existence_proved:false,order:n,equation_count:F.length,residual_intervals:F.map(value=>value.record()),
+      residual_upper:upper,residual_tolerance:tolerance,outputs:checks,passed,
+      state:Array.from(this.z),surface_coefficients:Array.from(this.Y.slice(0,n+1))
+    };
+    this.finite_system_verified=passed;
+    return passed;
+  }
+
+  verifyAccuracy() {
+    this.accuracy_verified=false;this.finite_system_verified=false;this.finite_system_certificate={};
+    const failures=[],metrics={},n=this.n,count=Math.max(2048,32*n);
+    let boundary=0;
+    for(let m=0;m<count;++m) {
+      const phase=m*2*Math.PI/count,eta=this.surfaceKeta(phase);
+      let psi=0,u=0,v=0;
+      for(let j=1;j<=n;++j) {
+        const positive=Math.exp(j*eta),reflected=Math.exp(-j*eta-2*j*this.z[1]),denominator=1+Math.exp(-2*j*this.z[1]);
+        const S=(positive-reflected)/denominator,C=(positive+reflected)/denominator,co=Math.cos(j*phase),si=Math.sin(j*phase);
+        psi+=this.B[j]*S*co;u+=j*this.B[j]*C*co;v+=j*this.B[j]*S*si;
+      }
+      boundary=Math.max(boundary,Math.abs(psi-this.z[8]-this.z[7]*eta),Math.abs(.5*((u-this.z[7])**2+v*v)+eta-this.z[9]));
+    }
+    metrics.surface_residual=boundary;
+    if(!Number.isFinite(boundary)||boundary>1e-6) failures.push('interpolated-surface residual exceeds 1e-6');
+    const beta=this.MeanSquareBedAbsoluteVelocity;
+    const reference={Power:this.c*(3*this.KineticEnergy-2*this.PotentialEnergy)+.5*beta*(this.Impulse+Phys.RHO*this.c*this.d)-2*this.c*this.EulerianCurrent*this.Impulse,
+      Sxx:4*this.KineticEnergy-3*this.PotentialEnergy+Phys.RHO*beta*this.d-2*this.EulerianCurrent*this.Impulse};
+    for(const [name,expected] of Object.entries(reference)) {
+      const error=Math.abs(this[name]-expected),budget=1e-7+1e-8*Math.abs(expected);
+      metrics[name+'_spectral_ratio']=error/budget;
+      if(!Number.isFinite(error)||error>budget) failures.push(name+' spectral-bed comparison exceeds its budget');
+    }
+    const coarse=this.definingIntegrals(Math.max(256,8*n),64),fine=this.definingIntegrals(Math.max(512,16*n),96);
+    for(const [name,expected] of Object.entries(fine)) {
+      const budget=1e-7+1e-8*Math.abs(expected),difference=Math.abs(expected-coarse[name]),error=Math.abs(this[name]-expected);
+      metrics[name+'_quadrature_ratio']=difference/budget;metrics[name+'_integral_ratio']=error/budget;
+      if(!Number.isFinite(difference)||!Number.isFinite(error)||Math.max(difference,error)>budget) failures.push(name+' defining-integral comparison exceeds its budget');
+    }
+    if(!this.verifyFiniteSystem()) failures.push('finite-system interval verification exceeds its budget');
+    const certificate=this.finite_system_certificate;
+    metrics.finite_residual_ratio=Verified.up(certificate.residual_upper/certificate.residual_tolerance);
+    metrics.finite_output_ratio=Math.max(...Object.values(certificate.outputs).map(check=>Verified.up(check.error_upper/check.budget_lower)));
+    this.accuracy_metrics=metrics;
+    if(failures.length) {
+      this.converged=false;this.solution_status='resolution_failure';
+      this.last_error='The collocation system converged, but the available Fourier resolution does not satisfy the output accuracy budgets: '+failures.join('; ')+'.';
+      return;
+    }
+    this.accuracy_verified=true;this.solution_status='verified_numerically';
   }
 
   toSerializable() {
     const scalarKeys = [
-      'H_target','T_target','d','Uc','g','N','nstep','number','Current_criterion','MaxH','T_nd','Height','Current',
+      'requested_order','jacobian_condition','continuation_fraction','numerical_note','H_target','T_target','d','Uc','g','N','nstep','number','Current_criterion','MaxH','T_nd','Height','Current',
       'k','L','c','eta_crest','eta_trough','steepness','rel_depth','ursell','regime',
       'highest_wave_limit_fenton','highest_wave_ratio','fourier_accuracy_limit','surface_tail_coefficient','max_residual','crest_stagnation_margin',
       'near_limiting_wave','practical_breaking_risk','EulerianCurrent','StokesCurrent','MeanFluidSpeed','WaveVolumeFlux_q','VolumeFluxQ',
       'BernoulliR','Bernoulli_r','KineticEnergy','PotentialEnergy','EnergyDensity','MomentumFlux','MomentumFluxDepth','Sxx','Sxx_depth',
       'Impulse','I_depth','Power','F_depth','Cg','E_depth','KE_depth','PE_depth','MassTransport','MeanSquareBedVelocity',
-      'u_bed','u_surf','acc_max','w_max','asymmetry','tau_bed','ExcursionBed','converged','last_error'
+      'u_bed','u_surf','acc_max','acc_bed_max','w_max','asymmetry','tau_bed','ExcursionBed','breaking_limit_miche','breaking_index','MeanSquareBedAbsoluteVelocity','is_breaking','converged','last_error'
     ];
+    scalarKeys.push('u_bed_crest','u_surf_crest','extrema_phases','accuracy_verified','accuracy_metrics',
+      'finite_system_verified','finite_system_certificate','solution_status');
     const out = {};
     for (const k of scalarKeys) out[k] = this[k];
     out.kd = this.kdDimless();
@@ -1142,7 +1195,7 @@ function getInputs(){
 function run(){
   let input;
   try{input=getInputs();}catch(e){finishError(e.message);return;}
-  $('calculate').disabled=true; $('parity').textContent=''; setStatus('Initialising the 110-equation solver…','busy');
+  $('calculate').disabled=true; $('parity').textContent=''; setStatus('Initialising the nonlinear solver…','busy');
   makeWorker(); worker.postMessage({type:'solve',...input});
 }
 function handleWorkerMessage(e){
@@ -1154,13 +1207,15 @@ function handleWorkerMessage(e){
     const issues=[];
     if(!m.noCurrent.converged) issues.push('[No current] '+(m.noCurrent.last_error||'Did not converge.'));
     if(m.withCurrent && !m.withCurrent.converged) issues.push('[With current] '+(m.withCurrent.last_error||'Did not converge.'));
-    if(issues.length){finishError(issues.join(' '),m);return;}
-    lastPayload=m; renderAll(m); setStatus('Full nonlinear system solved and independently validated.','ok');
+    if(!activeCase(m)){finishError(issues.join(' '),m);return;}
+    lastPayload=m; renderAll(m);
+    setStatus(issues.length?'Results shown for accepted cases only. '+issues.join(' '):'Finite-system and output accuracy checks passed.',issues.length?'bad':'ok');
   }
 }
 function finishError(message,payload=null){
   $('calculate').disabled=false; setStatus(message,'bad');
-  if(payload) lastPayload=payload;
+  lastPayload=payload;lastReport=message;
+  initialiseDashboard();$('parity').textContent='';$('reportText').textContent=message;
 }
 
 function fmt(v,digits=10){
@@ -1184,13 +1239,17 @@ function initialiseDashboard(){
   $('fourierTable').innerHTML='<tbody></tbody>';
   $('stateTable').innerHTML='<tbody></tbody>';
   $('reportText').textContent='';
+  const canvas=$('profile');canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height);
   $('resultsContext').textContent='Enter the wave conditions and run the nonlinear solver.';
 }
-function activeCase(p){return p.withCurrent||p.noCurrent;}
+function validCase(s){return s&&s.converged&&s.accuracy_verified&&s.finite_system_verified?s:null;}
+function activeCase(p){return validCase(p.withCurrent)||validCase(p.noCurrent);}
+function caseEntries(p){return [['No current',validCase(p.noCurrent)],['With current',validCase(p.withCurrent)]].filter(([,s])=>s);}
+function caseIssues(p){return [['No current',p.noCurrent],['With current',p.withCurrent]].filter(([,s])=>s&&!s.converged).map(([name,s])=>`[${name}] ${s.last_error||'Did not converge.'}`);}
 
 function renderAll(p){
   const s=activeCase(p);
-  $('resultsContext').textContent=p.withCurrent?`Primary values shown for Uc = ${fmt(p.input.Uc,6)} m/s; detailed tables compare both cases.`:'Primary values shown for the no-current calculation.';
+  $('resultsContext').textContent=`Primary values: ${s===p.withCurrent?'with current':'no current'}; Fourier order N=${s.N}. Unavailable results are shown as —.`;
   $('summary').innerHTML=[
     metric('Wavelength L',s.L,'m',true),metric('Celerity c',s.c,'m/s',true),metric('Wave number k',s.k,'rad/m'),
     metric('Crest ηc',s.eta_crest,'m SWL'),metric('Trough ηt',s.eta_trough,'m SWL'),metric('H/Hm',s.highest_wave_ratio,'–')
@@ -1211,13 +1270,24 @@ const resultRows=[
   ['section','FLUXES & BERNOULLI CONSTANTS'],
   ['Wave volume flux (q)','WaveVolumeFlux_q','m²/s'],['Volume flux (Q)','VolumeFluxQ','m²/s'],['Bernoulli constant (R)','BernoulliR','m²/s²'],['Reduced Bernoulli (r)','Bernoulli_r','m²/s²'],
   ['section','INTEGRAL QUANTITIES'],
-  ['Kinetic energy','KineticEnergy','J/m²'],['Potential energy','PotentialEnergy','J/m²'],['Total energy','EnergyDensity','J/m²'],['Wave power','Power','W/m'],['Group velocity (F/E)','Cg','m/s'],['Momentum flux','MomentumFlux','N/m'],['Radiation stress Sxx','Sxx','N/m'],['Impulse','Impulse','kg/(m·s)'],
+  ['Kinetic energy','KineticEnergy','J/m²'],['Potential energy','PotentialEnergy','J/m²'],['Total energy','EnergyDensity','J/m²'],['Wave power','Power','W/m'],['Energy-flux velocity (F/E)','Cg','m/s'],['Momentum flux','MomentumFlux','N/m'],['Radiation stress Sxx','Sxx','N/m'],['Impulse','Impulse','kg/(m·s)'],
   ['section','KINEMATICS & ENGINEERING DIAGNOSTICS'],
-  ['Mean-square orbital bed velocity','MeanSquareBedVelocity','m²/s²'],['RMS orbital bed velocity',s=>Math.sqrt(Math.max(0,s.MeanSquareBedVelocity)),'m/s'],['Bed velocity at crest phase','u_bed','m/s'],['Surface velocity at crest','u_surf','m/s'],['Maximum vertical velocity','w_max','m/s'],['Maximum horizontal acceleration','acc_max','m/s²'],['Velocity asymmetry','asymmetry','–'],['Bed shear estimate','tau_bed','Pa'],['Bed excursion estimate','ExcursionBed','m'],
-  ['section','APPLICABILITY & NUMERICAL VALIDATION'],
-  ['Relative depth d/L','rel_depth','–'],['Wave steepness H/L','steepness','–'],['Ursell number','ursell','–'],['Depth regime','regime','–'],['Theoretical highest wave Hm','highest_wave_limit_fenton','m'],['Practical N=50 limit, 0.98 Hm','fourier_accuracy_limit','m'],['H/Hm','highest_wave_ratio','–'],['Last surface coefficient |E_N|','surface_tail_coefficient','–'],['Maximum residual ||F||∞','max_residual','–'],['Crest stagnation margin c−ucrest','crest_stagnation_margin','m/s']
+  ['Surface max |u|','u_surf','m/s'],
+  ['Bed max |u|','u_bed','m/s'],
+  ['Surface max |aₓ|','acc_max','m/s²'],
+  ['Bed max |aₓ|','acc_bed_max','m/s²'],
+  ['Velocity asymmetry |uc|/|ut|','asymmetry','-'],
+  ['Mean square bed orbital vel ub²','MeanSquareBedVelocity','m²/s²'],
+  ['Bed orbital RMS velocity ub,rms',s=>Math.sqrt(Math.max(0,s.MeanSquareBedVelocity)),'m/s'],
+  ['section','APPLICABILITY & NUMERICAL DIAGNOSTICS'],
+  ['Output accuracy checks','accuracy_verified','–'],['Finite-system interval checks','finite_system_verified','–'],
+  ['Finite residual upper bound',s=>s.finite_system_certificate.residual_upper,'–'],
+  ['Interpolated-surface residual',s=>s.accuracy_metrics.surface_residual,'–'],
+  ['Fourier order used','N','–'],['Requested Fourier order','requested_order','–'],['Equilibrated Jacobian condition','jacobian_condition','–'],
+  ['Miche breaking limit Hmax','breaking_limit_miche','m'],['H/Hmax','breaking_index','–'],['Breaking status',s=>s.is_breaking?'ABOVE MICHE':'BELOW MICHE','–'],
+  ['Relative depth d/L','rel_depth','–'],['Wave steepness H/L','steepness','–'],['Ursell number','ursell','–'],['Depth regime','regime','–'],['Theoretical highest wave Hm','highest_wave_limit_fenton','m'],['98% Fenton limiting height','fourier_accuracy_limit','m'],['H/Hm','highest_wave_ratio','–'],['Last surface coefficient |E_N|','surface_tail_coefficient','–'],['Maximum residual ||F||∞','max_residual','–'],['Crest stagnation margin c−ucrest','crest_stagnation_margin','m/s']
 ];
-function valueOf(s,key){return typeof key==='function'?key(s):s[key];}
+function valueOf(s,key){return validCase(s)?(typeof key==='function'?key(s):s[key]):null;}
 function renderEngineering(p){
   const has=!!p.withCurrent;
   let h='<thead><tr><th>Parameter</th><th>No current</th><th>With current</th><th>Unit</th></tr></thead><tbody>';
@@ -1229,18 +1299,19 @@ function renderEngineering(p){
   $('resultsTable').innerHTML=h+'</tbody>';
 }
 function renderSurface(p){
-  const has=!!p.withCurrent, a=p.noCurrent, b=p.withCurrent;
-  let h='<thead><tr><th>m</th><th>Phase</th><th>x/L</th><th>η no current (m SWL)</th><th>η with current (m SWL)</th><th>Water column no current (m)</th><th>Water column with current (m)</th></tr></thead><tbody>';
-  for(let m=0;m<=a.N;m++){
-    const phase=m*Math.PI/a.N, frac=phase/(2*Math.PI);
-    h+=`<tr><td>${m}</td><td>${fmt(phase,8)}</td><td>${fmt(frac,8)}</td><td>${fmt(a.eta_nodes[m]-a.d)}</td><td>${has?fmt(b.eta_nodes[m]-b.d):'—'}</td><td>${fmt(a.eta_nodes[m])}</td><td>${has?fmt(b.eta_nodes[m]):'—'}</td></tr>`;
+  const a=validCase(p.noCurrent),b=validCase(p.withCurrent),N=Math.max(a?.N||0,b?.N||0);
+  let h='<thead><tr><th>Node m</th><th>x/L no current</th><th>η no current (m SWL)</th><th>Water column no current (m)</th><th>x/L with current</th><th>η with current (m SWL)</th><th>Water column with current (m)</th></tr></thead><tbody>';
+  for(let m=0;m<=N;m++){
+    h+=`<tr><td>${m}</td>`;
+    for(const c of [a,b])h+=c&&m<=c.N?`<td>${fmt(m/(2*c.N),8)}</td><td>${fmt(c.eta_nodes[m]-c.d)}</td><td>${fmt(c.eta_nodes[m])}</td>`:'<td>—</td><td>—</td><td>—</td>';
+    h+='</tr>';
   }
   $('surfaceTable').innerHTML=h+'</tbody>';
 }
 function renderFourier(p){
-  const has=!!p.withCurrent;
+  const a=validCase(p.noCurrent),b=validCase(p.withCurrent),N=Math.max(a?.N||0,b?.N||0);
   let h='<thead><tr><th>Mode j</th><th>Bj no current</th><th>Bj with current</th><th>Ej no current</th><th>Ej with current</th></tr></thead><tbody>';
-  for(let j=1;j<=p.noCurrent.N;j++) h+=`<tr><td>${j}</td><td>${fmt(p.noCurrent.Bj[j-1],12)}</td><td>${has?fmt(p.withCurrent.Bj[j-1],12):'—'}</td><td>${fmt(p.noCurrent.Y[j-1],12)}</td><td>${has?fmt(p.withCurrent.Y[j-1],12):'—'}</td></tr>`;
+  for(let j=1;j<=N;j++)h+=`<tr><td>${j}</td><td>${fmt(a?.Bj[j-1],12)}</td><td>${fmt(b?.Bj[j-1],12)}</td><td>${fmt(a?.Y[j-1],12)}</td><td>${fmt(b?.Y[j-1],12)}</td></tr>`;
   $('fourierTable').innerHTML=h+'</tbody>';
 }
 function stateMeaning(i,N){
@@ -1250,9 +1321,13 @@ function stateMeaning(i,N){
   return `Stream-function coefficient B${i-(N+10)}`;
 }
 function renderState(p){
-  const has=!!p.withCurrent,N=p.noCurrent.N;
-  let h='<thead><tr><th>Index</th><th>Meaning</th><th>No current</th><th>With current</th></tr></thead><tbody>';
-  for(let i=1;i<=p.noCurrent.z.length;i++) h+=`<tr><td>z[${i}]</td><td>${stateMeaning(i,N)}</td><td>${fmt(p.noCurrent.z[i-1],13)}</td><td>${has?fmt(p.withCurrent.z[i-1],13):'—'}</td></tr>`;
+  const a=validCase(p.noCurrent),b=validCase(p.withCurrent),count=Math.max(a?.z.length||0,b?.z.length||0);
+  let h='<thead><tr><th>Index</th><th>Meaning: no current</th><th>No current</th><th>Meaning: with current</th><th>With current</th></tr></thead><tbody>';
+  for(let i=1;i<=count;i++){
+    h+=`<tr><td>z[${i}]</td>`;
+    for(const c of [a,b])h+=c&&i<=c.z.length?`<td>${stateMeaning(i,c.N)}</td><td>${fmt(c.z[i-1],13)}</td>`:'<td>—</td><td>—</td>';
+    h+='</tr>';
+  }
   $('stateTable').innerHTML=h+'</tbody>';
 }
 
@@ -1263,27 +1338,40 @@ function buildReport(p){
   const out=[];
   out.push(line,'FENTON NONLINEAR WAVE CALCULATOR — HTML/JAVASCRIPT',line,
     `Regular wave height (H) : ${input.H} m`,`Wave period (T)         : ${input.T} s`,`Water depth (d)         : ${input.d} m`,`Eulerian current (Uc)   : ${input.Uc} m/s`,thin,
-    'Status: Full nonlinear 50-mode stream-function/Fourier system solved and validated.',line,'');
+    caseIssues(p).length?'Status: Results shown for accepted cases only.':'Status: Finite-system and output accuracy checks passed.',...caseIssues(p),line,'');
   out.push(cols('PARAMETER','NO CURRENT','WITH CURRENT','UNIT'),thin);
   for(const r of resultRows){
     if(r[0]==='section'){out.push('',r[1],thin);continue;}
     const a=valueOf(p.noCurrent,r[1]), b=has?valueOf(p.withCurrent,r[1]):null;
     out.push(cols(r[0],fmt(a,12),has?fmt(b,12):'—',r[2]));
   }
-  out.push('',line,'FREE-SURFACE COLLOCATION NODES',line,cols('m / x/L','η NO CURRENT','η WITH CURRENT','m relative SWL'),thin);
-  for(let m=0;m<=p.noCurrent.N;m++){
-    const frac=(m*Math.PI/p.noCurrent.N)/(2*Math.PI);
-    out.push(cols(`${m} / ${fmt(frac,8)}`,fmt(p.noCurrent.eta_nodes[m]-p.noCurrent.d,12),has?fmt(p.withCurrent.eta_nodes[m]-p.withCurrent.d,12):'—','m'));
+  for(const [name,s] of caseEntries(p)){
+    out.push('',line,`${name.toUpperCase()} — N=${s.N}, ${s.z.length} equations`,line);
+    if(s.numerical_note)out.push(s.numerical_note);
+    out.push('FINITE-SYSTEM AND OUTPUT ACCURACY',
+      `Interval residual upper bound: ${s.finite_system_certificate.residual_upper.toExponential(12)}`,
+      `Root existence proved: ${s.finite_system_certificate.root_existence_proved}`);
+    for(const [key,value] of Object.entries(s.accuracy_metrics)) out.push(`${key}: ${fmt(value,14)}`);
+    for(const [key,check] of Object.entries(s.finite_system_certificate.outputs))
+      out.push(`${key}: [${check.interval[0].toPrecision(17)}, ${check.interval[1].toPrecision(17)}]; error <= ${check.error_upper.toExponential(8)}; budget >= ${check.budget_lower.toExponential(8)}`);
+    out.push('FREE-SURFACE COLLOCATION NODES',cols('m / x/L','η (m SWL)','Water column (m)',''),thin);
+    for(let m=0;m<=s.N;m++)out.push(cols(`${m} / ${fmt(m/(2*s.N),8)}`,fmt(s.eta_nodes[m]-s.d,12),fmt(s.eta_nodes[m],12),''));
+    out.push('', 'FOURIER COEFFICIENTS',cols('MODE','B_j','E_j',''),thin);
+    for(let j=1;j<=s.N;j++)out.push(cols(j,fmt(s.Bj[j-1],14),fmt(s.Y[j-1],14),''));
+    out.push('',`STATE VECTOR z[1..${s.z.length}]`,cols('INDEX / MEANING','VALUE','',''),thin);
+    for(let i=1;i<=s.z.length;i++)out.push(cols(`z[${i}] ${stateMeaning(i,s.N)}`,fmt(s.z[i-1],14),'',''));
   }
-  out.push('',line,'FOURIER COEFFICIENTS',line,cols('MODE','B_j NO CURRENT','B_j WITH CURRENT',''),thin);
-  for(let j=1;j<=p.noCurrent.N;j++) out.push(cols(j,fmt(p.noCurrent.Bj[j-1],14),has?fmt(p.withCurrent.Bj[j-1],14):'—',''));
-  out.push('',line,'STATE VECTOR z[1..110]',line,cols('INDEX / MEANING','NO CURRENT','WITH CURRENT',''),thin);
-  for(let i=1;i<=p.noCurrent.z.length;i++) out.push(cols(`z[${i}] ${stateMeaning(i,p.noCurrent.N)}`,fmt(p.noCurrent.z[i-1],14),has?fmt(p.withCurrent.z[i-1],14):'—',''));
   out.push('',line,'NUMERICAL METHOD',line,
-    'Fourier order N = 50; state dimension = residual dimension = 2N + 10 = 110.',
-    'Height continuation; finite-difference Jacobian; JᵀJ eigen-SVD fast path with one-sided Jacobi SVD fallback;',
-    'singular-value truncation at 10^-12 of the maximum; damped Newton line search; final residual tolerance 10^-8;',
-    'surface-tail acceptance |E_N| <= 10^-4; Fenton highest-wave check; monotonic surface and crest-stagnation checks.',line);
+    'Requested Fourier order N = 50; active state and residual dimensions = 2N + 10.',
+    'Adaptive height continuation; analytic Jacobian; column-equilibrated Jacobi SVD;',
+    'singular-value truncation at 10^-15; order reduction above condition 10^11;',
+    'damped Newton line search; final collocation residual tolerance 10^-10;',
+    'Outward binary64 intervals enclose the finite-state residual and nine selected output formulas.',
+    'Interpolated-surface residual budget: 10^-6; output budgets: 10^-7 + 10^-8 |reference|.',
+    'Spectral-bed identities and independent depth/phase quadratures check integral outputs.',
+    'Phase extrema are numerical estimates from bracketing and local refinement.',
+    'These checks support the finite computation; they do not constitute a Lean proof of JavaScript execution,',
+    'a proof of root existence, or a global error bound for the continuous water-wave problem.',line);
   return out.join('\n');
 }
 
@@ -1292,7 +1380,8 @@ function drawProfile(p){
   canvas.width=Math.max(600,Math.round(rect.width*dpr)); canvas.height=Math.round(420*dpr);
   const ctx=canvas.getContext('2d'); ctx.scale(dpr,dpr);
   const W=canvas.width/dpr,H=canvas.height/dpr,pad={l:66,r:22,t:25,b:48};
-  const cases=[{s:p.noCurrent,name:'No current'}]; if(p.withCurrent) cases.push({s:p.withCurrent,name:'With current'});
+  const cases=caseEntries(p).map(([name,s])=>({name,s}));
+  if(!cases.length){ctx.clearRect(0,0,W,H);return;}
   const points=500; let ymin=Infinity,ymax=-Infinity;
   const profiles=cases.map(c=>{const arr=[];for(let i=0;i<=points;i++){const X=2*Math.PI*i/points;let keta=0;for(let j=1;j<c.s.N;j++) keta+=c.s.Y[j-1]*Math.cos(j*X);keta+=.5*c.s.Y[c.s.N-1]*Math.cos(c.s.N*X);const eta=c.s.d*keta/c.s.kd;arr.push([i/points,eta]);ymin=Math.min(ymin,eta);ymax=Math.max(ymax,eta);}return {...c,arr};});
   const margin=Math.max(.05*(ymax-ymin),.05);ymin-=margin;ymax+=margin;
@@ -1309,17 +1398,23 @@ function drawProfile(p){
 
 function runParityCheck(p){
   const x=p.input;
-  if(Math.abs(x.H-3)<1e-12&&Math.abs(x.T-9)<1e-12&&Math.abs(x.d-5)<1e-12&&Math.abs(x.Uc-1)<1e-12&&p.withCurrent){
-    const ref={L:78.827222131313121,kd:0.39854159117219928,c:8.7585802368125698,eta_crest:2.4888375261436426,eta_trough:-0.51116247385635738};
-    let maxRel=0;for(const k of Object.keys(ref)) maxRel=Math.max(maxRel,Math.abs(p.withCurrent[k]-ref[k])/Math.max(Math.abs(ref[k]),1e-300));
-    $('parity').textContent=`Reference-case verification: maximum relative difference ${maxRel.toExponential(3)}.`;
-  }else $('parity').textContent='';
+  if (x.H!==3 || x.T!==9 || x.d!==5 || (x.Uc!==0 && x.Uc!==1)) {
+    $('parity').textContent=''; return;
+  }
+  const reference={"noCurrent": {"L": 68.70676152878612, "k": 0.09144930087480715, "c": 7.634084614309568, "eta_crest": 2.4301062758807905, "eta_trough": -0.5698937241192095, "PotentialEnergy": 3635.473607341114, "Power": 54668.500679296565, "Sxx": 9686.203406310735}, "withCurrent": {"L": 78.82722211567945, "k": 0.07970831825024827, "c": 8.758580235075494, "eta_crest": 2.4888375261849616, "eta_trough": -0.5111624738150384, "PotentialEnergy": 3417.139485274816, "Power": 73508.78348733457, "Sxx": 16367.48961120003}};
+  let maxRel=0;
+  for (const name of ['noCurrent','withCurrent']) {
+    if (!validCase(p[name])) continue;
+    for (const [key,expected] of Object.entries(reference[name]))
+      maxRel=Math.max(maxRel,Math.abs(p[name][key]-expected)/Math.max(1,Math.abs(expected)));
+  }
+  $('parity').textContent=`Reference-case verification: ${maxRel<=1e-9?'PASS':'OUTSIDE TOLERANCE'}; maximum scaled difference ${maxRel.toExponential(3)}.`;
 }
 
 function download(name,text,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}
 $('calculate').addEventListener('click',run);
 $('loadReference').addEventListener('click',()=>{$('H').value=3;$('T').value=9;$('d').value=5;$('Uc').value=1;run();});
-$('clear').addEventListener('click',()=>{lastPayload=null;lastReport='';$('parity').textContent='';initialiseDashboard();setStatus('Output cleared.');});
+$('clear').addEventListener('click',()=>{if(worker){worker.terminate();worker=null;}$('calculate').disabled=false;lastPayload=null;lastReport='';$('parity').textContent='';initialiseDashboard();setStatus('Output cleared.');});
 $('copyReport').addEventListener('click',async()=>{await navigator.clipboard.writeText(lastReport);setStatus('Report copied to clipboard.','ok');});
 $('downloadTxt').addEventListener('click',()=>download('fenton_output.txt',lastReport,'text/plain;charset=utf-8'));
 $('downloadJson').addEventListener('click',()=>download('fenton_output.json',JSON.stringify(lastPayload,null,2),'application/json'));
