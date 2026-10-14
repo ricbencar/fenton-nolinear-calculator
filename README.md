@@ -233,12 +233,12 @@ $$
 
 With the constant in $\psi$ chosen conveniently, the impermeable bed and the moving-frame free surface are streamlines:
 
-$$
+```math
 \begin{array}{c}
-\displaystyle \psi(x,-d)=0,\\[3pt]
+\displaystyle \psi(x,-d)=0,\\
 \displaystyle \psi(x,\eta(x))=-Q,
 \end{array}
-$$
+```
 
 where $Q$ is the volume flux per unit width in the moving frame. The sign convention follows Fenton's steady-frame formulation: in the wave frame the mean flow is usually in the negative direction under a wave propagating in the positive fixed-frame direction.
 
@@ -351,14 +351,14 @@ $$
 
 Differentiating the series gives the nondimensional wave-frame velocity components:
 
-$$
+```math
 \begin{array}{c}
 \displaystyle \hat U(X,Y)=-\bar U^\ast+
-\sum_{j=1}^{N}jB_j\frac{\cosh[j(Y+kd)]}{\cosh(jkd)}\cos(jX),\\[8pt]
+\sum_{j=1}^{N}jB_j\frac{\cosh[j(Y+kd)]}{\cosh(jkd)}\cos(jX),\\
 \displaystyle \hat V(X,Y)=
 \sum_{j=1}^{N}jB_j\frac{\sinh[j(Y+kd)]}{\cosh(jkd)}\sin(jX).
 \end{array}
-$$
+```
 
 The equivalent hyperbolic identities are
 
@@ -441,12 +441,12 @@ $$
 
 and
 
-$$
+```math
 \begin{array}{c}
-\displaystyle \hat U_m=-\bar U^\ast+\sum_{j=1}^{N}jB_jC_j(\zeta_m)\cos(jX_m),\\[8pt]
+\displaystyle \hat U_m=-\bar U^\ast+\sum_{j=1}^{N}jB_jC_j(\zeta_m)\cos(jX_m),\\
 \displaystyle \hat V_m=\sum_{j=1}^{N}jB_jS_j(\zeta_m)\sin(jX_m).
 \end{array}
-$$
+```
 
 This separation is important when current is prescribed because the same relative wave form can correspond to different fixed-frame velocities and flux/current conventions.
 
@@ -591,13 +591,13 @@ $$
 
 The primary physical correspondence in the Fenton-style 1-based state-vector convention is
 
-$$
+```math
 \begin{array}{c}
-\displaystyle z_1\leftrightarrow kd, \qquad z_2\leftrightarrow kH, \qquad z_3\leftrightarrow T\sqrt{gk},\\[5pt]
-\displaystyle z_4\leftrightarrow c\sqrt{\frac{k}{g}}, \qquad z_5\leftrightarrow \bar u_1\sqrt{\frac{k}{g}}, \qquad z_6\leftrightarrow \bar u_2\sqrt{\frac{k}{g}},\\[5pt]
+\displaystyle z_1\leftrightarrow kd, \qquad z_2\leftrightarrow kH, \qquad z_3\leftrightarrow T\sqrt{gk},\\
+\displaystyle z_4\leftrightarrow c\sqrt{\frac{k}{g}}, \qquad z_5\leftrightarrow \bar u_1\sqrt{\frac{k}{g}}, \qquad z_6\leftrightarrow \bar u_2\sqrt{\frac{k}{g}},\\
 \displaystyle z_7\leftrightarrow \bar U\sqrt{\frac{k}{g}}, \qquad z_8\leftrightarrow q\sqrt{\frac{k^3}{g}}, \qquad z_9\leftrightarrow \frac{rk}{g}.
 \end{array}
-$$
+```
 
 | Block | Indices | Physical/numerical content |
 | --- | --- | --- |
@@ -662,20 +662,20 @@ equations. The requested order $N=50$ gives 110 equations. If conditioning requi
 
 The residuals evaluated by the implementation are
 
-$$
+```math
 \begin{array}{rcl}
-\displaystyle r_1&=&\displaystyle z_2-z_1(H/d),\\[3pt]
-\displaystyle r_2&=&\displaystyle z_2-H_s z_3^2,\\[3pt]
-\displaystyle r_3&=&\displaystyle z_4z_3-2\pi,\\[3pt]
-\displaystyle r_4&=&\displaystyle z_5+z_7-z_4,\\[3pt]
-\displaystyle r_5&=&\displaystyle z_1(z_6+z_7-z_4)-z_8,\\[3pt]
-\displaystyle r_6&=&\displaystyle z_{c+4}-\frac{U_c}{\sqrt{gd}}\sqrt{z_1},\\[3pt]
-\displaystyle r_7&=&\displaystyle z_{10}+z_{N+10}+2\sum_{i=1}^{N-1}z_{10+i},\\[3pt]
-\displaystyle r_8&=&\displaystyle z_{10}-z_{N+10}-z_2,\\[3pt]
-\displaystyle r_{9+m}&=&\displaystyle \psi_m-z_8-z_7z_{10+m},\\[3pt]
+\displaystyle r_1&=&\displaystyle z_2-z_1(H/d),\\
+\displaystyle r_2&=&\displaystyle z_2-H_s z_3^2,\\
+\displaystyle r_3&=&\displaystyle z_4z_3-2\pi,\\
+\displaystyle r_4&=&\displaystyle z_5+z_7-z_4,\\
+\displaystyle r_5&=&\displaystyle z_1(z_6+z_7-z_4)-z_8,\\
+\displaystyle r_6&=&\displaystyle z_{c+4}-\frac{U_c}{\sqrt{gd}}\sqrt{z_1},\\
+\displaystyle r_7&=&\displaystyle z_{10}+z_{N+10}+2\sum_{i=1}^{N-1}z_{10+i},\\
+\displaystyle r_8&=&\displaystyle z_{10}-z_{N+10}-z_2,\\
+\displaystyle r_{9+m}&=&\displaystyle \psi_m-z_8-z_7z_{10+m},\\
 \displaystyle r_{N+10+m}&=&\displaystyle \frac{1}{2}\left[(-z_7+u_m)^2+v_m^2\right]+z_{10+m}-z_9,
 \end{array}
-$$
+```
 
 where $m=0,1,\ldots,N$ in the two collocation blocks. These expressions describe a finite-depth, period-specified case. With wavelength input, the second residual is instead
 
@@ -758,12 +758,12 @@ $$
 
 Newton iteration linearizes the residuals about the current iterate:
 
-$$
+```math
 \begin{array}{c}
-\displaystyle \mathbf J(\mathbf z^{(m)})\,\Delta\mathbf z^{(m)}=-\mathbf F(\mathbf z^{(m)}),\\[5pt]
+\displaystyle \mathbf J(\mathbf z^{(m)})\,\Delta\mathbf z^{(m)}=-\mathbf F(\mathbf z^{(m)}),\\
 \displaystyle \mathbf z^{(m+1)}=\mathbf z^{(m)}+\Delta\mathbf z^{(m)}.
 \end{array}
-$$
+```
 
 The Jacobian entries are
 
@@ -1015,18 +1015,18 @@ $$
 
 In the GUI report, the main integral quantities are evaluated with the following dimensional expressions:
 
-$$
+```math
 \begin{array}{rcl}
-\displaystyle I&=&\displaystyle \rho(cd-Q),\\[3pt]
-\displaystyle T_k&=&\displaystyle \frac{1}{2}(cI-Q\rho\bar u_1),\\[3pt]
-\displaystyle V_p&=&\displaystyle \frac{1}{2}\rho g\langle\eta^2\rangle,\\[3pt]
-\displaystyle E&=&\displaystyle T_k+V_p,\\[3pt]
-\displaystyle F&=&\displaystyle c(3T_k-2V_p)+\frac{1}{2}\langle u_{b,\mathrm{abs}}^2\rangle(I+\rho cd)-2c\bar u_1 I,\\[3pt]
-\displaystyle S_{xx}&=&\displaystyle 4T_k-3V_p+\rho\langle u_{b,\mathrm{abs}}^2\rangle d-2\bar u_1 I,\\[3pt]
-\displaystyle U_{\text{drift}}&=&\displaystyle \frac{I}{\rho d},\\[3pt]
+\displaystyle I&=&\displaystyle \rho(cd-Q),\\
+\displaystyle T_k&=&\displaystyle \frac{1}{2}(cI-Q\rho\bar u_1),\\
+\displaystyle V_p&=&\displaystyle \frac{1}{2}\rho g\langle\eta^2\rangle,\\
+\displaystyle E&=&\displaystyle T_k+V_p,\\
+\displaystyle F&=&\displaystyle c(3T_k-2V_p)+\frac{1}{2}\langle u_{b,\mathrm{abs}}^2\rangle(I+\rho cd)-2c\bar u_1 I,\\
+\displaystyle S_{xx}&=&\displaystyle 4T_k-3V_p+\rho\langle u_{b,\mathrm{abs}}^2\rangle d-2\bar u_1 I,\\
+\displaystyle U_{\text{drift}}&=&\displaystyle \frac{I}{\rho d},\\
 \displaystyle C_g&=&\displaystyle \frac{F}{E}.
 \end{array}
-$$
+```
 
 The integral formulas use the **absolute** bed velocity, including Eulerian current, following Fenton's Nonlinear wave theories. The density factor in kinetic energy is explicit here because I includes density. The invariant and absolute-bed-velocity expressions coincide for an exact steady wave. At a stored finite Fourier state, the invariant formulas supply the main outputs, and the independently evaluated spectral bed-velocity formulas are compared against them within the budgets in §7.7.
 
