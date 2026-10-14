@@ -6,9 +6,7 @@ This repository computes steady, two-dimensional, periodic finite-amplitude grav
 
 The central engineering calculation is the nonlinear mapping
 
-$$
-L=F(H,T,d,U_c),
-$$
+$$ L=F(H,T,d,U_c), $$
 
 where $H$ is wave height, $T$ is the apparent period in the fixed frame, $d$ is still-water depth, $U_c$ is the imposed collinear current under the selected current convention, and $L$ is the dynamically consistent wavelength. In Fenton's formulation, a steady wave train is fundamentally defined by three length scales, $H$, $d$ and $L$. A period can replace wavelength only when the current or wave-speed convention is also specified, because the observed period is Doppler-shifted by current. The program therefore solves wavelength, wave speed, free-surface profile, Fourier coefficients, wave-frame flux, current variables, Bernoulli constant and integral quantities as one coupled nonlinear problem.
 
@@ -51,35 +49,25 @@ The physical model is the classical steady progressive wave problem used in Fent
 
 A fixed frame $(x,y)$ is used with $x$ in the propagation direction, $y=0$ at the still-water level, $y=-d$ at the bed, and $y=\tilde{\eta}(x,t)$ at the free surface. A wave-frame coordinate is introduced by
 
-$$
-X_{\mathrm{dim}}=x-ct,
-$$
+$$ X_{\mathrm{dim}}=x-ct, $$
 
 where $c$ is the wave celerity in the fixed frame. In this frame the surface is steady:
 
-$$
-\tilde\eta(x,t)=\eta(X_{\mathrm{dim}}).
-$$
+$$ \tilde\eta(x,t)=\eta(X_{\mathrm{dim}}). $$
 
 The period, wavelength, wave number and celerity are related by
 
-$$
-c=\frac{L}{T}, \qquad k=\frac{2\pi}{L}, \qquad \omega=\frac{2\pi}{T}.
-$$
+$$ c=\frac{L}{T}, \qquad k=\frac{2\pi}{L}, \qquad \omega=\frac{2\pi}{T}. $$
 
 In the program outputs, the reported celerity is the value obtained from the final solved wavelength and the specified period, so the printed geometry remains consistent with this kinematic identity.
 
 Periodicity requires that the surface and the full flow field repeat every wavelength:
 
-$$
-\eta(X_{\mathrm{dim}}+L)=\eta(X_{\mathrm{dim}}).
-$$
+$$ \eta(X_{\mathrm{dim}}+L)=\eta(X_{\mathrm{dim}}). $$
 
 The specified wave height is the crest-to-trough difference,
 
-$$
-H=\eta_{\text{crest}}-\eta_{\text{trough}},
-$$
+$$ H=\eta_{\text{crest}}-\eta_{\text{trough}}, $$
 
 which becomes, in the nondimensional collocation equations, a difference between the crest and trough ordinates.
 
@@ -101,59 +89,41 @@ The current $U_c$ is not a harmless correction added after solving a no-current 
 
 The physical velocity components in the fixed frame are obtained from a velocity potential $\phi$:
 
-$$
-u=\frac{\partial\phi}{\partial x}, \qquad v=\frac{\partial\phi}{\partial y}.
-$$
+$$ u=\frac{\partial\phi}{\partial x}, \qquad v=\frac{\partial\phi}{\partial y}. $$
 
 Incompressibility requires zero divergence,
 
-$$
-\frac{\partial u}{\partial x}+\frac{\partial v}{\partial y}=0,
-$$
+$$ \frac{\partial u}{\partial x}+\frac{\partial v}{\partial y}=0, $$
 
 and irrotationality requires zero vorticity,
 
-$$
-\frac{\partial v}{\partial x}-\frac{\partial u}{\partial y}=0.
-$$
+$$ \frac{\partial v}{\partial x}-\frac{\partial u}{\partial y}=0. $$
 
 Together they imply that the potential satisfies Laplace's equation throughout the unknown water domain:
 
-$$
-\nabla^2\phi=\frac{\partial^2\phi}{\partial x^2}+\frac{\partial^2\phi}{\partial y^2}=0,
-$$
+$$ \nabla^2\phi=\frac{\partial^2\phi}{\partial x^2}+\frac{\partial^2\phi}{\partial y^2}=0, $$
 
 with the vertical range
 
-$$
--d\le y\le \eta(X_{\mathrm{dim}}).
-$$
+$$ -d\le y\le \eta(X_{\mathrm{dim}}). $$
 
 The bed is impermeable, so the normal velocity there is zero:
 
-$$
-v(x,-d,t)=0.
-$$
+$$ v(x,-d,t)=0. $$
 
 ### 3.2 Free-surface kinematic condition
 
 A fluid particle on the free surface remains on the free surface. In the fixed frame this condition is
 
-$$
-\frac{\partial\eta}{\partial t}+u\frac{\partial\eta}{\partial x}=v \qquad \text{at } y=\eta(x,t).
-$$
+$$ \frac{\partial\eta}{\partial t}+u\frac{\partial\eta}{\partial x}=v \qquad \text{at } y=\eta(x,t). $$
 
 In the wave frame, $U=u-c$ and $V=v$, and the free surface is steady. The same condition becomes
 
-$$
-U\eta_x=V \qquad \text{on } y=\eta(X_{\mathrm{dim}}),
-$$
+$$ U\eta_x=V \qquad \text{on } y=\eta(X_{\mathrm{dim}}), $$
 
 or equivalently
 
-$$
-(u-c)\eta_x=v \qquad \text{on } y=\eta(X_{\mathrm{dim}}).
-$$
+$$ (u-c)\eta_x=v \qquad \text{on } y=\eta(X_{\mathrm{dim}}). $$
 
 This is why the stream-function formulation is efficient: in the moving frame the free surface is a streamline, so the kinematic boundary condition can be enforced by making the stream function constant on the unknown surface.
 
@@ -161,15 +131,11 @@ This is why the stream-function formulation is efficient: in the moving frame th
 
 The pressure is atmospheric and therefore constant on the free surface. Bernoulli's equation in the fixed frame is
 
-$$
-\frac{1}{2}(u^2+v^2)+gy+\frac{p}{\rho}+\frac{\partial\phi}{\partial t}=B(t).
-$$
+$$ \frac{1}{2}(u^2+v^2)+gy+\frac{p}{\rho}+\frac{\partial\phi}{\partial t}=B(t). $$
 
 In the frame moving with the wave, the dynamic condition on the free surface can be written as
 
-$$
-\frac{1}{2}\left[(u-c)^2+v^2\right]+g\eta=r,
-$$
+$$ \frac{1}{2}\left[(u-c)^2+v^2\right]+g\eta=r, $$
 
 where $r$ uses the still-water-level datum; the corresponding bed-origin constant is $R=r+gd$. This is the main nonlinear boundary condition: velocities are squared and evaluated on the unknown free-surface elevation. The nonlinear solver must therefore find the surface and the velocity field simultaneously.
 
@@ -177,39 +143,27 @@ where $r$ uses the still-water-level datum; the corresponding bed-origin constan
 
 For infinitesimal-amplitude waves without current, linear Airy theory gives
 
-$$
-\omega^2=gk\tanh(kd).
-$$
+$$ \omega^2=gk\tanh(kd). $$
 
 In wavelength form,
 
-$$
-\left(\frac{2\pi}{T}\right)^2=g\frac{2\pi}{L}\tanh\left(\frac{2\pi d}{L}\right).
-$$
+$$ \left(\frac{2\pi}{T}\right)^2=g\frac{2\pi}{L}\tanh\left(\frac{2\pi d}{L}\right). $$
 
 The familiar limiting estimates are
 
-$$
-L_0\approx\frac{gT^2}{2\pi}
-$$
+$$ L_0\approx\frac{gT^2}{2\pi} $$
 
 for deep water and
 
-$$
-c\approx\sqrt{gd}, \qquad L\approx T\sqrt{gd}
-$$
+$$ c\approx\sqrt{gd}, \qquad L\approx T\sqrt{gd} $$
 
 for shallow water. With a collinear current, the positive intrinsic-frequency branch is
 
-$$
-\omega-kU_c=\sqrt{gk\tanh(kd)},
-$$
+$$ \omega-kU_c=\sqrt{gk\tanh(kd)}, $$
 
 or equivalently
 
-$$
-\left(\frac{2\pi}{T}-kU_c\right)^2=gk\tanh(kd),
-$$
+$$ \left(\frac{2\pi}{T}-kU_c\right)^2=gk\tanh(kd), $$
 
 with branch selection required in adverse-current or near-blocking cases. These formulas are useful for initialization, checking and wavelength-only baselines. They are not the final finite-amplitude theory used by the full solver.
 
@@ -221,24 +175,15 @@ with branch selection required in adverse-current or near-blocking cases. These 
 
 For two-dimensional incompressible flow in the wave frame, the stream function $\psi$ is defined by
 
-$$
-U=\frac{\partial\psi}{\partial y}, \qquad V=-\frac{\partial\psi}{\partial x},
-$$
+$$ U=\frac{\partial\psi}{\partial y}, \qquad V=-\frac{\partial\psi}{\partial x}, $$
 
 where $U=u-c$ and $V=v$. Continuity is then satisfied identically. Irrotationality becomes
 
-$$
-\nabla^2\psi=0.
-$$
+$$ \nabla^2\psi=0. $$
 
 With the constant in $\psi$ chosen conveniently, the impermeable bed and the moving-frame free surface are streamlines:
 
-```math
-\begin{array}{c}
-\displaystyle \psi(x,-d)=0,\\
-\displaystyle \psi(x,\eta(x))=-Q,
-\end{array}
-```
+$$ \begin{array}{c} \displaystyle \psi(x,-d)=0,\\ \displaystyle \psi(x,\eta(x))=-Q, \end{array} $$
 
 where $Q$ is the volume flux per unit width in the moving frame. The sign convention follows Fenton's steady-frame formulation: in the wave frame the mean flow is usually in the negative direction under a wave propagating in the positive fixed-frame direction.
 
@@ -246,82 +191,55 @@ where $Q$ is the volume flux per unit width in the moving frame. The sign conven
 
 The numerical formulation uses the wave phase and the mean-level vertical coordinate,
 
-$$
-X=k(x-ct), \qquad Y=ky, \qquad k=\frac{2\pi}{L}.
-$$
+$$ X=k(x-ct), \qquad Y=ky, \qquad k=\frac{2\pi}{L}. $$
 
 One wavelength corresponds to
 
-$$
-X\in[0,2\pi],
-$$
+$$ X\in[0,2\pi], $$
 
 and the bed is located at
 
-$$
-Y=-kd.
-$$
+$$ Y=-kd. $$
 
 The nondimensional free surface is written as
 
-$$
-Y=\zeta(X)=k\eta(X).
-$$
+$$ Y=\zeta(X)=k\eta(X). $$
 
 Define the nondimensional stream function
 
-$$
-\Psi=\psi\sqrt{\frac{k^3}{g}}.
-$$
+$$ \Psi=\psi\sqrt{\frac{k^3}{g}}. $$
 
 The nondimensional wave-frame velocities are
 
-$$
-\hat U=U\sqrt{\frac{k}{g}}=\frac{\partial\Psi}{\partial Y}, \qquad
-\hat V=V\sqrt{\frac{k}{g}}=-\frac{\partial\Psi}{\partial X}.
-$$
+$$ \hat U=U\sqrt{\frac{k}{g}}=\frac{\partial\Psi}{\partial Y}, \qquad \hat V=V\sqrt{\frac{k}{g}}=-\frac{\partial\Psi}{\partial X}. $$
 
 The Cauchy-Riemann relations between the nondimensional potential and stream function are
 
-$$
-\Phi_X=\Psi_Y, \qquad \Phi_Y=-\Psi_X.
-$$
+$$ \Phi_X=\Psi_Y, \qquad \Phi_Y=-\Psi_X. $$
 
 The field equation remains Laplace's equation in nondimensional form:
 
-$$
-\Psi_{XX}+\Psi_{YY}=0.
-$$
+$$ \Psi_{XX}+\Psi_{YY}=0. $$
 
 The bed and free-surface streamline conditions are
 
-$$
-\Psi(X,-kd)=0,
-$$
+$$ \Psi(X,-kd)=0, $$
 
 and
 
-$$
-\Psi(X,\zeta(X))=-Q\sqrt{\frac{k^3}{g}}.
-$$
+$$ \Psi(X,\zeta(X))=-Q\sqrt{\frac{k^3}{g}}. $$
 
 The dynamic boundary condition becomes
 
-$$
-\frac{1}{2}\left(\Psi_X^2+\Psi_Y^2\right)+\zeta(X)=\frac{rk}{g},
-$$
+$$ \frac{1}{2}\left(\Psi_X^2+\Psi_Y^2\right)+\zeta(X)=\frac{rk}{g}, $$
 
 or, in residual form with the same mean-level constant $r$,
 
-$$
-\frac{1}{2}\left(\Psi_X^2+\Psi_Y^2\right)+\zeta(X)-\frac{rk}{g}=0.
-$$
+$$ \frac{1}{2}\left(\Psi_X^2+\Psi_Y^2\right)+\zeta(X)-\frac{rk}{g}=0. $$
 
 The deep-water limiting case is represented by
 
-$$
-kd\to\infty,
-$$
+$$ kd\to\infty, $$
 
 with the finite-depth hyperbolic functions replaced by their exponential limits.
 
@@ -333,51 +251,29 @@ with the finite-depth hyperbolic functions replaced by their exponential limits.
 
 The stream-function / Fourier method is efficient because each vertical basis function is harmonic and satisfies the bottom condition before the nonlinear equations are assembled. A finite-depth nondimensional representation consistent with Fenton's 1988 formulation is
 
-$$
-\Psi(X,Y)=-\bar U^\ast(Y+kd)+\sum_{j=1}^{N}B_j\frac{\sinh[j(Y+kd)]}{\cosh(jkd)}\cos(jX),
-$$
+$$ \Psi(X,Y)=-\bar U^\ast(Y+kd)+\sum_{j=1}^{N}B_j\frac{\sinh[j(Y+kd)]}{\cosh(jkd)}\cos(jX), $$
 
 where
 
-$$
-\bar U^\ast=\bar U\sqrt{\frac{k}{g}}.
-$$
+$$ \bar U^\ast=\bar U\sqrt{\frac{k}{g}}. $$
 
 At the bed $Y=-kd$, both $Y+kd$ and the hyperbolic sine terms vanish, so
 
-$$
-\Psi(X,-kd)=0.
-$$
+$$ \Psi(X,-kd)=0. $$
 
 Differentiating the series gives the nondimensional wave-frame velocity components:
 
-```math
-\begin{array}{c}
-\displaystyle \hat U(X,Y)=-\bar U^\ast+
-\sum_{j=1}^{N}jB_j\frac{\cosh[j(Y+kd)]}{\cosh(jkd)}\cos(jX),\\
-\displaystyle \hat V(X,Y)=
-\sum_{j=1}^{N}jB_j\frac{\sinh[j(Y+kd)]}{\cosh(jkd)}\sin(jX).
-\end{array}
-```
+$$ \begin{array}{c} \displaystyle \hat U(X,Y)=-\bar U^\ast+ \sum_{j=1}^{N}jB_j\frac{\cosh[j(Y+kd)]}{\cosh(jkd)}\cos(jX),\\ \displaystyle \hat V(X,Y)= \sum_{j=1}^{N}jB_j\frac{\sinh[j(Y+kd)]}{\cosh(jkd)}\sin(jX). \end{array} $$
 
 The equivalent hyperbolic identities are
 
-$$
-S_j(Y)=\frac{\sinh[j(Y+kd)]}{\cosh(jkd)}
-      =\sinh(jY)+\cosh(jY)\tanh(jkd),
-$$
+$$ S_j(Y)=\frac{\sinh[j(Y+kd)]}{\cosh(jkd)} =\sinh(jY)+\cosh(jY)\tanh(jkd), $$
 
-$$
-C_j(Y)=\frac{\cosh[j(Y+kd)]}{\cosh(jkd)}
-      =\cosh(jY)+\sinh(jY)\tanh(jkd).
-$$
+$$ C_j(Y)=\frac{\cosh[j(Y+kd)]}{\cosh(jkd)} =\cosh(jY)+\sinh(jY)\tanh(jkd). $$
 
 The numerical kernels evaluate these ratios with scaled exponentials. With $a=jY$ and $b=jkd$,
 
-$$
-S_j(Y)=\frac{e^a-e^{-a-2b}}{1+e^{-2b}},\qquad
-C_j(Y)=\frac{e^a+e^{-a-2b}}{1+e^{-2b}}.
-$$
+$$ S_j(Y)=\frac{e^a-e^{-a-2b}}{1+e^{-2b}},\qquad C_j(Y)=\frac{e^a+e^{-a-2b}}{1+e^{-2b}}. $$
 
 This avoids forming large hyperbolic functions and subtracting nearly equal terms at the bed. In particular, $S_j(-kd)=0$ and $C_j(-kd)=1/\cosh(jkd)$. At fixed $Y$, the deep-water limit is $S_j(Y),C_j(Y)\to e^{jY}$; the finite-depth kernel retains the reflected exponential so that the bed condition remains satisfied.
 
@@ -385,68 +281,43 @@ This avoids forming large hyperbolic functions and subtracting nearly equal term
 
 A symmetric periodic wave can be represented by cosine harmonics. For the surface itself one may write
 
-$$
-\eta(x)=\sum_{n=0}^{N}a_n\cos(nkx),
-$$
+$$ \eta(x)=\sum_{n=0}^{N}a_n\cos(nkx), $$
 
 or in nondimensional phase form,
 
-$$
-\zeta(X)=\sum_{n=0}^{N}a_n\cos(nX).
-$$
+$$ \zeta(X)=\sum_{n=0}^{N}a_n\cos(nX). $$
 
 The implementation follows the Rienecker-Fenton/Fenton numerical approach more directly: it solves for the point ordinates of the free surface at collocation nodes rather than using the surface Fourier coefficients as the primary unknowns. A standard half-wave distribution is
 
-$$
-x_m=\frac{m\pi}{Nk}, \qquad m=0,1,\dots,N,
-$$
+$$ x_m=\frac{m\pi}{Nk}, \qquad m=0,1,\dots,N, $$
 
 or in nondimensional form
 
-$$
-X_m=\frac{m\pi}{N}, \qquad m=0,1,\dots,N.
-$$
+$$ X_m=\frac{m\pi}{N}, \qquad m=0,1,\dots,N. $$
 
 At every node,
 
-$$
-\zeta_m=\zeta(X_m)=k\eta(X_m).
-$$
+$$ \zeta_m=\zeta(X_m)=k\eta(X_m). $$
 
 Using the flux convention
 
-$$
-q^\ast=\bar U^\ast kd-Q\sqrt{\frac{k^3}{g}},
-$$
+$$ q^\ast=\bar U^\ast kd-Q\sqrt{\frac{k^3}{g}}, $$
 
 the kinematic free-surface condition can be written as the residual
 
-$$
-R_m^{(\psi)}=
-\sum_{j=1}^{N}B_jS_j(\zeta_m)\cos(jX_m)-\bar U^\ast\zeta_m-q^\ast=0.
-$$
+$$ R_m^{(\psi)}= \sum_{j=1}^{N}B_jS_j(\zeta_m)\cos(jX_m)-\bar U^\ast\zeta_m-q^\ast=0. $$
 
 The dynamic condition is enforced at the same nodes:
 
-$$
-R_m^{(B)}=
-\frac{1}{2}\left[\hat U_m^2+\hat V_m^2\right]+\zeta_m-r^\ast=0,
-$$
+$$ R_m^{(B)}= \frac{1}{2}\left[\hat U_m^2+\hat V_m^2\right]+\zeta_m-r^\ast=0, $$
 
 where
 
-$$
-r^\ast=\frac{rk}{g},
-$$
+$$ r^\ast=\frac{rk}{g}, $$
 
 and
 
-```math
-\begin{array}{c}
-\displaystyle \hat U_m=-\bar U^\ast+\sum_{j=1}^{N}jB_jC_j(\zeta_m)\cos(jX_m),\\
-\displaystyle \hat V_m=\sum_{j=1}^{N}jB_jS_j(\zeta_m)\sin(jX_m).
-\end{array}
-```
+$$ \begin{array}{c} \displaystyle \hat U_m=-\bar U^\ast+\sum_{j=1}^{N}jB_jC_j(\zeta_m)\cos(jX_m),\\ \displaystyle \hat V_m=\sum_{j=1}^{N}jB_jS_j(\zeta_m)\sin(jX_m). \end{array} $$
 
 This separation is important when current is prescribed because the same relative wave form can correspond to different fixed-frame velocities and flux/current conventions.
 
@@ -458,55 +329,37 @@ The solver reports quantities using two nondimensional systems: one based on wav
 
 The core nondimensional engineering groups are
 
-$$
-\hat H=\frac{H}{d}, \qquad \hat L=\frac{L}{d}, \qquad \hat c=\frac{c}{\sqrt{gd}}, \qquad \hat U_c=\frac{U_c}{\sqrt{gd}}.
-$$
+$$ \hat H=\frac{H}{d}, \qquad \hat L=\frac{L}{d}, \qquad \hat c=\frac{c}{\sqrt{gd}}, \qquad \hat U_c=\frac{U_c}{\sqrt{gd}}. $$
 
 Depth and steepness are interpreted using
 
-$$
-\frac{d}{L}, \qquad \frac{H}{L}, \qquad kd=\frac{2\pi d}{L}.
-$$
+$$ \frac{d}{L}, \qquad \frac{H}{L}, \qquad kd=\frac{2\pi d}{L}. $$
 
 The two common dimensionless periods are
 
-$$
-\tau_d=T\sqrt{\frac{g}{d}}, \qquad \tau_k=T\sqrt{gk}=\tau_d\sqrt{kd}.
-$$
+$$ \tau_d=T\sqrt{\frac{g}{d}}, \qquad \tau_k=T\sqrt{gk}=\tau_d\sqrt{kd}. $$
 
 The associated depth-based frequency variables are
 
-$$
-\sigma_d=\frac{2\pi}{\tau_d}, \qquad \alpha_d=\sigma_d^2.
-$$
+$$ \sigma_d=\frac{2\pi}{\tau_d}, \qquad \alpha_d=\sigma_d^2. $$
 
 The Ursell number, current Froude number and Doppler parameter used for regime interpretation are
 
-$$
-Ur=\frac{HL^2}{d^3},
-$$
+$$ Ur=\frac{HL^2}{d^3}, $$
 
-$$
-Fr_c=\frac{U_c}{\sqrt{gd}},
-$$
+$$ Fr_c=\frac{U_c}{\sqrt{gd}}, $$
 
 and
 
-$$
-D=\frac{U_cT}{L}.
-$$
+$$ D=\frac{U_cT}{L}. $$
 
 The intrinsic wave-current frequency is
 
-$$
-\omega-kU_c=\omega_{\text{intrinsic}}(k).
-$$
+$$ \omega-kU_c=\omega_{\text{intrinsic}}(k). $$
 
 These nondimensional groups explain why the finite-amplitude wavelength is generally not the linear Airy wavelength:
 
-$$
-L\ne L_{\text{Linear-Airy}}.
-$$
+$$ L\ne L_{\text{Linear-Airy}}. $$
 
 ### 6.1 Dimensionless-variable table
 
@@ -534,35 +387,25 @@ $$
 
 The Fourier coefficient table is separate: its two columns contain the native stream-function coefficients $B_j$ and surface coefficients $E_j$, not two alternative scalings of one quantity. The surface reconstruction is
 
-$$
-\zeta(X)=\sum_{j=1}^{N-1}E_j\cos(jX)+\frac{E_N}{2}\cos(NX).
-$$
+$$ \zeta(X)=\sum_{j=1}^{N-1}E_j\cos(jX)+\frac{E_N}{2}\cos(NX). $$
 
 Thus the terminal cosine amplitude is $E_N/2$. The dimensional surface elevation is $\eta=\zeta/k$; the bed-based ordinate in the standalone surface and flow files is $y/d=1+\zeta/(kd)$.
 
 The current definitions used by Fenton can be summarized as
 
-$$
-\bar u_1=c-\bar U,
-$$
+$$ \bar u_1=c-\bar U, $$
 
 and
 
-$$
-\bar u_2=c-\frac{Q}{d}.
-$$
+$$ \bar u_2=c-\frac{Q}{d}. $$
 
 The flux variable used in the nonlinear equations is
 
-$$
-q=\bar U d-Q,
-$$
+$$ q=\bar U d-Q, $$
 
 and the Bernoulli offset is commonly written as
 
-$$
-r=R-gd
-$$
+$$ r=R-gd $$
 
 when the Bernoulli constant is shifted from a bed-origin formulation to a mean-level formulation.
 
@@ -585,19 +428,11 @@ The `z[i]` equations are not empirical curve-fitting equations. They are the alg
 
 The unknown vector can be understood as
 
-$$
-\mathbf z=[\text{global scalars}\mid\text{surface ordinates}\mid\text{Fourier coefficients}].
-$$
+$$ \mathbf z=[\text{global scalars}\mid\text{surface ordinates}\mid\text{Fourier coefficients}]. $$
 
 The primary physical correspondence in the Fenton-style 1-based state-vector convention is
 
-```math
-\begin{array}{c}
-\displaystyle z_1\leftrightarrow kd, \qquad z_2\leftrightarrow kH, \qquad z_3\leftrightarrow T\sqrt{gk},\\
-\displaystyle z_4\leftrightarrow c\sqrt{\frac{k}{g}}, \qquad z_5\leftrightarrow \bar u_1\sqrt{\frac{k}{g}}, \qquad z_6\leftrightarrow \bar u_2\sqrt{\frac{k}{g}},\\
-\displaystyle z_7\leftrightarrow \bar U\sqrt{\frac{k}{g}}, \qquad z_8\leftrightarrow q\sqrt{\frac{k^3}{g}}, \qquad z_9\leftrightarrow \frac{rk}{g}.
-\end{array}
-```
+$$ \begin{array}{c} \displaystyle z_1\leftrightarrow kd, \qquad z_2\leftrightarrow kH, \qquad z_3\leftrightarrow T\sqrt{gk},\\ \displaystyle z_4\leftrightarrow c\sqrt{\frac{k}{g}}, \qquad z_5\leftrightarrow \bar u_1\sqrt{\frac{k}{g}}, \qquad z_6\leftrightarrow \bar u_2\sqrt{\frac{k}{g}},\\ \displaystyle z_7\leftrightarrow \bar U\sqrt{\frac{k}{g}}, \qquad z_8\leftrightarrow q\sqrt{\frac{k^3}{g}}, \qquad z_9\leftrightarrow \frac{rk}{g}. \end{array} $$
 
 | Block | Indices | Physical/numerical content |
 | --- | --- | --- |
@@ -611,21 +446,15 @@ At the requested order $N=50$, this indexing corresponds to 110 active 1-based s
 
 The program explicitly distinguishes Eulerian current, Stokes/mass-transport current, wave-frame mean velocity and flux. The Eulerian-current variable is connected to celerity and mean wave-frame velocity by
 
-$$
-\bar u_1=c-\bar U.
-$$
+$$ \bar u_1=c-\bar U. $$
 
 The Stokes-current or mass-transport current is connected to volume flux by
 
-$$
-\bar u_2=c-\frac{Q}{d}.
-$$
+$$ \bar u_2=c-\frac{Q}{d}. $$
 
 The wave volume flux convention is
 
-$$
-q=\bar U d-Q.
-$$
+$$ q=\bar U d-Q. $$
 
 This is not a cosmetic distinction. Prescribing Eulerian current and prescribing Stokes current close different mathematical problems. The residual system therefore selects the active current equation through a current-criterion index.
 
@@ -633,23 +462,17 @@ This is not a cosmetic distinction. Prescribing Eulerian current and prescribing
 
 The residual vector is the numerical form of the complete nonlinear wave problem. At convergence, every component of
 
-$$
-\mathbf F(\mathbf z)=\mathbf 0
-$$
+$$ \mathbf F(\mathbf z)=\mathbf 0 $$
 
 must vanish. These equations are not optional diagnostics: they are the constraints that define the solved wave. The first eight residuals impose the global wave, current, flux, mean-level and height constraints. The next two blocks are collocation equations imposed at every free-surface node.
 
 For Fourier order $N$, the half-wave grid contains $N+1$ collocation nodes,
 
-$$
-X_m=\frac{m\pi}{N}, \qquad m=0,1,\ldots,N.
-$$
+$$ X_m=\frac{m\pi}{N}, \qquad m=0,1,\ldots,N. $$
 
 The complete residual system therefore contains
 
-$$
-8+(N+1)+(N+1)=2N+10
-$$
+$$ 8+(N+1)+(N+1)=2N+10 $$
 
 equations. The requested order $N=50$ gives 110 equations. If conditioning requires a lower order, the active state and residual system are rebuilt for that order; for example, $N=32$ gives 74 equations.
 
@@ -662,26 +485,11 @@ equations. The requested order $N=50$ gives 110 equations. If conditioning requi
 
 The residuals evaluated by the implementation are
 
-```math
-\begin{array}{rcl}
-\displaystyle r_1&=&\displaystyle z_2-z_1(H/d),\\
-\displaystyle r_2&=&\displaystyle z_2-H_s z_3^2,\\
-\displaystyle r_3&=&\displaystyle z_4z_3-2\pi,\\
-\displaystyle r_4&=&\displaystyle z_5+z_7-z_4,\\
-\displaystyle r_5&=&\displaystyle z_1(z_6+z_7-z_4)-z_8,\\
-\displaystyle r_6&=&\displaystyle z_{c+4}-\frac{U_c}{\sqrt{gd}}\sqrt{z_1},\\
-\displaystyle r_7&=&\displaystyle z_{10}+z_{N+10}+2\sum_{i=1}^{N-1}z_{10+i},\\
-\displaystyle r_8&=&\displaystyle z_{10}-z_{N+10}-z_2,\\
-\displaystyle r_{9+m}&=&\displaystyle \psi_m-z_8-z_7z_{10+m},\\
-\displaystyle r_{N+10+m}&=&\displaystyle \frac{1}{2}\left[(-z_7+u_m)^2+v_m^2\right]+z_{10+m}-z_9,
-\end{array}
-```
+$$ \begin{array}{rcl} \displaystyle r_1&=&\displaystyle z_2-z_1(H/d),\\ \displaystyle r_2&=&\displaystyle z_2-H_s z_3^2,\\ \displaystyle r_3&=&\displaystyle z_4z_3-2\pi,\\ \displaystyle r_4&=&\displaystyle z_5+z_7-z_4,\\ \displaystyle r_5&=&\displaystyle z_1(z_6+z_7-z_4)-z_8,\\ \displaystyle r_6&=&\displaystyle z_{c+4}-\frac{U_c}{\sqrt{gd}}\sqrt{z_1},\\ \displaystyle r_7&=&\displaystyle z_{10}+z_{N+10}+2\sum_{i=1}^{N-1}z_{10+i},\\ \displaystyle r_8&=&\displaystyle z_{10}-z_{N+10}-z_2,\\ \displaystyle r_{9+m}&=&\displaystyle \psi_m-z_8-z_7z_{10+m},\\ \displaystyle r_{N+10+m}&=&\displaystyle \frac{1}{2}\left[(-z_7+u_m)^2+v_m^2\right]+z_{10+m}-z_9, \end{array} $$
 
 where $m=0,1,\ldots,N$ in the two collocation blocks. These expressions describe a finite-depth, period-specified case. With wavelength input, the second residual is instead
 
-$$
-r_2=z_2-2\pi H_s,\qquad H_s=H/L
-$$
+$$ r_2=z_2-2\pi H_s,\qquad H_s=H/L $$
 
 at the current continuation height. The current selector in $r_6$ is 1 for Eulerian current and 2 for mass-transport current.
 
@@ -736,15 +544,11 @@ The collocation residuals are the part of the system that makes the solution ful
 
 Once $z_1=kd$ has converged, the wavelength follows directly:
 
-$$
-kd=\frac{2\pi d}{\lambda}.
-$$
+$$ kd=\frac{2\pi d}{\lambda}. $$
 
 Thus
 
-$$
-\frac{\lambda}{d}=\frac{2\pi}{kd}, \qquad L=\lambda, \qquad c=\frac{L}{T}.
-$$
+$$ \frac{\lambda}{d}=\frac{2\pi}{kd}, \qquad L=\lambda, \qquad c=\frac{L}{T}. $$
 
 The residual variable $z_4$ enforces the same period-celerity closure during Newton iteration; final reports and API diagnostics should still derive the dimensional celerity from the final $L/T$ relation.
 
@@ -752,62 +556,41 @@ The residual variable $z_4$ enforces the same period-celerity closure during New
 
 The residual system is written compactly as
 
-$$
-\mathbf F(\mathbf z)=0.
-$$
+$$ \mathbf F(\mathbf z)=0. $$
 
 Newton iteration linearizes the residuals about the current iterate:
 
-```math
-\begin{array}{c}
-\displaystyle \mathbf J(\mathbf z^{(m)})\,\Delta\mathbf z^{(m)}=-\mathbf F(\mathbf z^{(m)}),\\
-\displaystyle \mathbf z^{(m+1)}=\mathbf z^{(m)}+\Delta\mathbf z^{(m)}.
-\end{array}
-```
+$$ \begin{array}{c} \displaystyle \mathbf J(\mathbf z^{(m)})\,\Delta\mathbf z^{(m)}=-\mathbf F(\mathbf z^{(m)}),\\ \displaystyle \mathbf z^{(m+1)}=\mathbf z^{(m)}+\Delta\mathbf z^{(m)}. \end{array} $$
 
 The Jacobian entries are
 
-$$
-\mathbf J_{ij}=\frac{\partial F_i}{\partial z_j}.
-$$
+$$ \mathbf J_{ij}=\frac{\partial F_i}{\partial z_j}. $$
 
 The maintained GUI, browser and standalone solvers assemble analytic derivatives of the global constraints and free-surface equations. The derivatives use the same scaled-exponential basis as the residual evaluation.
 
 The most sensitive entries involve derivatives of the streamline and Bernoulli residuals with respect to Fourier coefficients, surface ordinates, $kd$, celerity variables and the Bernoulli offset. Typical derivative families are
 
-$$
-\frac{\partial R_m^{(\psi)}}{\partial B_n}, \qquad \frac{\partial R_m^{(\psi)}}{\partial \eta_j}, \qquad \frac{\partial R_m^{(\psi)}}{\partial k},
-$$
+$$ \frac{\partial R_m^{(\psi)}}{\partial B_n}, \qquad \frac{\partial R_m^{(\psi)}}{\partial \eta_j}, \qquad \frac{\partial R_m^{(\psi)}}{\partial k}, $$
 
 and
 
-$$
-\frac{\partial R_m^{(B)}}{\partial B_n}, \qquad \frac{\partial R_m^{(B)}}{\partial \eta_j}, \qquad \frac{\partial R_m^{(B)}}{\partial r}, \qquad \frac{\partial R_m^{(B)}}{\partial c}.
-$$
+$$ \frac{\partial R_m^{(B)}}{\partial B_n}, \qquad \frac{\partial R_m^{(B)}}{\partial \eta_j}, \qquad \frac{\partial R_m^{(B)}}{\partial r}, \qquad \frac{\partial R_m^{(B)}}{\partial c}. $$
 
 For a dimensional Bernoulli residual,
 
-$$
-R_m^{(B)}=\frac{1}{2}\left[(u_m-c)^2+v_m^2\right]+g\eta_m-r,
-$$
+$$ R_m^{(B)}=\frac{1}{2}\left[(u_m-c)^2+v_m^2\right]+g\eta_m-r, $$
 
 a representative chain-rule derivative is
 
-$$
-\frac{\partial R_m^{(B)}}{\partial z_j}=(u_m-c)\left(\frac{\partial u_m}{\partial z_j}-\frac{\partial c}{\partial z_j}\right)+v_m\frac{\partial v_m}{\partial z_j}+g\frac{\partial\eta_m}{\partial z_j}-\frac{\partial r}{\partial z_j}.
-$$
+$$ \frac{\partial R_m^{(B)}}{\partial z_j}=(u_m-c)\left(\frac{\partial u_m}{\partial z_j}-\frac{\partial c}{\partial z_j}\right)+v_m\frac{\partial v_m}{\partial z_j}+g\frac{\partial\eta_m}{\partial z_j}-\frac{\partial r}{\partial z_j}. $$
 
 Because near-limiting waves and adverse-current cases can make the Jacobian ill-conditioned, the solvers use stabilized linear algebra. When singular value decomposition is used,
 
-$$
-\mathbf J=\mathbf U\Sigma\mathbf V^T,
-$$
+$$ \mathbf J=\mathbf U\Sigma\mathbf V^T, $$
 
 and the pseudoinverse Newton correction is
 
-$$
-\Delta\mathbf z=-\mathbf V\Sigma^{-1}\mathbf U^T\mathbf F.
-$$
+$$ \Delta\mathbf z=-\mathbf V\Sigma^{-1}\mathbf U^T\mathbf F. $$
 
 The numerical implementations share the governing equations but use different linear and globalization strategies:
 
@@ -824,17 +607,11 @@ Continuation increases wave height from a small-amplitude seed. A failed trial r
 
 The requested Fourier order is an upper resolution target. The solvers assess the condition number of the analytic Jacobian after column equilibration:
 
-$$
-s_j=\max_i|J_{ij}|,\qquad
-\widetilde J_{ij}=\frac{J_{ij}}{s_j},\qquad
-\kappa_2(\widetilde{\mathbf J})=\frac{\sigma_{\max}}{\sigma_{\min}}.
-$$
+$$ s_j=\max_i|J_{ij}|,\qquad \widetilde J_{ij}=\frac{J_{ij}}{s_j},\qquad \kappa_2(\widetilde{\mathbf J})=\frac{\sigma_{\max}}{\sigma_{\min}}. $$
 
 A zero column or singular system is treated as ill-conditioned. If the condition exceeds $10^{11}$, the calculation restarts at a lower Fourier order. Starting from 50 modes, the available sequence is
 
-$$
-50\to40\to32\to25\to20\to16\to12.
-$$
+$$ 50\to40\to32\to25\to20\to16\to12. $$
 
 Each restart solves the original target wave again with the active state-vector size $2N+10$. It does not reduce the requested physical wave height or relax the final residual tolerance. `fourier.cpp` starts at its user-requested order and uses $N_{\mathrm{next}}=\max(12,\lfloor0.8N\rfloor)$ when the requested order is at least 12; a smaller requested order is not increased.
 
@@ -844,10 +621,7 @@ Short periods can make high Fourier orders poorly conditioned for otherwise solv
 
 Residual norms refer to the implemented nondimensional equations, with $M=2N+10$:
 
-$$
-F_{\mathrm{RMS}}=\sqrt{\frac{1}{M}\sum_{i=1}^{M}F_i^2},\qquad
-F_{\max}=\max_i|F_i|.
-$$
+$$ F_{\mathrm{RMS}}=\sqrt{\frac{1}{M}\sum_{i=1}^{M}F_i^2},\qquad F_{\max}=\max_i|F_i|. $$
 
 | Implementation | Intermediate residual limits | Final residual limits |
 | --- | --- | --- |
@@ -888,19 +662,13 @@ For the standalone drivers described above, a spectral `FAIL` is a separate reso
 
 For a dimensional reference quantity $q$, the comparison budget is
 
-$$
-\varepsilon(q)=10^{-7}+10^{-8}|q|.
-$$
+$$ \varepsilon(q)=10^{-7}+10^{-8}|q|. $$
 
 The absolute term is expressed in the SI units of the quantity being compared. The residual limits are nondimensional. These values are explicit implementation acceptance choices, rather than tolerances prescribed by Fenton for every application.
 
 If the reference is enclosed in $[q_-,q_+]$, the interval check uses
 
-$$
-e_{\max}=\max\bigl(|q_{\mathrm{reported}}-q_-|,|q_{\mathrm{reported}}-q_+|\bigr),
-\qquad
-e_{\max}\le 10^{-7}+10^{-8}\min_{q\in[q_-,q_+]}|q|,
-$$
+$$ e_{\max}=\max\bigl(|q_{\mathrm{reported}}-q_-|,|q_{\mathrm{reported}}-q_+|\bigr), \qquad e_{\max}\le 10^{-7}+10^{-8}\min_{q\in[q_-,q_+]}|q|, $$
 
 with outward rounding for the error bound and downward rounding for the budget. The minimum magnitude is zero when the interval contains zero.
 
@@ -971,70 +739,41 @@ The verification results in this section apply to the named implementations and 
 
 After successful numerical acceptance, the GUI and browser report dimensional engineering quantities. The standalone solvers retain their documented nondimensional output scalings and separate diagnostics. The fundamental dimensional conversions are
 
-$$
-k=\frac{2\pi}{L}, \qquad c=\frac{L}{T}.
-$$
+$$ k=\frac{2\pi}{L}, \qquad c=\frac{L}{T}. $$
 
 This post-processing convention avoids treating wavelength and celerity as independent reported quantities in period-specified runs.
 
 The moving-frame volume flux $Q$ and the wave flux variable $q$ are related by
 
-$$
-q=\bar U d-Q.
-$$
+$$ q=\bar U d-Q. $$
 
 The mean free-surface level is
 
-$$
-\bar\eta=\frac{1}{L}\int_0^L\eta(x)\,dx.
-$$
+$$ \bar\eta=\frac{1}{L}\int_0^L\eta(x)\,dx. $$
 
 In the usual mean-level convention,
 
-$$
-\bar\eta=0.
-$$
+$$ \bar\eta=0. $$
 
 The energy calculation separates potential and kinetic components. The total energy is
 
-$$
-E=E_p+E_k,
-$$
+$$ E=E_p+E_k, $$
 
 with potential energy relative to the still-water datum
 
-$$
-E_p=\frac{\rho g}{L}\int_0^L\frac{\eta^2(x)}{2}\,dx,
-$$
+$$ E_p=\frac{\rho g}{L}\int_0^L\frac{\eta^2(x)}{2}\,dx, $$
 
 and kinetic energy
 
-$$
-E_k=\frac{\rho}{L}\int_0^L\int_{-d}^{\eta(x)}\frac{u^2+v^2}{2}\,dy\,dx.
-$$
+$$ E_k=\frac{\rho}{L}\int_0^L\int_{-d}^{\eta(x)}\frac{u^2+v^2}{2}\,dy\,dx. $$
 
 In the GUI report, the main integral quantities are evaluated with the following dimensional expressions:
 
-```math
-\begin{array}{rcl}
-\displaystyle I&=&\displaystyle \rho(cd-Q),\\
-\displaystyle T_k&=&\displaystyle \frac{1}{2}(cI-Q\rho\bar u_1),\\
-\displaystyle V_p&=&\displaystyle \frac{1}{2}\rho g\langle\eta^2\rangle,\\
-\displaystyle E&=&\displaystyle T_k+V_p,\\
-\displaystyle F&=&\displaystyle c(3T_k-2V_p)+\frac{1}{2}\langle u_{b,\mathrm{abs}}^2\rangle(I+\rho cd)-2c\bar u_1 I,\\
-\displaystyle S_{xx}&=&\displaystyle 4T_k-3V_p+\rho\langle u_{b,\mathrm{abs}}^2\rangle d-2\bar u_1 I,\\
-\displaystyle U_{\text{drift}}&=&\displaystyle \frac{I}{\rho d},\\
-\displaystyle C_g&=&\displaystyle \frac{F}{E}.
-\end{array}
-```
+$$ \begin{array}{rcl} \displaystyle I&=&\displaystyle \rho(cd-Q),\\ \displaystyle T_k&=&\displaystyle \frac{1}{2}(cI-Q\rho\bar u_1),\\ \displaystyle V_p&=&\displaystyle \frac{1}{2}\rho g\langle\eta^2\rangle,\\ \displaystyle E&=&\displaystyle T_k+V_p,\\ \displaystyle F&=&\displaystyle c(3T_k-2V_p)+\frac{1}{2}\langle u_{b,\mathrm{abs}}^2\rangle(I+\rho cd)-2c\bar u_1 I,\\ \displaystyle S_{xx}&=&\displaystyle 4T_k-3V_p+\rho\langle u_{b,\mathrm{abs}}^2\rangle d-2\bar u_1 I,\\ \displaystyle U_{\text{drift}}&=&\displaystyle \frac{I}{\rho d},\\ \displaystyle C_g&=&\displaystyle \frac{F}{E}. \end{array} $$
 
 The integral formulas use the **absolute** bed velocity, including Eulerian current, following Fenton's Nonlinear wave theories. The density factor in kinetic energy is explicit here because I includes density. The invariant and absolute-bed-velocity expressions coincide for an exact steady wave. At a stored finite Fourier state, the invariant formulas supply the main outputs, and the independently evaluated spectral bed-velocity formulas are compared against them within the budgets in §7.7.
 
-$$
-\langle u_{b,\mathrm{abs}}^2\rangle
-=2r-c(c-2\bar u_1)
-=\bar u_1^2+\langle(u_b-\bar u_1)^2\rangle.
-$$
+$$ \langle u_{b,\mathrm{abs}}^2\rangle =2r-c(c-2\bar u_1) =\bar u_1^2+\langle(u_b-\bar u_1)^2\rangle. $$
 
 The orbital mean square reported separately by the GUI is not interchangeable with this absolute mean square in $F$ or $S_{xx}$. When criterion 2 is selected in a supporting solver interface, $U_c$ is the prescribed Stokes current; the integral formulas still use the solved Eulerian current, $\bar u_1$.
 
@@ -1043,40 +782,28 @@ The field `Cg` is labelled **energy-flux velocity**, $F/E$. It is an energy-flux
 For the implemented cosine reconstruction, the last mode has amplitude $Y_N/2$, where $Y_j$ denotes the surface coefficient $E_j$.
 Consequently the potential energy of that reconstructed surface is
 
-$$
-V_p=\frac{\rho g}{k^2}\left(\frac14\sum_{j=1}^{N-1}Y_j^2+
-\frac{Y_N^2}{16}\right).
-$$
+$$ V_p=\frac{\rho g}{k^2}\left(\frac14\sum_{j=1}^{N-1}Y_j^2+ \frac{Y_N^2}{16}\right). $$
 
 Acceptance in the Python/C++ GUI, HTML and VBA solvers requires the residual limits in §7.6 and the resolution and output-accuracy checks in §7.7. A small Newton correction alone is insufficient. The complete target state is checked before accepted engineering outputs are exposed.
 
 The point kernel evaluates the hyperbolic ratios with scaled exponentials to
 avoid cancellation and overflow at the bed:
 
-$$
-S(a,b)=\frac{e^a-e^{-a-2b}}{1+e^{-2b}},\qquad
-C(a,b)=\frac{e^a+e^{-a-2b}}{1+e^{-2b}},\qquad a=jY,\ b=jkd.
-$$
+$$ S(a,b)=\frac{e^a-e^{-a-2b}}{1+e^{-2b}},\qquad C(a,b)=\frac{e^a+e^{-a-2b}}{1+e^{-2b}},\qquad a=jY,\ b=jkd. $$
 
 These quantities should be interpreted with the same current convention used in the solve. The Eulerian-current and Stokes-current closures lead to different fixed-frame flux and drift interpretations even when the relative wave form is similar.
 
 The orbital mean square bed velocity diagnostic removes the solved Eulerian current:
 
-$$
-u_{b2}=\left\langle\left(u_{\text{bed}}(t)-\bar u_1\right)^2\right\rangle.
-$$
+$$ u_{b2}=\left\langle\left(u_{\text{bed}}(t)-\bar u_1\right)^2\right\rangle. $$
 
 The stability diagnostics include the Miche limiting-height estimate,
 
-$$
-H_{\text{Miche}}=0.142L\tanh(kd),
-$$
+$$ H_{\text{Miche}}=0.142L\tanh(kd), $$
 
 and the saturation ratio,
 
-$$
-\text{saturation}=\frac{H}{H_{\text{Miche}}}.
-$$
+$$ \text{saturation}=\frac{H}{H_{\text{Miche}}}. $$
 
 The Miche estimate is a practical screening formula rather than the exact limiting wave curve. Near-limiting cases should also be judged by convergence behavior, crest sharpness, Fourier-coefficient decay and the physical plausibility of the branch selected in current.
 
@@ -1092,25 +819,15 @@ The Miche estimate is a practical screening formula rather than the exact limiti
 
 Using the mean-level Bernoulli constant $r$, the dimensional pressure is reconstructed as
 
-$$
-p=\rho\left[r-gy-\frac12\left((u-c)^2+v^2\right)\right].
-$$
+$$ p=\rho\left[r-gy-\frac12\left((u-c)^2+v^2\right)\right]. $$
 
 With $\langle\cdot\rangle$ denoting an average over one wavelength, the independent defining-integral checks include
 
-$$
-I=\left\langle\int_{-d}^{\eta}\rho u\,dy\right\rangle,
-$$
+$$ I=\left\langle\int_{-d}^{\eta}\rho u\,dy\right\rangle, $$
 
-$$
-S_{xx}=\left\langle\int_{-d}^{\eta}\left(p+\rho u^2\right)\,dy\right\rangle
--\frac12\rho gd^2,
-$$
+$$ S_{xx}=\left\langle\int_{-d}^{\eta}\left(p+\rho u^2\right)\,dy\right\rangle -\frac12\rho gd^2, $$
 
-$$
-F=\left\langle\int_{-d}^{\eta}
-\left[p+\rho gy+\frac12\rho(u^2+v^2)\right]u\,dy\right\rangle.
-$$
+$$ F=\left\langle\int_{-d}^{\eta} \left[p+\rho gy+\frac12\rho(u^2+v^2)\right]u\,dy\right\rangle. $$
 
 The kinetic- and potential-energy integrals are defined above. These checks use fixed-frame absolute velocities, including the solved Eulerian current. `MomentumFlux`, a separate moving-frame momentum-flux diagnostic, is not interchangeable with `Sxx` and is not one of the nine interval-enclosed outputs.
 
@@ -1129,25 +846,15 @@ The Python/C++ GUI and HTML solvers estimate phase maxima by sampling $\max(257,
 
 The material horizontal acceleration used by the GUI and browser is
 
-$$
-a_x=\frac{\partial u}{\partial t}
-+u\frac{\partial u}{\partial x}+v\frac{\partial u}{\partial y}
-=(u-c)\frac{\partial u}{\partial x}+v\frac{\partial u}{\partial y}.
-$$
+$$ a_x=\frac{\partial u}{\partial t} +u\frac{\partial u}{\partial x}+v\frac{\partial u}{\partial y} =(u-c)\frac{\partial u}{\partial x}+v\frac{\partial u}{\partial y}. $$
 
 This differs from the local acceleration $\partial u/\partial t=-c\,\partial u/\partial x$ written by the standalone flow-field drivers in §11.6.
 
 The engineering bed diagnostics are
 
-$$
-\tau_{\mathrm{bed,est}}=\frac12\rho C_f\,u_{\mathrm{bed}}^2,
-\qquad C_f=0.005,
-$$
+$$ \tau_{\mathrm{bed,est}}=\frac12\rho C_f\,u_{\mathrm{bed}}^2, \qquad C_f=0.005, $$
 
-$$
-A_{\mathrm{bed,est}}=\frac{T}{2\pi}
-U_{b,\mathrm{orb,est}}.
-$$
+$$ A_{\mathrm{bed,est}}=\frac{T}{2\pi} U_{b,\mathrm{orb,est}}. $$
 
 Here $U_{b,\mathrm{orb,est}}$ is the estimated phase maximum of $|u_b(X)-\bar u_1|$. `ExcursionBed` therefore uses the orbital velocity after removing the Eulerian current. It is an amplitude-based excursion estimate, not direct integration of the nonlinear particle trajectory. Bed shear likewise remains an estimate using a fixed friction coefficient. Miche screening, bed shear and phase extrema are engineering diagnostics outside the nine selected-output interval checks.
 
@@ -1162,241 +869,149 @@ The repository includes approximate layers for speed, spreadsheet deployment and
 
 For wavelength-only calculations, a common baseline solves
 
-$$
-(H,T,d,U_c)\mapsto L.
-$$
+$$ (H,T,d,U_c)\mapsto L. $$
 
 With a collinear current, the baseline residual in $k$ is
 
-$$
-F(k)=\left(\frac{2\pi}{T}-kU_c\right)^2-gk\tanh(kd).
-$$
+$$ F(k)=\left(\frac{2\pi}{T}-kU_c\right)^2-gk\tanh(kd). $$
 
 Newton iteration is then
 
-$$
-k_{n+1}=k_n-\frac{F(k_n)}{F'(k_n)},
-$$
+$$ k_{n+1}=k_n-\frac{F(k_n)}{F'(k_n)}, $$
 
 where
 
-$$
-F'(k)=-2U_c\left(\frac{2\pi}{T}-kU_c\right)-g\tanh(kd)-gkd\frac{1}{\cosh^2(kd)}.
-$$
+$$ F'(k)=-2U_c\left(\frac{2\pi}{T}-kU_c\right)-g\tanh(kd)-gkd\frac{1}{\cosh^2(kd)}. $$
 
 The wavelength is recovered from
 
-$$
-L=\frac{2\pi}{k}.
-$$
+$$ L=\frac{2\pi}{k}. $$
 
 Without current, the same baseline can be expressed as the fixed-point wavelength equation
 
-$$
-L_{\text{lin}}=\frac{gT^2}{2\pi}\tanh\!\left(\frac{2\pi d}{L_{\text{lin}}}\right).
-$$
+$$ L_{\text{lin}}=\frac{gT^2}{2\pi}\tanh\!\left(\frac{2\pi d}{L_{\text{lin}}}\right). $$
 
 ### 9.2 Common surrogate structure
 
 Most reduced-order models correct a physically meaningful baseline:
 
-$$
-L=L_{\text{base}}C(\mathbf x).
-$$
+$$ L=L_{\text{base}}C(\mathbf x). $$
 
 Typical nondimensional features include
 
-$$
-\frac{H}{L}, \qquad \frac{d}{L}, \qquad kd, \qquad \frac{U_c}{c}, \qquad \frac{U_c}{\sqrt{gd}}.
-$$
+$$ \frac{H}{L}, \qquad \frac{d}{L}, \qquad kd, \qquad \frac{U_c}{c}, \qquad \frac{U_c}{\sqrt{gd}}. $$
 
 The implemented engineering feature set includes
 
-$$
-\begin{array}{c}
-\displaystyle \text{WaveSteepness}=\frac{H}{L_{\text{lin}}},\\
-\displaystyle \text{RelativeDepth}=\frac{d}{L_{\text{lin}}},\\
-\displaystyle \text{DopplerFactor}=\frac{U_cT}{L_{\text{lin}}},\\
-\displaystyle \text{UrsellNumber}=\frac{HL_{\text{lin}}^2}{d^3},\\
-\displaystyle \text{CurrentFroude}=\frac{U_c}{\sqrt{gd}}.
-\end{array}
-$$
+$$ \begin{array}{c} \displaystyle \text{WaveSteepness}=\frac{H}{L_{\text{lin}}},\\ \displaystyle \text{RelativeDepth}=\frac{d}{L_{\text{lin}}},\\ \displaystyle \text{DopplerFactor}=\frac{U_cT}{L_{\text{lin}}},\\ \displaystyle \text{UrsellNumber}=\frac{HL_{\text{lin}}^2}{d^3},\\ \displaystyle \text{CurrentFroude}=\frac{U_c}{\sqrt{gd}}. \end{array} $$
 
 For symbolic-regression and neural workflows, additional logarithmic and current features may be used:
 
-$$
-\begin{array}{c}
-\displaystyle x_0=\ln\!\left(\frac{d}{L}\right), \qquad x_1=\ln\!\left(\frac{H}{L}\right), \qquad x_2=\ln\!\left(\frac{H}{d}\right),\\
-\displaystyle x_3=\ln(Ur), \qquad Ur=\frac{HL^2}{d^3},\\
-\displaystyle x_4=\frac{U_c}{\sqrt{gd}}, \qquad x_5=\frac{U_cT}{L}, \qquad x_6=\frac{U_c}{C_0},
-\end{array}
-$$
+$$ \begin{array}{c} \displaystyle x_0=\ln\!\left(\frac{d}{L}\right), \qquad x_1=\ln\!\left(\frac{H}{L}\right), \qquad x_2=\ln\!\left(\frac{H}{d}\right),\\ \displaystyle x_3=\ln(Ur), \qquad Ur=\frac{HL^2}{d^3},\\ \displaystyle x_4=\frac{U_c}{\sqrt{gd}}, \qquad x_5=\frac{U_cT}{L}, \qquad x_6=\frac{U_c}{C_0}, \end{array} $$
 
 with the deep-water scale quantities
 
-$$
-C_0=\frac{gT}{2\pi}, \qquad L_0=\frac{gT^2}{2\pi},
-$$
+$$ C_0=\frac{gT}{2\pi}, \qquad L_0=\frac{gT^2}{2\pi}, $$
 
 and the additional features
 
-$$
-x_7=\ln\!\left(\frac{H}{L_0}\right), \qquad x_8=\ln\!\left(T\sqrt{\frac{g}{d}}\right).
-$$
+$$ x_7=\ln\!\left(\frac{H}{L_0}\right), \qquad x_8=\ln\!\left(T\sqrt{\frac{g}{d}}\right). $$
 
 ### 9.3 Pade/rational surrogate
 
 The Pade surrogate represents a correction with a rational function,
 
-$$
-P(x)=\frac{a_0+a_1x+a_2x^2+\cdots+a_mx^m}{1+b_1x+b_2x^2+\cdots+b_nx^n}.
-$$
+$$ P(x)=\frac{a_0+a_1x+a_2x^2+\cdots+a_mx^m}{1+b_1x+b_2x^2+\cdots+b_nx^n}. $$
 
 The depth-regime variable is usually
 
-$$
-\mu=\frac{d}{L}.
-$$
+$$ \mu=\frac{d}{L}. $$
 
 The regime split used for training and interpretation is
 
-$$
-\begin{array}{c}
-\displaystyle \mu<0.05 \quad \text{(shallow)},\\
-\displaystyle 0.05\le\mu<0.5 \quad \text{(intermediate)},\\
-\displaystyle \mu\ge0.5 \quad \text{(deep)}.
-\end{array}
-$$
+$$ \begin{array}{c} \displaystyle \mu<0.05 \quad \text{(shallow)},\\ \displaystyle 0.05\le\mu<0.5 \quad \text{(intermediate)},\\ \displaystyle \mu\ge0.5 \quad \text{(deep)}. \end{array} $$
 
 The resulting Pade wavelength expression is
 
-$$
-L=L_{\text{base}}C_{\text{Pade}}(\mathbf x),
-$$
+$$ L=L_{\text{base}}C_{\text{Pade}}(\mathbf x), $$
 
 or explicitly
 
-$$
-L=L_{\text{base}}\frac{p_0+p_1x_1+p_2x_2+\cdots}{1+q_1x_1+q_2x_2+\cdots}.
-$$
+$$ L=L_{\text{base}}\frac{p_0+p_1x_1+p_2x_2+\cdots}{1+q_1x_1+q_2x_2+\cdots}. $$
 
 ### 9.4 Neural-network surrogate
 
 The neural surrogate is a global tanh-network approximation,
 
-$$
-\hat y(\mathbf x)=b_o+\sum_{j=1}^{M}w_j^{(o)}\tanh\!\left(b_j+\sum_{i=1}^{p}w_{ji}^{(h)}x_i\right).
-$$
+$$ \hat y(\mathbf x)=b_o+\sum_{j=1}^{M}w_j^{(o)}\tanh\!\left(b_j+\sum_{i=1}^{p}w_{ji}^{(h)}x_i\right). $$
 
 The inputs may be standardized as
 
-$$
-\tilde x_i=\frac{x_i-\mu_i}{\sigma_i},
-$$
+$$ \tilde x_i=\frac{x_i-\mu_i}{\sigma_i}, $$
 
 or min-max scaled as
 
-$$
-\tilde x_i=\frac{x_i-x_i^{\min}}{x_i^{\max}-x_i^{\min}}.
-$$
+$$ \tilde x_i=\frac{x_i-x_i^{\min}}{x_i^{\max}-x_i^{\min}}. $$
 
 Training minimizes mean-square loss,
 
-$$
-\mathcal L=\frac{1}{N}\sum_{n=1}^{N}(y_n-\hat y_n)^2,
-$$
+$$ \mathcal L=\frac{1}{N}\sum_{n=1}^{N}(y_n-\hat y_n)^2, $$
 
 and prediction quality is commonly summarized by
 
-$$
-\mathrm{MAPE}=\frac{100}{N}\sum_{n=1}^{N}\left|\frac{y_n-\hat y_n}{y_n}\right|.
-$$
+$$ \mathrm{MAPE}=\frac{100}{N}\sum_{n=1}^{N}\left|\frac{y_n-\hat y_n}{y_n}\right|. $$
 
 ### 9.5 Genetic symbolic-regression formula
 
 The genetic symbolic-regression model is an explicit correction over a baseline,
 
-$$
-L\approx L_{\text{base}}C_{\text{GEP}}(\mathbf x),
-$$
+$$ L\approx L_{\text{base}}C_{\text{GEP}}(\mathbf x), $$
 
 or, more generally,
 
-$$
-L\approx G(\mathbf x).
-$$
+$$ L\approx G(\mathbf x). $$
 
 The documented explicit expression is
 
-$$
-L_{\text{genetic}}=L_{\text{lin}}\left[\exp\!\left(\frac{345U_cT}{509L_{\text{lin}}}\right)+\frac{1052\pi U_c}{1052\pi U_c+435gT}-\frac{5\tanh\!\left(\frac{U_cT}{L_{\text{lin}}}\ln\!\left(T\sqrt{\frac{g}{d}}\right)+\frac{2117}{961}\right)}{67\ln\!\left(\frac{H}{d}\right)}\right].
-$$
+$$ L_{\text{genetic}}=L_{\text{lin}}\left[\exp\!\left(\frac{345U_cT}{509L_{\text{lin}}}\right)+\frac{1052\pi U_c}{1052\pi U_c+435gT}-\frac{5\tanh\!\left(\frac{U_cT}{L_{\text{lin}}}\ln\!\left(T\sqrt{\frac{g}{d}}\right)+\frac{2117}{961}\right)}{67\ln\!\left(\frac{H}{d}\right)}\right]. $$
 
 For readability and implementation checking, it can be decomposed as
 
-$$
-L_{\text{genetic}}=L_{\text{lin}}M,
-$$
+$$ L_{\text{genetic}}=L_{\text{lin}}M, $$
 
 where
 
-$$
-\begin{array}{c}
-\displaystyle M=t_1+t_2+t_3,\\
-\displaystyle t_1=\exp\!\left(\frac{345U_cT}{509L_{\text{lin}}}\right), \qquad t_2=\frac{1052\pi U_c}{1052\pi U_c+435gT},\\
-\displaystyle t_3=-\frac{5\tanh\!\left(\frac{U_cT}{L_{\text{lin}}}\ln\!\left(T\sqrt{\frac{g}{d}}\right)+\frac{2117}{961}\right)}{67\ln\!\left(\frac{H}{d}\right)}.
-\end{array}
-$$
+$$ \begin{array}{c} \displaystyle M=t_1+t_2+t_3,\\ \displaystyle t_1=\exp\!\left(\frac{345U_cT}{509L_{\text{lin}}}\right), \qquad t_2=\frac{1052\pi U_c}{1052\pi U_c+435gT},\\ \displaystyle t_3=-\frac{5\tanh\!\left(\frac{U_cT}{L_{\text{lin}}}\ln\!\left(T\sqrt{\frac{g}{d}}\right)+\frac{2117}{961}\right)}{67\ln\!\left(\frac{H}{d}\right)}. \end{array} $$
 
 ### 9.6 Effective transformed-variable formula
 
 The effective-variable model transforms the input period and depth, then solves a linear dispersion relation with transformed variables. The transformed period and depth are
 
-$$
-\begin{array}{c}
-\displaystyle T_{\text{eff}}=T-\frac{93}{943}\left(U_c^2-\frac{H}{1819\cdot708}\right)+\frac{500}{739}U_c,\\
-\displaystyle d_{\text{eff}}=d+\frac{H^{3/4}}{d^{1/4}}+\frac{986}{873}U_c\tanh(H).
-\end{array}
-$$
+$$ \begin{array}{c} \displaystyle T_{\text{eff}}=T-\frac{93}{943}\left(U_c^2-\frac{H}{1819\cdot708}\right)+\frac{500}{739}U_c,\\ \displaystyle d_{\text{eff}}=d+\frac{H^{3/4}}{d^{1/4}}+\frac{986}{873}U_c\tanh(H). \end{array} $$
 
 Equivalently,
 
-$$
-T_{\text{eff}}=T+\Delta_T, \qquad d_{\text{eff}}=d+\Delta_d,
-$$
+$$ T_{\text{eff}}=T+\Delta_T, \qquad d_{\text{eff}}=d+\Delta_d, $$
 
 with
 
-$$
-\begin{array}{c}
-\displaystyle \Delta_T=\left(U_c^2-\frac{H}{1819\cdot708}\right)\left(-\frac{93}{943}\right)+\frac{500}{739}U_c,\\
-\displaystyle \Delta_d=\sqrt{\frac{H}{\sqrt{d/H}}}+\frac{986}{873}U_c\tanh(H)=\frac{H^{3/4}}{d^{1/4}}+\frac{986}{873}U_c\tanh(H).
-\end{array}
-$$
+$$ \begin{array}{c} \displaystyle \Delta_T=\left(U_c^2-\frac{H}{1819\cdot708}\right)\left(-\frac{93}{943}\right)+\frac{500}{739}U_c,\\ \displaystyle \Delta_d=\sqrt{\frac{H}{\sqrt{d/H}}}+\frac{986}{873}U_c\tanh(H)=\frac{H^{3/4}}{d^{1/4}}+\frac{986}{873}U_c\tanh(H). \end{array} $$
 
 The algebraic identity in the depth transformation is
 
-$$
-\sqrt{\frac{H}{\sqrt{d/H}}}=\frac{H^{3/4}}{d^{1/4}}.
-$$
+$$ \sqrt{\frac{H}{\sqrt{d/H}}}=\frac{H^{3/4}}{d^{1/4}}. $$
 
 The final effective wavelength is obtained from
 
-$$
-L_{\text{effective}}=\mathcal L_{\text{lin}}(T_{\text{eff}},d_{\text{eff}}),
-$$
+$$ L_{\text{effective}}=\mathcal L_{\text{lin}}(T_{\text{eff}},d_{\text{eff}}), $$
 
 where
 
-$$
-\left(\frac{2\pi}{T_{\text{eff}}}\right)^2=gk\tanh(kd_{\text{eff}}), \qquad L_{\text{effective}}=\frac{2\pi}{k}.
-$$
+$$ \left(\frac{2\pi}{T_{\text{eff}}}\right)^2=gk\tanh(kd_{\text{eff}}), \qquad L_{\text{effective}}=\frac{2\pi}{k}. $$
 
 The transformed period must remain nonzero:
 
-$$
-T_{\text{eff}}\ne0.
-$$
+$$ T_{\text{eff}}\ne0. $$
 
 ***
 
