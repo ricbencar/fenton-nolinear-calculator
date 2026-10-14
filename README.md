@@ -30,7 +30,7 @@ where $H$ is wave height, $T$ is the apparent period in the fixed frame, $d$ is 
 | Android app | `fenton.apk` | Fenton App for Android. |
 | Wavelength API | `function.py` | Callable wavelength function `L(H,T,d,Uc)`. |
 | Browser solver | `fenton.html` | Self-contained worker-based solver, accuracy checks and TXT/JSON reports. |
-| Standalone precision solver | `fourier.cpp`, `fourier_precision.cpp` | Analytic Jacobian, adaptive continuation, conditioning-based Fourier order and four result/audit files. |
+| Standalone precision solver | `fourier_precision.cpp` | Analytic Jacobian, adaptive continuation, conditioning-based Fourier order and four result/audit files. |
 | Standalone SVD solver | `fourier_carvalho.cpp` | Analytic Jacobian, damped SVD Newton steps, adaptive continuation and three Fenton-style result files. |
 | Tables | `tables.py` | Batch wavelength-table generation. |
 | Pade surrogate | `pade.py`, `pade.bas` | Rational approximation model. |
@@ -813,7 +813,7 @@ The numerical implementations share the governing equations but use different li
 
 | Implementation | Linear solve and nonlinear step control |
 | --- | --- |
-| `fourier.cpp` / `fourier_precision.cpp` | Row/column equilibration, LU with iterative refinement, pivoted QR and regularized least-squares fallbacks; trust-region dogleg steps and positive-variable retraction. |
+| `fourier_precision.cpp` | Row/column equilibration, LU with iterative refinement, pivoted QR and regularized least-squares fallbacks; trust-region dogleg steps and positive-variable retraction. |
 | `fourier_carvalho.cpp` | Column-equilibrated SVD, relative singular-value cutoff $10^{-15}$ and residual-decreasing backtracking. |
 | `fenton_gui.py`, `fenton_gui.cpp`, `fenton.html` | Analytic Jacobian, scaled SVD-based correction and safeguarded adaptive continuation. |
 | `fenton.bas` | Analytic Jacobian, column-equilibrated SVD, backtracking and adaptive height continuation. |
@@ -836,9 +836,9 @@ $$
 50\to40\to32\to25\to20\to16\to12.
 $$
 
-Each restart solves the original target wave again with the active state-vector size $2N+10$. It does not reduce the requested physical wave height or relax the final residual tolerance. `fourier_carvalho.cpp` starts at its user-requested order and uses $N_{\mathrm{next}}=\max(12,\lfloor0.8N\rfloor)$ when the requested order is at least 12; a smaller requested order is not increased.
+Each restart solves the original target wave again with the active state-vector size $2N+10$. It does not reduce the requested physical wave height or relax the final residual tolerance. `fourier.cpp` starts at its user-requested order and uses $N_{\mathrm{next}}=\max(12,\lfloor0.8N\rfloor)$ when the requested order is at least 12; a smaller requested order is not increased.
 
-Short periods such as 3 s and 4 s can make high Fourier orders poorly conditioned for otherwise solvable waves. Adaptive height continuation, scaled basis functions and conditioning-based order selection address this numerical difficulty. A shorter period can also make the specified wave approach or exceed the limiting steady-wave height. Non-convergence is reported if the requested target cannot be verified; an intermediate-height solution is not presented as the requested result.
+Short periods can make high Fourier orders poorly conditioned for otherwise solvable waves. Adaptive height continuation, scaled basis functions and conditioning-based order selection address this numerical difficulty. A shorter period can also make the specified wave approach or exceed the limiting steady-wave height. Non-convergence is reported if the requested target cannot be verified; an intermediate-height solution is not presented as the requested result.
 
 ### 7.6 Convergence, conditioning and spectral resolution
 
@@ -851,7 +851,7 @@ $$
 
 | Implementation | Intermediate residual limits | Final residual limits |
 | --- | --- | --- |
-| `fourier.cpp` / `fourier_precision.cpp` | $F_{\mathrm{RMS}}\le10^{-10}$ and $F_{\max}\le10^{-9}$ | $F_{\mathrm{RMS}}\le10^{-12}$ and $F_{\max}\le10^{-11}$ |
+| `fourier_precision.cpp` | $F_{\mathrm{RMS}}\le10^{-10}$ | $F_{\mathrm{RMS}}\le10^{-12}$ |
 | `fourier_carvalho.cpp` | $F_{\max}\le10^{-10}$ | $F_{\max}\le10^{-10}$ |
 | Python/C++ GUI and HTML solvers | $F_{\max}\le10^{-8}$, together with their step checks | $F_{\max}\le10^{-10}$, rechecked after post-processing and enclosed independently |
 | `fenton.bas` | $F_{\max}\le10^{-10}$ | $F_{\max}\le10^{-10}$ after dimensional normalization, plus independent interval checks |
@@ -870,8 +870,6 @@ The precision driver writes independent diagnostics to `solver.res`:
 | Spectral resolution check | Compares the maximum between-node boundary defect with $10^{-9}$. |
 
 For the precision driver's spectral check, the cosine surface supplies the initial ordinate at each off-grid phase. A safeguarded correction locates the free-surface streamline before the Bernoulli defect is evaluated. The surface output file instead samples the cosine reconstruction directly, so its pressure check need not equal the off-grid diagnostic in `solver.res`.
-
-`fourier_carvalho.cpp` reports the accepted order, maximum residual, Jacobian condition and between-node defect in `solution.res`. Its between-node check evaluates both boundary equations directly on the cosine surface. Consequently its defect is not numerically interchangeable with the precision driver's streamline-corrected diagnostic.
 
 For the standalone drivers described above, a spectral `FAIL` is a separate resolution warning: nonlinear convergence may still be `PASS`. Both statuses must be considered when assessing a result. A failed nonlinear or conditioning check prevents the standalone solvers from writing a new result set; existing files from an earlier run may remain on disk.
 
@@ -1030,10 +1028,7 @@ $$
 \end{array}
 $$
 
-The integral formulas use the **absolute** bed velocity, including Eulerian
-current, following Fenton's online [*Nonlinear wave theories*, §7](https://johndfenton.com/Papers/Fenton90b-Nonlinear-wave-theories.pdf).
-The density factor in kinetic energy is explicit here because I includes density.
-The invariant and absolute-bed-velocity expressions coincide for an exact steady wave. At a stored finite Fourier state, the invariant formulas supply the main outputs, and the independently evaluated spectral bed-velocity formulas are compared against them within the budgets in §7.7.
+The integral formulas use the **absolute** bed velocity, including Eulerian current, following Fenton's Nonlinear wave theories. The density factor in kinetic energy is explicit here because I includes density. The invariant and absolute-bed-velocity expressions coincide for an exact steady wave. At a stored finite Fourier state, the invariant formulas supply the main outputs, and the independently evaluated spectral bed-velocity formulas are compared against them within the budgets in §7.7.
 
 $$
 \langle u_{b,\mathrm{abs}}^2\rangle
@@ -1456,7 +1451,7 @@ Use a Windows toolchain providing the listed libraries. The interval checker req
 
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --noconsole fenton_gui.py
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name fenton_gui.exe fenton_gui.py
 ```
 
 The executable is written to the `dist` directory.
@@ -1480,8 +1475,6 @@ The **Fenton App for Android** is distributed as the universal release package `
 3. **Use that same authorized application.** If permission was granted to the file manager, open the phone's file manager, navigate to **Download**, and tap `fenton.apk`. If permission was granted to the browser, open the completed download from that browser. Authorizing a browser does not authorize a file manager, and vice versa.
 4. **Approve the Android installer.** Tap **Install** and allow any device security scan to finish. When Android reports that installation is complete, tap **Open** or launch **Fenton Wave Solver** from the app list.
 5. **Optionally revoke the source permission.** After installation, **Allow from this source** can be disabled again without affecting the installed application.
-
-Disabling Google Play Protect is normally unnecessary and is not a substitute for the per-source **Allow from this source** permission. Keep Play Protect enabled unless the device administrator or Android itself provides a specific reason to change it.
 
 #### Troubleshooting installation
 
@@ -1509,10 +1502,10 @@ This command prints the precise Android package-manager error when a graphical i
 Compile the `fourier.cpp` source with a C++20 compiler:
 
 ```bash
-g++ -std=c++20 -O3 -Wall -Wextra -pedantic fourier.cpp -o fourier
+g++ -std=c++20 fourier.cpp -O3 -march=native -flto=auto -fopenmp -static-libgcc -static-libstdc++ -o fourier.exe
 ```
 
-Add `-fopenmp` for an OpenMP build where supported. On Windows, use `-o fourier.exe`. The source named `fourier_precision.cpp` uses the same driver and result-file contract; substitute that source filename when compiling it.
+Add `-fopenmp` for an OpenMP build where supported. On Windows, use `-o fourier.exe`. The source uses the same driver and result-file contract; substitute that source filename when compiling it.
 
 The program reads `data.dat` from the working directory or, if absent there, beside the executable. If no file is found, it requests all required case values interactively. Physical inputs have no silent defaults.
 
@@ -1545,7 +1538,7 @@ FINISH
 Run:
 
 ```bash
-./fourier
+./fourier.exe
 ```
 
 On Windows, run `fourier.exe`. `fourier --help` displays the input contract. When using `data.dat`, results are written beside that file; interactive runs use the working directory.
@@ -1566,8 +1559,8 @@ Inspect the process exit status and `solver.res` before using results. A nonzero
 `fourier_carvalho.cpp` retains a separate command-line and file interface:
 
 ```bash
-g++ -std=c++20 -O3 -Wall -Wextra -pedantic fourier_carvalho.cpp -o fourier_carvalho
-./fourier_carvalho 0.6 Period 12.604274275022739 1 0.0 50 4
+g++ -std=c++20 -O3 -Wall -Wextra -pedantic fourier.cpp -o fourier.exe
+./fourier.exe 0.6 Period 12.604274275022739 1 0.0 50 4
 ```
 
 The arguments are `H_over_d Case Value CurrentCriterion [CurrentValue] N Steps`. `CurrentValue`, when present, follows the current criterion. `N` is the requested Fourier order, from 1 to 512; `Steps` is the initial height subdivision, from 1 to 4096, and continuation subsequently adapts its increments. If `CurrentValue` is omitted, the current is zero.
@@ -1591,20 +1584,19 @@ Import `fenton.bas` into a **standard VBA module** through the Visual Basic Edit
 The wavelength function retains this interface:
 
 ```vb
-L_fenton(H, T, d, [U], [UseHomotopy])
+L_fenton(H, T, d, [U])
 ```
 
-`U` defaults to zero. `UseHomotopy` is retained for worksheet compatibility; adaptive height continuation is always applied. A successful call returns wavelength in metres. A failed nonlinear solve, inadmissible state or failed accuracy check returns an `Err: ` text message, rather than a partial or unverified wavelength.
+`U` defaults to zero. Adaptive height continuation is always applied. A successful call returns wavelength in metres. A failed nonlinear solve, inadmissible state or failed accuracy check returns an `Err: ` text message, rather than a partial or unverified wavelength.
 
 ```excel
 =L_fenton(3,9,5)
 =L_fenton(3,9,5,1)
-=Fenton_report(3,9,5,1)
 ```
 
-Use semicolons instead of commas if required by Excel's regional settings. `Fenton_report(H,T,d,[U])` returns a multiline text report; enable **Wrap Text** in its cell. It includes the acceptance outcome, active order, conditioning, residual and comparison diagnostics. For accepted cases it also lists the nine checked outputs and their enclosures. Each call performs its own solve and verification, so extensive worksheet tables can take appreciable time to recalculate.
+Use semicolons instead of commas if required by Excel's regional settings.
 
-For the default wave $H=3$ m, $T=9$ s and $d=5$ m, representative accepted wavelengths are:
+For the default wave $H=3$ m, $T=9$ s and $d=5$ m, calculated wavelengths are:
 
 | Eulerian current (m/s) | Wavelength (m), approximately |
 | ---: | ---: |
@@ -1636,7 +1628,7 @@ lake exe cache get
 lake build
 ```
 
-The package pins Lean 4.34.0 and Mathlib commit `5ed2965256430c3649e86755f9576b54eca72435`. The audit checks the source identities before generating recorded certificates. Successful reproduction requires both the numerical tests and all five Lean modules to pass. Deliberate rejection of an under-resolved case is a passing acceptance test when that rejection is the expected outcome. Read §7.8 for the exact scope of the resulting evidence.
+The package uses Lean 4.34.0 and Mathlib. The audit checks the source identities before generating recorded certificates. Successful reproduction requires both the numerical tests and all five Lean modules to pass. Deliberate rejection of an under-resolved case is a passing acceptance test when that rejection is the expected outcome.
 
 
 ***
