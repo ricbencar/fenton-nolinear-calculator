@@ -4,6 +4,8 @@
 
 This repository computes steady, two-dimensional, periodic finite-amplitude gravity waves in finite water depth, with optional collinear current. The reference calculation is a stream-function / Fourier collocation method in the Rienecker-Fenton and Fenton numerical-wave tradition: the Fourier basis satisfies the field equation and the bed condition, while Newton iteration solves the nonlinear free-surface boundary conditions and global wave-current constraints.
 
+**The main desktop application is `fenton_gui.rs`**, a complete single-file Rust 2021 implementation with a native 64-bit Windows GUI, nonlinear solver, numerical verification and text-report generator. The recommended production build uses the GNU/MinGW-w64 target in **MSYS2 UCRT64** on Windows 10/11, without Visual Studio, MSVC, third-party Rust crates or a Cargo manifest. **`fenton_gui.py` is the secondary desktop implementation**, retaining its Tkinter GUI, NumPy/optional Numba solver, validation workflow and PyInstaller build. The independent C++, browser, Android, API, VBA and standalone tools retain their individual interfaces as described below.
+
 The central engineering calculation is the nonlinear mapping
 
 $$ L=F(H,T,d,U_c), $$
@@ -23,8 +25,9 @@ where $H$ is wave height, $T$ is the apparent period in the fixed frame, $d$ is 
 
 | Group | Files | Role in the toolchain |
 | --- | --- | --- |
-| Main GUI solver | `fenton_gui.py` | Python nonlinear solver, GUI, numerical acceptance checks and interval certificates. |
-| Native GUI solver | `fenton_gui.cpp` | Windows C++ GUI with finite-system interval and output-accuracy checks. |
+| **Main Windows GUI and CLI solver (Rust)** | **`fenton_gui.rs`** | **Production single-file Rust 2021 application: Win32 GUI, optional command-line build, nonlinear Fourier solver, SVD, interval certificates and 107-character engineering report; no external Rust crates.** |
+| Secondary Python GUI solver | `fenton_gui.py` | Python nonlinear solver, Tkinter GUI, numerical acceptance checks, interval certificates and standalone PyInstaller option. |
+| Additional C++ GUI solver | `fenton_gui.cpp` | Windows C++ GUI with finite-system interval and output-accuracy checks. |
 | Android app | `fenton.apk` | Fenton App for Android. |
 | Wavelength API | `function.py` | Callable wavelength function `L(H,T,d,Uc)`. |
 | Browser solver | `fenton.html` | Self-contained worker-based solver, accuracy checks and TXT/JSON reports. |
@@ -38,6 +41,23 @@ where $H$ is wave height, $T$ is the apparent period in the fixed frame, $d$ is 
 | Nomograms | `nomogram_plots.py`, `nomogen_plots.py` | Printable design-chart generation. |
 | Nonlinear Excel/VBA solver | `fenton.bas` | `L_fenton` wavelength function and `Fenton_report` numerical verification report, with prescribed Eulerian current. |
 | Spreadsheet deployment | Other `*.bas` modules, `wavelenght.xlsm` | Spreadsheet implementation layer for the respective methods. |
+
+### 1.1 Rust application structure
+
+`fenton_gui.rs` is self-contained and uses only the Rust standard library and native Win32 system libraries. The file contains the following logical modules:
+
+| Rust module | Responsibility |
+| --- | --- |
+| `linalg` | Dense, column-equilibrated one-sided Jacobi singular-value decomposition (SVD) for Newton corrections, with singular-value truncation and conditioning diagnostics. |
+| `verified` | Outward-expanded binary64 intervals, finite-residual enclosures and nine engineering output-formula checks. |
+| `solver` | Fenton stream-function/Fourier collocation, analytic Jacobian, adaptive wave-height continuation, dimensional hydrodynamics, phase extrema and numerical acceptance. |
+| `report` | Fixed-width (107-character) report, comparison of no-current and prescribed-current scenarios, Fenton `SOLUTION.RES` tables and parameter glossary. |
+| `windows_gui` | Native Win32 interface, UTF-16 controls, worker-thread execution and `output.txt` export. |
+| `main` | Windows graphical entry point and conditional `headless` command-line entry point. |
+
+For nonzero prescribed current, the Rust application solves no-current and with-current cases in independent scoped threads. The Win32 interface uses a separate calculation worker so that the event loop remains responsive. It creates `output.txt` in the **process working directory** as UTF-8 text; the same result is displayed in the GUI. The values are computed from the verified nonlinear state, not from fixed demonstration tables. The implementation requests 50 Fourier harmonics and reduces the active order if numerical conditioning requires it.
+
+The source uses IEEE-754 binary64 (`f64`) for its primary numerical calculations. `-C panic=unwind` must remain enabled so `catch_unwind` can handle exceptions raised during the finite-system verification. The method verifies finite-system expressions and engineering outputs within its stated numerical budgets; these checks do not prove existence or uniqueness of an exact solution to the continuous free-boundary problem.
 
 The hierarchy is intentional. The stream-function / Fourier solver is the physical reference model. `fenton.bas` solves the coupled nonlinear Fourier system and checks selected integral outputs internally, even when the worksheet requests only wavelength. The separate API, approximation modules and nomograms provide their documented interfaces for wavelength estimation, tabulation or graphical design work.
 
@@ -598,6 +618,7 @@ The numerical implementations share the governing equations but use different li
 | --- | --- |
 | `fourier_precision.cpp` | Row/column equilibration, LU with iterative refinement, pivoted QR and regularized least-squares fallbacks; trust-region dogleg steps and positive-variable retraction. |
 | `fourier_carvalho.cpp` | Column-equilibrated SVD, relative singular-value cutoff $10^{-15}$ and residual-decreasing backtracking. |
+| **`fenton_gui.rs` (main application)** | **Analytic Jacobian, column-equilibrated one-sided Jacobi SVD, $10^{-15}$ relative singular-value threshold, residual-decreasing Newton backtracking, adaptive height continuation and interval-based output checks.** |
 | `fenton_gui.py`, `fenton_gui.cpp`, `fenton.html` | Analytic Jacobian, scaled SVD-based correction and safeguarded adaptive continuation. |
 | `fenton.bas` | Analytic Jacobian, column-equilibrated SVD, backtracking and adaptive height continuation. |
 
@@ -627,6 +648,7 @@ $$ F_{\mathrm{RMS}}=\sqrt{\frac{1}{M}\sum_{i=1}^{M}F_i^2},\qquad F_{\max}=\max_i
 | --- | --- | --- |
 | `fourier_precision.cpp` | $F_{\mathrm{RMS}}\le10^{-10}$ | $F_{\mathrm{RMS}}\le10^{-12}$ |
 | `fourier_carvalho.cpp` | $F_{\max}\le10^{-10}$ | $F_{\max}\le10^{-10}$ |
+| **Rust GUI/CLI (`fenton_gui.rs`)** | $F_{\max}\le10^{-8}$, together with the mean free-surface correction check | $F_{\max}\le10^{-10}$, rechecked after dimensional normalization, with independent numerical and binary64 interval checks |
 | Python/C++ GUI and HTML solvers | $F_{\max}\le10^{-8}$, together with their step checks | $F_{\max}\le10^{-10}$, rechecked after post-processing and enclosed independently |
 | `fenton.bas` | $F_{\max}\le10^{-10}$ | $F_{\max}\le10^{-10}$ after dimensional normalization, plus independent interval checks |
 
@@ -649,7 +671,7 @@ For the standalone drivers described above, a spectral `FAIL` is a separate reso
 
 ### 7.7 Acceptance of the finite Fourier system and selected outputs
 
-`fenton_gui.py`, `fenton_gui.cpp`, `fenton.html` and `fenton.bas` apply an output-accuracy gate after the nonlinear solve. A result is accepted only when the requested target state satisfies the conditioning, finite-value, residual, spatial-resolution and output checks. These requirements supplement the nonlinear residual limits in §7.6.
+`fenton_gui.rs`, `fenton_gui.py`, `fenton_gui.cpp`, `fenton.html` and `fenton.bas` apply an output-accuracy gate after the nonlinear solve. A result is accepted only when the requested target state satisfies the conditioning, finite-value, residual, spatial-resolution and output checks. These requirements supplement the nonlinear residual limits in §7.6.
 
 | Check | Evaluation | Acceptance requirement |
 | --- | --- | --- |
@@ -676,6 +698,7 @@ The nine enclosed outputs are **wavelength, celerity, impulse, kinetic energy, p
 
 | Implementation | Independent enclosure arithmetic |
 | --- | --- |
+| **Rust** | **Outward-expanded IEEE binary64 intervals, explicit exponential/trigonometric Taylor remainders and finite-formula checks for nine outputs.** |
 | Python | 50-digit outward-rounded `Decimal` intervals; the binary64 inputs are interpreted exactly. |
 | C++ | Outward-rounded IEEE binary64 intervals using adjacent representable endpoints. |
 | HTML/JavaScript | Outward-rounded IEEE binary64 intervals with explicitly constructed adjacent endpoints. |
@@ -683,7 +706,7 @@ The nine enclosed outputs are **wavelength, celerity, impulse, kinetic energy, p
 
 The interval evaluators use bounded trigonometric series independently of the ordinary collocation sine/cosine evaluations. The C++, JavaScript and VBA exponential enclosures use Taylor bounds and range reduction; their square-root endpoint checks validate the initial root estimates.
 
-In the Python, C++ and JavaScript solver objects, successful acceptance sets `converged`, `accuracy_verified` and `finite_system_verified`. The `accuracy_metrics` object records the sampled surface residual and comparison ratios; a ratio at or below one satisfies its budget. `finite_system_certificate` records the residual and output enclosures, budgets and their scope.
+In the Rust, Python, C++ and JavaScript solver objects, successful acceptance sets `converged`, `accuracy_verified` and `finite_system_verified`. The `accuracy_metrics` object records the sampled surface residual and comparison ratios; a ratio at or below one satisfies its budget. `finite_system_certificate` records the residual and output enclosures, budgets and their scope.
 
 | `solution_status` | Meaning |
 | --- | --- |
@@ -693,7 +716,7 @@ In the Python, C++ and JavaScript solver objects, successful acceptance sets `co
 | `resolution_failure` | The collocation solve completed, but one or more resolution or output-accuracy budgets were exceeded. |
 | `accuracy_failure` | The verification calculation could not be completed, for example because of a numerical exception. |
 
-`finite_system_verified` alone does not imply overall acceptance. A finite state can have very small collocation residuals while failing the between-node or integral checks. The GUI and browser display engineering values only for accepted cases, assessing the no-current and imposed-current solutions separately. VBA returns an `Err: ` message instead of a wavelength when a check fails; `Fenton_report` exposes the reason and available diagnostics.
+`finite_system_verified` alone does not imply overall acceptance. A finite state can have very small collocation residuals while failing the between-node or integral checks. The Rust, Python and C++ GUIs and browser display engineering values only for accepted cases, assessing the no-current and imposed-current solutions separately. VBA returns an `Err: ` message instead of a wavelength when a check fails; `Fenton_report` exposes the reason and available diagnostics.
 
 ### 7.8 Verification evidence and Lean scope
 
@@ -730,7 +753,7 @@ The companion Python verification package contains five Lean modules:
 
 The Lean evidence is tied to the source snapshots and recorded states identified by the verification package. Lean checks the mathematical statements, enclosure implications and recorded inequalities. The source-to-model correspondence and runtime interval construction are reviewed and numerically tested; the complete Python, C++, JavaScript and VBA programs are not extracted from Lean or certified as executable programs. The evidence also does not prove existence or uniqueness of an exact nonlinear root, or a continuous water-wave truncation-error bound. This scope is compatible with the demonstrated accuracy of the accepted benchmark calculations.
 
-The verification results in this section apply to the named implementations and their recorded tests. They do not certify the Android binary, separate standalone drivers, wavelength API or surrogate models.
+The verification results in this section apply to the named implementations and their recorded tests. They do not certify the Android binary, separate standalone drivers, wavelength API or surrogate models. The Rust source includes its own unit and ignored numerical reference tests (see §11.1), but the preceding Python/C++/JavaScript/VBA benchmark counts and Lean certificates must not be interpreted as an independently executed validation of a particular Rust binary or compiler configuration.
 
 
 ***
@@ -784,7 +807,7 @@ Consequently the potential energy of that reconstructed surface is
 
 $$ V_p=\frac{\rho g}{k^2}\left(\frac14\sum_{j=1}^{N-1}Y_j^2+ \frac{Y_N^2}{16}\right). $$
 
-Acceptance in the Python/C++ GUI, HTML and VBA solvers requires the residual limits in §7.6 and the resolution and output-accuracy checks in §7.7. A small Newton correction alone is insufficient. The complete target state is checked before accepted engineering outputs are exposed.
+Acceptance in the Rust/Python/C++ GUI, HTML and VBA solvers requires the residual limits in §7.6 and the resolution and output-accuracy checks in §7.7. A small Newton correction alone is insufficient. The complete target state is checked before accepted engineering outputs are exposed.
 
 The point kernel evaluates the hyperbolic ratios with scaled exponentials to
 avoid cancellation and overflow at the bed:
@@ -833,7 +856,7 @@ The kinetic- and potential-energy integrals are defined above. These checks use 
 
 ### 8.2 Phase extrema and engineering estimates
 
-The Python/C++ GUI and HTML solvers estimate phase maxima by sampling $\max(257,8N+1)$ points on the symmetric half-wave and refining each detected local-maximum bracket with golden-section search. Refinement uses at most 64 iterations or stops when the phase bracket is narrower than $10^{-12}$ radians. The largest evaluated magnitude is retained. This provides refined numerical estimates, rather than a proof of the global maximum between all sampled points.
+The Rust/Python/C++ GUI and HTML solvers estimate phase maxima by sampling $\max(257,8N+1)$ points on the symmetric half-wave and refining each detected local-maximum bracket with golden-section search. Refinement uses at most 64 iterations or stops when the phase bracket is narrower than $10^{-12}$ radians. The largest evaluated magnitude is retained. This provides refined numerical estimates, rather than a proof of the global maximum between all sampled points.
 
 | Field | Meaning |
 | --- | --- |
@@ -848,7 +871,7 @@ The material horizontal acceleration used by the GUI and browser is
 
 $$ a_x=\frac{\partial u}{\partial t} +u\frac{\partial u}{\partial x}+v\frac{\partial u}{\partial y} =(u-c)\frac{\partial u}{\partial x}+v\frac{\partial u}{\partial y}. $$
 
-This differs from the local acceleration $\partial u/\partial t=-c\,\partial u/\partial x$ written by the standalone flow-field drivers in §11.6.
+This differs from the local acceleration $\partial u/\partial t=-c\,\partial u/\partial x$ written by the standalone flow-field drivers in §11.7.
 
 The engineering bed diagnostics are
 
@@ -1019,14 +1042,16 @@ $$ T_{\text{eff}}\ne0. $$
 
 | Feature | Description |
 | --- | --- |
+| **Primary native Rust application** | **`fenton_gui.rs`: Rust 2021; native Windows GNU x64 GUI, independent CLI build, verification certificates, direct `rustc` compilation and no external crates.** |
+| **Secondary Python application** | **`fenton_gui.py`: Tkinter + NumPy, optional Numba acceleration, direct Python execution and PyInstaller GUI executable.** |
 | Fully nonlinear stream-function solve | Solves surface shape, velocity field, wavelength and integral quantities. |
 | Current-aware formulation | Separates Eulerian, Stokes, mean-flow and flux conventions. |
 | Continuation | Adapts height increments and restores the last accepted state after a failed trial. |
 | Fourier order | Requested $N=50$ in the precision driver; the accepted order is limited by Jacobian conditioning and reported explicitly. |
-| Numerical verification | GUI, HTML and VBA: finite-state interval enclosures, surface-resolution checks and independent output comparisons. Standalone drivers: their documented residual and spectral diagnostics. |
+| Numerical verification | Rust, Python/C++ GUIs, HTML and VBA: finite-state interval enclosures, surface-resolution checks and independent output comparisons. Standalone drivers: their documented residual and spectral diagnostics. |
 | Lean evidence | Mathematical identities, finite-system implications and recorded inequalities; scope and benchmark coverage in §7.8. |
 | Short-period calculations | Stable vertical basis and adaptive continuation/order control support tested 3 s and 4 s cases without guaranteeing every height/current combination. |
-| GUI output | Reports accepted geometry, estimated phase extrema, integrals, accuracy diagnostics and breaking-screening quantities. |
+| GUI output | Rust and Python report accepted geometry, estimated phase extrema, integrals, accuracy diagnostics and breaking-screening quantities; Rust uses a fixed-width 107-character text report. |
 | Wavelength API | Provides callable `L(H,T,d,Uc)` for scripts and tables. |
 | Surrogates | Provides Pade, neural, symbolic-regression and effective-variable approximations. |
 | Excel/VBA support | `L_fenton` returns an accepted nonlinear wavelength; `Fenton_report` exposes checks and enclosures. Separate modules provide their respective approximations. |
@@ -1037,7 +1062,213 @@ $$ T_{\text{eff}}\ne0. $$
 
 ## 11. Installation and use
 
-### 11.1 Python GUI
+### 11.1 Main application — Rust GUI and command-line solver
+
+#### 11.1.1 Rust implementation and platform requirements
+
+The main program is **`fenton_gui.rs`**, a single-file **Rust 2021 edition** application. It contains the complete wave solver, report generator, numerical tests and Win32 GUI. Its standard build produces a native Windows x64 executable named `fenton_gui.exe`; a conditional `headless` build produces a command-line program from the **same source file**. No Python, NumPy, Numba, Cargo dependencies, Visual Studio, Microsoft C++ Build Tools, MSVC linker or WinGet is needed for the Rust compilation.
+
+| Requirement | Production configuration |
+| --- | --- |
+| Build operating system | Windows 10 64-bit (version 1809 or later) or Windows 11 64-bit |
+| Programming language | Rust, **2021 edition** (`--edition=2021`) |
+| Compiler distribution | Rust `rustc` supplied by the **MSYS2 UCRT64** package repository |
+| Toolchain target / host | `x86_64-pc-windows-gnu` |
+| Linker | GNU GCC driver from the UCRT64 environment (`-C linker=gcc`) |
+| Rust crates | Rust standard library only; no third-party crates and no mandatory `Cargo.toml` |
+| Graphical user interface | Native Win32 (`user32`, `gdi32`, `kernel32`), with no external GUI framework |
+| Floating-point precision | IEEE-754 binary64 (`f64`); no fast-math or relaxed reassociation |
+| Release build | `-C opt-level=3`, `-C codegen-units=1`, `-C lto=fat`, `-C panic=unwind` |
+| Execution outputs | GUI display and UTF-8 `output.txt` in the current working directory |
+
+The Rust compiler **edition is not a fixed compiler-version pin**. MSYS2's `pacman` installs the Rust release currently available in the configured repository. Record the exact installed build with `rustc --version` and `rustc -vV` when a reproducible engineering calculation is needed. The project is compiled directly by `rustc`; a `Cargo.toml` and a separate `rustup` installation are not required for this build method.
+
+The current MSYS2 installer and UCRT64 build environment target modern Windows. These commands **are not a Windows 7 installation procedure**. A Rust release compiled on one processor must also respect the selected CPU target when copied to another computer.
+
+#### 11.1.2 Install MSYS2 and the complete UCRT64 toolchain
+
+1. Download the x64 MSYS2 installer from [msys2.org](https://www.msys2.org/) and install it, normally to `C:\msys64`.
+2. Launch **MSYS2 UCRT64** from the Windows Start menu, not the plain MSYS2/MSYS terminal and not an unrelated MINGW64 shell.
+3. Update the package database and installed packages:
+
+```bash
+pacman -Syu
+```
+
+If requested, close the terminal, reopen **MSYS2 UCRT64**, and repeat `pacman -Syu` until the update finishes normally.
+
+4. Install the GNU compiler, binutils, Rust compiler and Cargo in the same UCRT64 environment:
+
+```bash
+pacman -S --needed base-devel mingw-w64-ucrt-x86_64-toolchain mingw-w64-ucrt-x86_64-rust
+```
+
+The `mingw-w64-ucrt-x86_64-rust` package is the Windows GNU/UCRT64 Rust distribution. In particular, **`pacman -S rust` alone is not the same installation**: that selects the MSYS runtime package rather than the native UCRT64 Rust package. Keep the Rust compiler, GCC linker, C runtime and libraries within the same `/ucrt64` prefix; do not mix `/mingw64` and `/ucrt64` binaries or add an unrelated `%USERPROFILE%\.cargo\bin` to the front of the UCRT64 `PATH`.
+
+Check the environment before compiling:
+
+```bash
+echo "$MSYSTEM"
+command -v rustc
+command -v cargo
+command -v gcc
+command -v objdump
+rustc --version
+cargo --version
+gcc --version
+rustc -vV
+rustc --print target-libdir --target x86_64-pc-windows-gnu
+```
+
+Expected values include `UCRT64`, paths under `/ucrt64/bin/`, and `host: x86_64-pc-windows-gnu`. If these differ, resolve the toolchain-selection issue before compiling. Compiler updates may change floating-point last digits and should be followed by reference tests.
+
+#### 11.1.3 Project directory and direct GUI compilation
+
+Put the Rust source in the intended build directory using the exact filename **`fenton_gui.rs`**. For example, a project located at `C:\Downloads\github\fenton-nolinear-calculator-main\rust` is accessed inside MSYS2 as:
+
+```bash
+cd /c/Downloads/github/fenton-nolinear-calculator-main/rust
+ls -lh fenton_gui.rs
+```
+
+The **recommended machine-optimized release command**, to be run in **MSYS2 UCRT64 Bash**, is:
+
+```bash
+rustc --edition=2021 --target x86_64-pc-windows-gnu \
+  -C linker=gcc \
+  -C opt-level=3 \
+  -C codegen-units=1 \
+  -C lto=fat \
+  -C target-cpu=native \
+  -C target-feature=-fma \
+  -C prefer-dynamic=no \
+  -C panic=unwind \
+  -C strip=symbols \
+  "fenton_gui.rs" -o "fenton_gui.exe"
+```
+
+Copy/paste the **complete command**, including the final source and `-o` arguments. In Bash, each continuation backslash must be the last character on its line. To avoid multi-line quoting errors, the equivalent one-line command is:
+
+```bash
+rustc --edition=2021 --target x86_64-pc-windows-gnu -C linker=gcc -C opt-level=3 -C codegen-units=1 -C lto=fat -C target-cpu=native -C target-feature=-fma -C prefer-dynamic=no -C panic=unwind -C strip=symbols "fenton_gui.rs" -o "fenton_gui.exe"
+```
+
+The `target-cpu=native` executable is tuned for the build machine's CPU and **must not be assumed executable on older x64 processors**. For a general-purpose x64 build use the following portable baseline:
+
+```bash
+rustc --edition=2021 --target x86_64-pc-windows-gnu -C linker=gcc -C opt-level=3 -C codegen-units=1 -C lto=fat -C target-cpu=x86-64 -C prefer-dynamic=no -C panic=unwind -C strip=symbols "fenton_gui.rs" -o "fenton_gui_portable.exe"
+```
+
+The portable binary uses baseline x86-64 instruction selection but still requires a compatible Windows OS and any runtime DLLs shown by the executable's import table. The source's `windows_subsystem = "windows"` conditional attribute makes this a normal GUI executable without a separate console window. No `-mwindows` or `WinMain` wrapper is needed.
+
+Check and run the binary:
+
+```bash
+test -f fenton_gui.exe && echo "GUI executable built"
+./fenton_gui.exe
+```
+
+Enter wave height $H$ [m], period $T$ [s], still-water depth $d$ [m] and signed Eulerian current $U_c$ [m/s]; press **CALCULATE**. The initial values are $H=3$ m, $T=9$ s, $d=5$ m and $U_c=1$ m/s. Positive current follows the wave-propagation direction. For nonzero current, the program evaluates the no-current and imposed-current cases separately. The 107-character-wide report is displayed in the native GUI and saved to **`output.txt`** in the process's working directory. The file uses UTF-8; the Win32 text viewer displays UTF-16 with Windows line endings. A write failure can prevent file creation even when the GUI displays a completed report.
+
+#### 11.1.4 Compiler flag reference and floating-point safety
+
+| Option | Meaning and engineering consequence |
+| --- | --- |
+| `--edition=2021` | Parse the Rust 2021 source correctly; independent of the installed `rustc` release number. |
+| `--target x86_64-pc-windows-gnu` | Generate a 64-bit native Windows executable using the GNU ABI. |
+| `-C linker=gcc` | Use the GCC linker driver from the selected MSYS2 UCRT64 toolchain. |
+| `-C opt-level=3` | Enable high LLVM optimization without requesting unsafe fast-math semantics. |
+| `-C codegen-units=1` | Build one code-generation unit to enable wider optimization; compilation can take longer. |
+| `-C lto=fat` | Whole-program link-time optimization across the application and eligible Rust library code. |
+| `-C target-cpu=native` | Tune machine instructions and scheduling for the local CPU; not necessarily portable and not guaranteed faster for every case. |
+| `-C target-cpu=x86-64` | Produce the baseline x86-64 alternative intended for broader CPU compatibility. |
+| `-C target-feature=-fma` | Avoid FMA instruction contraction in the optimized native build, preserving the implementation's separate multiply/add rounding model used by its binary64 interval checks. |
+| `-C prefer-dynamic=no` | Prefer static Rust libraries where supported; does not itself statically link all GCC/MinGW libraries. |
+| `-C panic=unwind` | Preserve unwinding needed by `std::panic::catch_unwind` around numerical verification and GUI worker logic. |
+| `-C strip=symbols` | Remove debugging symbols from the release executable; numerical results are not intentionally changed. |
+| `-o fenton_gui.exe` | Write the compiled GUI program to the specified filename. |
+
+**Do not enable fast-math, finite-math-only assumptions, floating-point reassociation, or `panic=abort`**. In particular, `panic=abort` would bypass the source's intended `catch_unwind` handling. The interval checker expects IEEE binary64 with gradual underflow; the source performs a runtime subnormal check. High compiler optimization is compatible with the target verification method only while those arithmetic assumptions remain valid. A new compiler/CPU configuration should be evaluated using the built-in tests and representative nonlinear-wave cases before engineering use.
+
+#### 11.1.5 Compile and run the optional Rust command-line solver
+
+The same source implements a console entry point behind `feature="headless"`. Compile it in MSYS2 UCRT64 without the GUI subsystem:
+
+```bash
+rustc --edition=2021 --target x86_64-pc-windows-gnu \
+  --cfg 'feature="headless"' \
+  -C linker=gcc -C opt-level=3 -C codegen-units=1 -C lto=fat \
+  -C target-cpu=x86-64 -C prefer-dynamic=no -C panic=unwind \
+  -C strip=symbols "fenton_gui.rs" -o "fenton_cli.exe"
+```
+
+Use four positional numbers in the order `H T d Uc`, all in SI units. For example:
+
+```bash
+./fenton_cli.exe 3.0 9.0 5.0 1.0
+```
+
+When no arguments are supplied, the code uses the default wave `(3.0, 9.0, 5.0, 1.0)`. It prints the engineering report to standard output and writes `output.txt` in the current working directory. The CLI build is useful for batch scripts, independent checks and timing comparisons. Do not assume that positional arguments will be read by the GUI executable; the GUI reads its input controls.
+
+#### 11.1.6 Unit tests, numerical reference cases and release validation
+
+Build the test harness directly from the same Rust source:
+
+```bash
+rustc --edition=2021 --test --target x86_64-pc-windows-gnu \
+  -C linker=gcc -C panic=unwind "fenton_gui.rs" -o "fenton_tests.exe"
+./fenton_tests.exe
+./fenton_tests.exe --ignored
+```
+
+The ordinary test suite includes invalid-input rejection, Jacobi SVD consistency, initialization and fixed-width report formatting. The **ignored** tests exercise full nonlinear calculations and reference wavelengths/power, and therefore require explicit `--ignored`. In the supplied Rust source, reference cases cover the no-current case and positive/negative-current configurations, including a 50-mode $H=3$ m, $T=9$ s, $d=5$ m, $U_c=1$ m/s case. Numerical reference tolerances apply to the computed quantities; formatted report values are rounded to five decimals for display only.
+
+For a complete release check, build the `native` and `portable` variants, run the tests with each compiler/toolchain configuration, inspect `output.txt` for the default case and compare **acceptance status, active Fourier order, residuals and all engineering outputs** within the implementation's stated numerical budgets. File-by-file byte equality is not required when different floating-point math libraries, CPU instructions or summation sequences produce harmless last-bit differences. Numerical acceptance decisions and output tolerances, rather than text equality alone, govern engineering equivalence.
+
+If a `build_msys2_ucrt64.sh` script is included in the local distribution, its `gui`, `portable`, `all` and `bench` modes can automate the corresponding build/check operations; the **direct commands above do not depend on that optional script**.
+
+#### 11.1.7 Native DLL dependencies and deployment
+
+A Rust executable built for Windows GNU normally depends on native Windows DLLs such as `KERNEL32.dll`, `USER32.dll`, `GDI32.dll` and the system C runtime. Examine imports before distributing a compiled executable:
+
+```bash
+objdump -p fenton_gui.exe | grep -i 'DLL Name'
+```
+
+`-C prefer-dynamic=no` does **not** prove that all GNU runtime or threading DLLs are statically linked. If imports include `libwinpthread-1.dll`, `libgcc_s_seh-1.dll` or another non-system DLL, deploy a compatible permitted redistribution or investigate a static native-library build, and then retest the resulting binary. A static-linking attempt with GCC support libraries is toolchain-dependent:
+
+```bash
+rustc --edition=2021 --target x86_64-pc-windows-gnu -C linker=gcc -C opt-level=3 -C codegen-units=1 -C lto=fat -C target-cpu=x86-64 -C prefer-dynamic=no -C panic=unwind -C strip=symbols -C link-arg=-static -C link-arg=-static-libgcc "fenton_gui.rs" -o "fenton_gui_static.exe"
+```
+
+Static GNU linkage cannot remove ordinary Windows system DLL imports, and the optional flags may be rejected by some package combinations. An executable is standalone only with respect to the **external libraries it actually imports**; check the PE import table and test on a clean target machine. Building the application does not install software on the end-user computer, and the Rust compiler and MSYS2 themselves are not needed there if all non-system binary dependencies have been provided or eliminated.
+
+#### 11.1.8 Compiling through PowerShell and troubleshooting
+
+MSYS2 UCRT64 Bash is the recommended compilation terminal. From an existing Windows PowerShell session, a properly configured MSYS2 installation can be entered with:
+
+```powershell
+$env:MSYSTEM = 'UCRT64'
+$env:CHERE_INVOKING = 'yes'
+& 'C:\msys64\usr\bin\bash.exe' -l
+```
+
+Inside that Bash session, run the installation checks and `rustc` compilation commands from §11.1.3. If an optional local `build_msys2_ucrt64.sh` script exists, it can be called through `bash -lc` after setting those variables; a script is not required for the primary direct compilation workflow.
+
+| Symptom | Recommended action |
+| --- | --- |
+| `rustc: command not found` | Verify `echo "$MSYSTEM"` gives `UCRT64`; run `pacman -S --needed mingw-w64-ucrt-x86_64-rust` and recheck the executable path. |
+| `gcc: command not found` or linker failure | Install the `mingw-w64-ucrt-x86_64-toolchain` package group; check `command -v gcc` resolves under `/ucrt64/bin`. |
+| `can't find crate for std` | Confirm `rustc -vV`, target triple and `rustc --print target-libdir`; eliminate mixed or incomplete Rust installations. |
+| Unexpected C runtime or missing GNU DLL | Inspect imports with `objdump -p`; ensure all compiler/linker tools belong to the same UCRT64 prefix and deployment dependencies are present. |
+| PowerShell syntax error on `\` | Use the Bash terminal for commands containing `\` line continuations; PowerShell uses a different continuation character. |
+| Report is visible but `output.txt` is absent | Check write permissions and the process working directory; the report is written using a relative filename. |
+| `panic=abort` or failed interval verification | Recompile with `-C panic=unwind`, keep `f64` and non-fast-math arithmetic, and run the test harness. |
+| Unexpected numerical difference between machines | Compare toolchain versions, CPU targets, runtime libraries, current convention, Fourier order and numerical acceptance diagnostics. |
+
+Official toolchain documentation: [MSYS2 installation](https://www.msys2.org/), [MSYS2 environments](https://www.msys2.org/docs/environments/), [MSYS2 Windows support](https://www.msys2.org/docs/windows_support/), [MSYS2 UCRT64 Rust package](https://packages.msys2.org/packages/mingw-w64-ucrt-x86_64-rust), and [Rust compiler code-generation options](https://doc.rust-lang.org/rustc/codegen-options/index.html).
+
+### 11.2 Secondary application — Python GUI
 
 ```bash
 python -m venv build_env
@@ -1050,7 +1281,22 @@ python fenton_gui.py
 
 Numba is optional. If Numba is unavailable, the solver falls back to the pure-NumPy path. The interval checker uses the standard-library `decimal` module. Tk bindings are required by the GUI; the independent verification package additionally requires its listed audit dependencies.
 
-### 11.2 Build the C++ GUI executable
+### 11.3 Build the secondary Python standalone executable
+
+```bash
+pip install pyinstaller
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name fenton_gui.exe fenton_gui.py
+```
+
+The executable is written to the `dist` directory. `--onefile` bundles the Python runtime and packaged dependencies; `--windowed` suppresses the console window on Windows. The PyInstaller build requires Python, Tkinter, NumPy and the applicable installed Python packages **on the build machine**. A second explicit naming form is:
+
+```bash
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name fenton_gui fenton_gui.py
+```
+
+This creates a Windows executable named `fenton_gui.exe` inside `dist` in the standard PyInstaller naming convention. If distributing both Rust and Python implementations, place the Python executable in a separately named folder to avoid overwriting the Rust `fenton_gui.exe`. Python `--self-test` remains available before packaging.
+
+### 11.4 Additional implementation — build the C++ GUI executable
 
 ```bash
 g++ fenton_gui.cpp -o fenton_gui.exe -O3 -std=c++20 ^
@@ -1062,16 +1308,7 @@ g++ fenton_gui.cpp -o fenton_gui.exe -O3 -std=c++20 ^
 
 Use a Windows toolchain providing the listed libraries. The interval checker requires IEEE binary64 round-to-nearest arithmetic: do not enable `-ffast-math`, `-Ofast` or floating-point reassociation. The source rejects fast-math builds and checks the arithmetic environment at runtime. Cross-implementation comparisons use explicit tolerances rather than requiring identical last digits.
 
-### 11.3 Build a Python standalone executable
-
-```bash
-pip install pyinstaller
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name fenton_gui.exe fenton_gui.py
-```
-
-The executable is written to the `dist` directory.
-
-### 11.4 Wavelength-only use
+### 11.5 Wavelength-only use
 
 Use `function.py` when only the wavelength is required by another program or table. The intended callable form is:
 
@@ -1079,7 +1316,7 @@ Use `function.py` when only the wavelength is required by another program or tab
 L(H, T, d, Uc)
 ```
 
-### 11.5 Fenton App for Android
+### 11.6 Fenton App for Android
 
 The **Fenton App for Android** is distributed as the universal release package `fenton.apk`. It supports Android 6.0 (API 23) and newer and includes ARM64, ARM32, x86 and x86-64 native libraries.
 
@@ -1112,7 +1349,7 @@ adb install -r fenton.apk
 
 This command prints the precise Android package-manager error when a graphical installer shows only a generic failure message. It is not required for normal installation.
 
-### 11.6 Standalone precision solver
+### 11.7 Standalone precision solver
 
 Compile the `fourier.cpp` source with a C++20 compiler:
 
@@ -1169,7 +1406,7 @@ The `eta/d` label in `surface.res` denotes the **bed-based** ordinate $y/d=1+\et
 
 Inspect the process exit status and `solver.res` before using results. A nonzero exit status means the requested run did not complete successfully; old `.res` files are not evidence of a successful new calculation.
 
-### 11.7 Standalone SVD solver
+### 11.8 Standalone SVD solver
 
 `fourier_carvalho.cpp` retains a separate command-line and file interface:
 
@@ -1184,7 +1421,7 @@ A discovered `data.dat` takes precedence over positional arguments. This driver 
 
 Successful runs write `solution.res`, `surface.res` and `flowfield.res`. Numerical diagnostics are included in `solution.res`; this driver does not produce `solver.res`.
 
-### 11.8 Browser interface
+### 11.9 Browser interface
 
 Open the self-contained `fenton.html` file in a browser and enter $H$, $T$, $d$ and Eulerian current $U_c$ in SI units. Calculation runs in a Web Worker. The interface shows accepted engineering values, the active Fourier order, residual bounds and output-accuracy diagnostics. The no-current and imposed-current cases are accepted separately; a rejected column is suppressed without hiding an accepted comparison case.
 
@@ -1192,7 +1429,7 @@ Use **Full report** for the numerical method, diagnostic ratios and selected-out
 
 JavaScript uses binary64 arithmetic, so final machine-level digits can vary between engines. The recorded numerical comparison in §7.8 executes the solver under Node.js; it does not assert identical execution in every browser.
 
-### 11.9 Excel/VBA nonlinear wavelength and verification report
+### 11.10 Excel/VBA nonlinear wavelength and verification report
 
 Import `fenton.bas` into a **standard VBA module** through the Visual Basic Editor's **File > Import File** command, and save the workbook as `.xlsm`. The module uses SI inputs, $g=9.80665$ m/s² and, for the internal integral checks, $\rho=1025$ kg/m³. Its prescribed current is Eulerian.
 
@@ -1220,7 +1457,7 @@ For the default wave $H=3$ m, $T=9$ s and $d=5$ m, calculated wavelengths are:
 
 The VBA numerical comparison uses a mechanical C++ translation of the module, with independent high-precision enclosure checks. Native Excel compilation and execution have not been run in that verification environment.
 
-### 11.10 Python and Lean verification
+### 11.11 Python and Lean verification
 
 Run the Python solver's built-in acceptance/rejection checks with:
 
@@ -1265,7 +1502,7 @@ The package uses Lean 4.34.0 and Mathlib. The audit checks the source identities
 | Opposing current | Wave blocking, multiple branches or no physical branch may occur; the chosen root must be checked. |
 | Current criterion | Do not mix Eulerian-current and Stokes/mass-transport current definitions. |
 | Surrogate use | Do not extrapolate outside the training/calibration range. Surrogates are wavelength-estimation tools, not replacements for the nonlinear kinematic solution. |
-| Units | GUI inputs use coherent SI units; standalone `data.dat` inputs are the dimensionless groups specified in §11.6. |
+| Units | GUI inputs use coherent SI units; standalone `data.dat` inputs are the dimensionless groups specified in §11.7. |
 
 Fenton's theory comparisons give the following practical hierarchy. Fifth-order Stokes theory is useful for shorter waves, cnoidal theory for sufficiently long waves, with the Ursell number often used as a regime guide. The Fourier approximation method is the preferred reference method when high accuracy is required over a broad range of depths and heights, especially for velocities, pressures, integral quantities or waves close to the boundary of the perturbation theories.
 
