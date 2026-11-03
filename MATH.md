@@ -1,6 +1,6 @@
 # The Mathematics of Nonlinear Steady Water Waves
 
-*An extensive theoretical and computational treatise on the Rienecker–Fenton Fourier approximation, finite-amplitude dispersion, wave–current interaction, nonlinear free-surface boundary conditions, Newton–SVD collocation, kinematics, wave integrals, numerical verification, and the relationship with Stokes and cnoidal theories*
+*A theoretical and computational treatise on the Rienecker–Fenton Fourier approximation, finite-amplitude dispersion, wave–current interaction, nonlinear free-surface boundary conditions, Newton–SVD collocation, kinematics, wave integrals, numerical verification, and the relationship with Stokes and cnoidal theories*
 
 **Scientific scope:** two-dimensional, progressive, periodic, finite-amplitude gravity waves over a horizontal, impermeable bed; homogeneous, incompressible, inviscid, irrotational flow.  
 **Principal numerical formulation:** Rienecker and Fenton (1981); Fenton (1988, 1990, 1999).  
@@ -14,8 +14,6 @@
 The accurate description of a finite-amplitude periodic surface gravity wave is a nonlinear free-boundary problem: the fluid velocity field and the position of the water surface must satisfy Laplace's equation in an unknown domain, impermeability at the seabed, conservation of mass, and both the kinematic and dynamic free-surface boundary conditions. Linear Airy theory supplies invaluable physical intuition, but its free-surface linearization omits the very mechanisms that determine finite-amplitude wave shape, the nonlinear wavelength, asymmetry, near-crest kinematics and integral transport properties. Fifth-order Stokes theory and cnoidal theory recover progressively more of these effects in complementary depth regimes, yet their respective perturbation expansions are not uniformly accurate over the entire domain of steady periodic waves.
 
 The Rienecker–Fenton method avoids a wave-height perturbation expansion. Instead, it represents a harmonic stream function by a truncated Fourier basis satisfying the field equation and bottom boundary condition identically; it determines the free surface, Fourier coefficients, wavelength, currents and Bernoulli constant by simultaneously enforcing the nonlinear conditions at selected surface collocation points. This paper derives that formulation from first principles, with particular attention to coordinate systems, current definitions, dimensional scaling, the exact structure of the finite nonlinear equations, analytic Jacobians, stabilized Newton iteration, height continuation and independent numerical checks. It also derives velocity, acceleration, pressure, energy, momentum, radiation stress and energy flux, places Stokes and cnoidal theories in their proper mathematical context, and separates accurate *finite-system evaluation* from the much stronger claim of a rigorous existence theorem for the infinite-dimensional free-boundary problem.
-
-The account is written as a mathematical explanation, not a specification of an empirically calibrated engineering design code. Statements about a historical paper are attributed to that source; statements about a particular numerical implementation are identified separately. The source-paper page numbers in the references are the **printed journal/book pages** where available; PDF viewer page numbers may differ.
 
 **Keywords:** steady gravity waves; stream function; nonlinear dispersion; Fourier collocation; Rienecker–Fenton; Stokes waves; cnoidal waves; Eulerian current; Stokes mass transport; Newton method; singular-value decomposition; Gauss–Legendre quadrature; finite precision; interval arithmetic; radiation stress; wave power.
 
@@ -3815,8 +3813,6 @@ The mathematical literature has overlapping but distinguishable scopes. The foll
 | Fenton (1993) [7] | Boundary-integral formulation and results | Shoaling simulation and numerical limitations of a time-dependent boundary integral method |
 | Fenton & Kennedy (1996) [8] | Proceedings pp. 1130–1143 | Local polynomial and boundary-integral methods for nonlinear propagation over varying bed topography |
 | Fenton's cnoidal theory chapter [6] | Theory, numerical cnoidal theory, applicability | Long-wave expansions, elliptic functions and solitary-wave connection |
-
-The original Rienecker–Fenton paper is reproduced as a scanned two-page-per-image PDF; **journal page numbers should not be confused with PDF page indices**. The mathematical notation also changes between sources using a bed-origin vertical coordinate and the wave-number-scaled mean-level coordinate adopted here. Equations in this article are consistently written in the chosen modern notation instead of combining incompatible source symbols.
 
 ***
 
