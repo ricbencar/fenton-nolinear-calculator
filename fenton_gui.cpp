@@ -611,6 +611,7 @@ public:
     Real continuation_fraction = 0.0;
     std::string numerical_note;
     bool converged;
+    bool allow_lower_accuracy = false;
     bool accuracy_verified = false;
     bool finite_system_verified = false;
     Verified::Certificate finite_system_certificate;
@@ -707,6 +708,7 @@ public:
             if (jacobian_condition <= 1e11 || order <= 12) break;
             order = std::max(12, (int)(order * 0.8));
             FentonStreamFunction next(H_target, T_target, d, Uc, order);
+            next.allow_lower_accuracy = allow_lower_accuracy;
             next.nstep = nstep; next.number = number;
             next.crit = crit; next.criter_final = criter_final;
             next.Current_criterion = Current_criterion;
@@ -855,8 +857,9 @@ public:
             output_ratio=std::max(output_ratio,entry.second.error_upper/entry.second.budget_lower);
         accuracy_metrics["finite_output_ratio"]=output_ratio;
         if (!failures.empty()) {
-            converged = false;
-            solution_status = "resolution_failure";
+            // Preserve failed accuracy flags and diagnostics for the report.
+            converged = allow_lower_accuracy;
+            solution_status = allow_lower_accuracy ? "lower_accuracy" : "resolution_failure";
             last_error = "The collocation system converged, but the available Fourier resolution "
                          "does not satisfy the output accuracy budgets: ";
             for (size_t i = 0; i < failures.size(); ++i) {
@@ -2023,12 +2026,15 @@ static void print_table(std::ostringstream& out,
 // ----------------------------------------------------------------------------
 // Report generator: no-current and Eulerian-current cases under the convention.
 // ----------------------------------------------------------------------------
-[[maybe_unused]] static std::string generate_output(double H_in, double T_in, double d_in, double Uc_in) {
+[[maybe_unused]] static std::string generate_output(double H_in, double T_in, double d_in, double Uc_in,
+                                                   bool allow_lower_accuracy = false) {
     using namespace ReportFmt;
 
     const bool has_current = (Uc_in != 0.0);
     FentonStreamFunction solver0(H_in, T_in, d_in, 0.0);
     FentonStreamFunction solverC(H_in, T_in, d_in, Uc_in);
+    solver0.allow_lower_accuracy = allow_lower_accuracy;
+    solverC.allow_lower_accuracy = allow_lower_accuracy;
 
     if (has_current) {
 #ifdef _OPENMP
@@ -2107,7 +2113,10 @@ static void print_table(std::ostringstream& out,
     box_text(out, std::string("Water depth (d)             : ") + py_str_float(d_in) + " m");
     box_text(out, std::string("Eulerian current ū₁         : ") + py_str_float(Uc_in) + " m/s (positive with wave propagation)");
     hline(out, '-');
-    box_text(out, issues.empty() ? "Status: Finite-system and output accuracy checks passed."
+    const bool lower_accuracy = (valid0 && solver0.solution_status == "lower_accuracy")
+                             || (validC && solverC.solution_status == "lower_accuracy");
+    box_text(out, lower_accuracy ? "Status: Lower-accuracy results included (requested)."
+                  : issues.empty() ? "Status: Finite-system and output accuracy checks passed."
                                  : "Status: Results shown for accepted cases only.");
     auto show_status = [&](bool valid, const FentonStreamFunction& slv, const char* label) {
         if (!valid) return;
@@ -2115,6 +2124,9 @@ static void print_table(std::ostringstream& out,
         status << label << ": N=" << slv.N << "; max|F|=" << std::scientific
                << std::setprecision(3) << slv.max_residual;
         box_text(out, status.str());
+        if (slv.solution_status == "lower_accuracy") {
+            box_text(out, std::string(label) + ": Lower accuracy allowed; output accuracy checks did not pass.");
+        }
         if (slv.finite_system_verified) {
             std::ostringstream bound;
             bound << "Finite-system interval residual bound: " << std::scientific << std::setprecision(3)
@@ -2127,6 +2139,10 @@ static void print_table(std::ostringstream& out,
     show_status(validC, solverC, "With current");
     hline(out, '-');
     for (const auto& msg : issues) out << msg << "\n";
+    if (valid0 && solver0.solution_status == "lower_accuracy")
+        out << "Warning [No current]: " << solver0.last_error << "\n";
+    if (validC && solverC.solution_status == "lower_accuracy")
+        out << "Warning [With current]: " << solverC.last_error << "\n";
     out << "\n";
 
     // ---------------------------- hydrodynamic summary ---------------------------
@@ -2360,6 +2376,7 @@ static std::string to_windows_newlines(const std::string& s) {
 #define IDC_EDIT_UC     104
 #define IDC_BTN_CALC    110
 #define IDC_OUTPUT      111
+#define IDC_ALLOW_LOWER_ACCURACY 112
 
 static HWND  g_hEditH = nullptr;
 static HWND  g_hEditT = nullptr;
@@ -2367,6 +2384,7 @@ static HWND  g_hEditD = nullptr;
 static HWND  g_hEditUc = nullptr;
 static HWND  g_hOutput = nullptr;
 static HWND  g_hBtnCalc = nullptr;
+static HWND  g_hAllowLowerAccuracy = nullptr;
 static HFONT g_hUIFont = nullptr;
 static HFONT g_hMonoFont = nullptr;
 static HWND  g_hMain = nullptr;
@@ -2410,13 +2428,14 @@ static bool read_edit_double(HWND hEdit, double& v) {
 
 struct CalcParams {
     double H, T, d, Uc;
+    bool allow_lower_accuracy;
 };
 
 static DWORD WINAPI CalcThread(LPVOID lpParam) {
     std::unique_ptr<CalcParams> p((CalcParams*)lpParam);
 
     // Execute the nonlinear stream-function solve and report generation.
-    std::string txt = generate_output(p->H, p->T, p->d, p->Uc);
+    std::string txt = generate_output(p->H, p->T, p->d, p->Uc, p->allow_lower_accuracy);
 
     // Write output.txt in the same SOLUTION.RES-style report format.
     try {
@@ -2500,6 +2519,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         make_label(L"Water Depth (m):", y); g_hEditD = make_edit(L"5.0", IDC_EDIT_D, y); y += 35;
         make_label(L"Current (m/s):", y);   g_hEditUc = make_edit(L"1.0", IDC_EDIT_UC, y); y += 45;
 
+        g_hAllowLowerAccuracy = CreateWindowW(L"BUTTON", L"Allow lower accuracy",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            20, y, 260, 25, hwnd, (HMENU)IDC_ALLOW_LOWER_ACCURACY, nullptr, nullptr);
+        SendMessageW(g_hAllowLowerAccuracy, WM_SETFONT, (WPARAM)g_hUIFont, TRUE);
+        SendMessageW(g_hAllowLowerAccuracy, BM_SETCHECK, BST_UNCHECKED, 0);
+        y += 35;
+
         g_hBtnCalc = CreateWindowW(L"BUTTON", L"CALCULATE",
             WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
             20, y, 260, 40, hwnd, (HMENU)IDC_BTN_CALC, nullptr, nullptr);
@@ -2540,7 +2566,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             EnableWindow(g_hBtnCalc, FALSE);
             SetWindowTextW(g_hBtnCalc, L"SOLVING...");
 
-            CalcParams* p = new CalcParams{ H, T, d, Uc };
+            const bool allow_lower_accuracy = SendMessageW(g_hAllowLowerAccuracy, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            CalcParams* p = new CalcParams{ H, T, d, Uc, allow_lower_accuracy };
 
             HANDLE hTh = CreateThread(nullptr, 0, CalcThread, p, 0, nullptr);
             if (hTh) CloseHandle(hTh);

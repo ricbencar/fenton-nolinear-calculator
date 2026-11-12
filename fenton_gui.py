@@ -605,7 +605,7 @@ class FentonStreamFunction:
 
     # --------------------------- construction and state-vector allocation ---------
 
-    def __init__(self, H, T, d, Uc=0.0, *, fourier_order=None):
+    def __init__(self, H, T, d, Uc=0.0, *, fourier_order=None, allow_lower_accuracy=False):
         # Dimensional inputs: H, T, d and imposed Eulerian current Uc
         self.H_target = float(H)    # [m]
         self.T_target = float(T)    # [s]
@@ -619,6 +619,7 @@ class FentonStreamFunction:
         self.jacobian_condition = 0.0
         self.continuation_fraction = 0.0
         self.numerical_note = ""
+        self.allow_lower_accuracy = bool(allow_lower_accuracy)
         self.accuracy_verified = False
         self.accuracy_metrics = {}
         self.finite_system_verified = False
@@ -1144,7 +1145,8 @@ class FentonStreamFunction:
             controls = (self.nstep, self.number, self.crit, self.criter_final,
                         self.residual_tolerance, self.residual_tolerance_final,
                         self.Current_criterion)
-            self.__init__(self.H_target, self.T_target, self.d, self.Uc, fourier_order=order)
+            self.__init__(self.H_target, self.T_target, self.d, self.Uc, fourier_order=order,
+                          allow_lower_accuracy=self.allow_lower_accuracy)
             (self.nstep, self.number, self.crit, self.criter_final,
              self.residual_tolerance, self.residual_tolerance_final,
              self.Current_criterion) = controls
@@ -1598,8 +1600,9 @@ class FentonStreamFunction:
             for check in self.finite_system_certificate["outputs"].values())
         self.accuracy_metrics = metrics
         if failures:
-            self.converged = False
-            self.solution_status = "resolution_failure"
+            # Keep the accuracy flags and diagnostics even when output is requested.
+            self.converged = self.allow_lower_accuracy
+            self.solution_status = "lower_accuracy" if self.allow_lower_accuracy else "resolution_failure"
             self.last_error = ("The collocation system converged, but the available Fourier resolution "
                                "does not satisfy the output accuracy budgets: "+"; ".join(failures)+".")
             return
@@ -1840,9 +1843,15 @@ class FentonApp(tk.Tk):
         self.ent_Uc.grid(row=1, column=3, padx=5, pady=5)
         self.ent_Uc.insert(0, "1.0") # Default U=1
         
+        # Snapshot this option on Calculate; worker threads never read Tk variables.
+        self.allow_lower_accuracy = tk.BooleanVar(value=False)
+        self.chk_lower_accuracy = ttk.Checkbutton(
+            input_frame, text="Allow lower accuracy", variable=self.allow_lower_accuracy)
+        self.chk_lower_accuracy.grid(row=0, column=4, padx=20, pady=(0, 5), sticky="w")
+
         # Calculate Button
         self.btn_calc = ttk.Button(input_frame, text="CALCULATE", command=self.run_calculation)
-        self.btn_calc.grid(row=0, column=4, rowspan=2, padx=20, sticky="ns")
+        self.btn_calc.grid(row=1, column=4, padx=20, sticky="ew")
         
         # --- Output Frame ---
         output_frame = ttk.LabelFrame(self, text="Output Console", padding="10")
@@ -1943,21 +1952,21 @@ class FentonApp(tk.Tk):
         
         # Start the heavy math in a SEPARATE thread
         thread = threading.Thread(target=self._solve_in_background, 
-                                  args=(H_in, T_in, d_in, Uc_in))
+                                  args=(H_in, T_in, d_in, Uc_in, self.allow_lower_accuracy.get()))
         thread.daemon = True # Ensures thread dies if we close the window
         thread.start()
 
 
-    def _solve_in_background(self, H, T, d, Uc):
+    def _solve_in_background(self, H, T, d, Uc, allow_lower_accuracy=False):
         """Heavy computations (background thread). All GUI updates are scheduled via after()."""
         import traceback
         try:
             # Case A: No current
-            solver0 = FentonStreamFunction(H, T, d, Uc=0.0)
+            solver0 = FentonStreamFunction(H, T, d, Uc=0.0, allow_lower_accuracy=allow_lower_accuracy)
             solver0.solve()
 
             # Case B: With ambient current (Eulerian)
-            solverC = FentonStreamFunction(H, T, d, Uc=Uc)
+            solverC = FentonStreamFunction(H, T, d, Uc=Uc, allow_lower_accuracy=allow_lower_accuracy)
             solverC.solve()
 
             # Schedule UI update on the main thread
@@ -2153,12 +2162,17 @@ class FentonApp(tk.Tk):
         box_text(f"Water depth (d)             : {d_in} m")
         box_text(f"Eulerian current ū₁         : {Uc_in} m/s (positive with wave propagation)")
         hline("-")
-        box_text("Status: Results shown for converged cases only." if issues
+        lower_accuracy = any(valid and slv.solution_status == "lower_accuracy"
+                             for valid, slv in ((valid0, solver0), (validC, solverC)))
+        box_text("Status: Lower-accuracy results included (requested)." if lower_accuracy
+                 else "Status: Results shown for converged cases only." if issues
                  else "Status: Finite-system and output accuracy checks passed.")
         for valid, slv, label in ((valid0, solver0, "No current"),
                                   (validC, solverC, "With current")):
             if valid:
                 box_text(f"{label}: N={slv.n}; max|F|={slv.residual_max:.3e}")
+                if slv.solution_status == "lower_accuracy":
+                    box_text(f"{label}: Lower accuracy allowed; output accuracy checks did not pass.")
                 certificate = slv.finite_system_certificate
                 if certificate.get("passed"):
                     upper = float(certificate["residual_upper"])
@@ -2168,6 +2182,10 @@ class FentonApp(tk.Tk):
         hline("-")
         for issue in issues:
             log_wrapper(issue + "\n")
+        for valid, slv, label in ((valid0, solver0, "No current"),
+                                  (validC, solverC, "With current")):
+            if valid and slv.solution_status == "lower_accuracy":
+                log_wrapper(f"Warning [{label}]: {slv.last_error}\n")
         log_wrapper("\n")
 
         # ---------------------------- hydrodynamic summary ---------------------------

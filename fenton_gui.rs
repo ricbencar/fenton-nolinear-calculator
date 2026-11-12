@@ -445,7 +445,8 @@
 // under the assumptions of the implemented arithmetic. They are NOT a proof
 // that a nearby exact solution of the water-wave boundary-value problem exists;
 // neither full physical stability nor all machine/external-library behavior
-// is certified. A failed accuracy check rejects the affected wave output.
+// is certified. Failed accuracy checks reject output by default; the explicit
+// "Allow lower accuracy" option permits output with the failed checks reported.
 //
 // Unit tests cover input validation, a challenging SVD matrix, initialization
 // and fixed-width report rendering. Ignored, more expensive reference tests
@@ -1015,6 +1016,8 @@ pub struct FentonStreamFunction {
     // `converged` indicates solver acceptance, not just a small single Newton
     // update. Accuracy flags are set only after independent checks are passed.
     pub converged: bool, pub accuracy_verified: bool,
+    // Optional output override; Default keeps strict accuracy acceptance.
+    pub allow_lower_accuracy: bool,
     // Residual/output interval-check flag and saved finite-system certificate.
     pub finite_system_verified: bool, pub finite_system_certificate: Certificate,
     // Named ratios of measured numerical discrepancies to tolerance budgets.
@@ -1107,6 +1110,7 @@ impl FentonStreamFunction {
             if self.jacobian_condition<=1e11 || order<=12 {break;}
             order=(order*8/10).max(12);
             let mut next=Self::new(self.h_target,self.t_target,self.d,self.uc,order);
+            next.allow_lower_accuracy=self.allow_lower_accuracy;
             next.nstep=self.nstep;next.number=self.number;
             next.crit=self.crit;next.criter_final=self.criter_final;
             next.current_criterion=self.current_criterion;
@@ -1880,8 +1884,8 @@ impl FentonStreamFunction {
     /// spectral integral identities, compare coarse/fine defining integrals,
     /// and call the interval finite-system checker. Every discrepancy uses
     /// an absolute-plus-relative tolerance budget. Failed checks are listed
-    /// in `last_error`, the solution status is set to resolution_failure, and
-    /// the case cannot be reported as accepted.
+    /// in `last_error`; strict mode rejects the case as resolution_failure.
+    /// An explicit override permits output with status lower_accuracy.
     fn verify_accuracy(&mut self)->ResultT<()> {
         self.accuracy_verified=false;
         self.finite_system_verified=false;
@@ -1960,8 +1964,9 @@ impl FentonStreamFunction {
         }
         self.accuracy_metrics.insert("finite_output_ratio".into(),output_ratio);
         if !failures.is_empty() {
-            self.converged=false;
-            self.solution_status="resolution_failure".into();
+            // Preserve failed accuracy flags and diagnostics for the report.
+            self.converged=self.allow_lower_accuracy;
+            self.solution_status=(if self.allow_lower_accuracy{"lower_accuracy"}else{"resolution_failure"}).into();
             self.last_error=format!("The collocation system converged, but the available Fourier resolution does not satisfy the output accuracy budgets: {}.",failures.join("; "));
             return Ok(());
         }
@@ -2351,10 +2356,12 @@ fn issue(s:&Solver,label:&str)->Option<String>{
 /// a separate Jacobian, Fourier state, residual and certificate, so there is
 /// no shared mutable numerical state between the two computations.
 /// The returned String is later saved as UTF-8 and displayed in the GUI.
-pub fn generate_output(h:f64,t:f64,d:f64,uc:f64)->String {
+pub fn generate_output(h:f64,t:f64,d:f64,uc:f64,allow_lower_accuracy:bool)->String {
     let has_current=uc!=0.0;
     let mut solver0=Solver::new(h,t,d,0.0,50);
     let mut solver_c=Solver::new(h,t,d,uc,50);
+    solver0.allow_lower_accuracy=allow_lower_accuracy;
+    solver_c.allow_lower_accuracy=allow_lower_accuracy;
     // The independent no-current and with-current Fenton problems can be
     // calculated in parallel. Scoped threads borrow local solver objects
     // without forcing global storage or shared-mutable solver state.
@@ -2378,7 +2385,7 @@ pub fn generate_output(h:f64,t:f64,d:f64,uc:f64)->String {
         for msg in &issues {let _=writeln!(out,"{msg}");}
         hline(&mut out,'-');return out;
     }
-    // Show numerical results only for successfully verified cases.
+    // Show verified cases and explicitly requested lower-accuracy cases.
     // Fallback references simplify shared report-scaling calculations, but
     // failed columns are still explicitly masked before the table is emitted.
     let s0=if valid0{&solver0}else{&solver_c};
@@ -2389,11 +2396,17 @@ pub fn generate_output(h:f64,t:f64,d:f64,uc:f64)->String {
     box_text(&mut out,&format!("Water depth (d)             : {} m",py_str_float(d)));
     box_text(&mut out,&format!("Eulerian current ū₁         : {} m/s (positive with wave propagation)",py_str_float(uc)));
     hline(&mut out,'-');
-    box_text(&mut out,if issues.is_empty(){"Status: Finite-system and output accuracy checks passed."}
+    let lower_accuracy=(valid0&&s0.solution_status=="lower_accuracy")
+        ||(validc&&sc.solution_status=="lower_accuracy");
+    box_text(&mut out,if lower_accuracy{"Status: Lower-accuracy results included (requested)."}
+                      else if issues.is_empty(){"Status: Finite-system and output accuracy checks passed."}
                       else{"Status: Results shown for accepted cases only."});
     for (valid,s,label) in [(valid0,s0,"No current"),(validc,sc,"With current")] {
         if !valid{continue;}
         box_text(&mut out,&format!("{label}: N={}; max|F|={:.3e}",s.n,s.max_residual));
+        if s.solution_status=="lower_accuracy" {
+            box_text(&mut out,&format!("{label}: Lower accuracy allowed; output accuracy checks did not pass."));
+        }
         if s.finite_system_verified {
             box_text(&mut out,&format!("Finite-system interval residual bound: {:.3e}; nine output bounds checked.",
                 s.finite_system_certificate.residual_upper));
@@ -2402,6 +2415,11 @@ pub fn generate_output(h:f64,t:f64,d:f64,uc:f64)->String {
     }
     hline(&mut out,'-');
     for e in &issues {let _=writeln!(out,"{e}");}
+    for (valid,s,label) in [(valid0,s0,"No current"),(validc,sc,"With current")] {
+        if valid&&s.solution_status=="lower_accuracy" {
+            let _=writeln!(out,"Warning [{label}]: {}",s.last_error);
+        }
+    }
     out.push('\n');
     // Physical conversion scales sqrt(gd) [m/s] and sqrt(g/d) [1/s] used by
     // the depth-normalized dispersion and mean-flow table.
@@ -2649,6 +2667,9 @@ const WM_COMMAND:u32=0x0111;
 const WM_SETFONT:u32=0x0030;
 const WM_APP_RESULT:u32=0x8000+1;
 const EM_SETMARGINS:u32=0x00d3;
+const BM_GETCHECK:u32=0x00f0;
+const BM_SETCHECK:u32=0x00f1;
+const BST_CHECKED:isize=1;
 // --------------------------- WINDOW STYLE FLAGS -----------------------------
 // These are ordinary Win32 style bitmasks. WS_CHILD|WS_VISIBLE creates child
 // controls; ES_READONLY and ES_MULTILINE make the report a text viewer.
@@ -2666,6 +2687,8 @@ const WS_MINIMIZEBOX:u32=0x0002_0000;
 const ES_MULTILINE:u32=0x0004;
 const ES_READONLY:u32=0x0800;
 const BS_DEFPUSHBUTTON:u32=0x0001;
+const BS_AUTOCHECKBOX:u32=0x0003;
+const WS_TABSTOP:u32=0x0001_0000;
 const SWP_NOMOVE:u32=0x0002;
 const SWP_NOZORDER:u32=0x0004;
 const GWL_STYLE:i32=-16;
@@ -2681,6 +2704,7 @@ const IDC_EDIT_D:isize=103;
 const IDC_EDIT_UC:isize=104;
 const IDC_BTN_CALC:isize=110;
 const IDC_OUTPUT:isize=111;
+const IDC_ALLOW_LOWER_ACCURACY:isize=112;
 const MB_ICONERROR:u32=0x10;
 const FW_NORMAL:i32=400;
 const DEFAULT_CHARSET:u32=1;
@@ -2761,6 +2785,7 @@ static INPUT_D:AtomicIsize=AtomicIsize::new(0);
 static INPUT_UC:AtomicIsize=AtomicIsize::new(0);
 static OUTPUT:AtomicIsize=AtomicIsize::new(0);
 static BUTTON:AtomicIsize=AtomicIsize::new(0);
+static ALLOW_LOWER_ACCURACY:AtomicIsize=AtomicIsize::new(0);
 static UI_FONT:AtomicIsize=AtomicIsize::new(0);
 static MONO_FONT:AtomicIsize=AtomicIsize::new(0);
 static CLOSING:AtomicBool=AtomicBool::new(false);
@@ -2826,9 +2851,9 @@ unsafe fn resize_gui(hwnd:isize) {
 /// WM_APP_RESULT. On posting failure, the worker reclaims the allocation.
 /// Numerical panics are caught so a failed worker supplies an error message.
 /// No Win32 EDIT control is modified directly from this worker thread.
-fn run_calculation(hwnd:isize,h:f64,t:f64,d:f64,uc:f64){
+fn run_calculation(hwnd:isize,h:f64,t:f64,d:f64,uc:f64,allow_lower_accuracy:bool){
     std::thread::spawn(move ||{
-        let result=std::panic::catch_unwind(||generate_output(h,t,d,uc));
+        let result=std::panic::catch_unwind(||generate_output(h,t,d,uc,allow_lower_accuracy));
         // Panic recovery protects the GUI from interval domain failures or
         // other unexpected panics during numerical result construction.
         let report=result.unwrap_or_else(|_|"Calculation failed: unexpected numerical panic.\n".to_string());
@@ -2880,6 +2905,12 @@ unsafe extern "system" fn wnd_proc(hwnd:isize,msg:u32,wparam:usize,lparam:isize)
                 y+=35;
             }
             y+=10;
+            let checkbox=control(hwnd,"BUTTON","Allow lower accuracy",
+                WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_AUTOCHECKBOX,
+                IDC_ALLOW_LOWER_ACCURACY,20,y,260,25,ui);
+            SendMessageW(checkbox,BM_SETCHECK,0,0);
+            ALLOW_LOWER_ACCURACY.store(checkbox,Ordering::Relaxed);
+            y+=35;
             let button=control(hwnd,"BUTTON","CALCULATE",WS_CHILD|WS_VISIBLE|BS_DEFPUSHBUTTON,
                 IDC_BTN_CALC,20,y,260,40,ui);
             BUTTON.store(button,Ordering::Relaxed);
@@ -2906,7 +2937,8 @@ unsafe extern "system" fn wnd_proc(hwnd:isize,msg:u32,wparam:usize,lparam:isize)
                         // sends WM_APP_RESULT. The UI thread remains responsive.
                         EnableWindow(get(&BUTTON),0);
                         SetWindowTextW(get(&BUTTON),wide("SOLVING...").as_ptr());
-                        run_calculation(hwnd,h,t,d,uc);
+                        let allow_lower_accuracy=SendMessageW(get(&ALLOW_LOWER_ACCURACY),BM_GETCHECK,0,0)==BST_CHECKED;
+                        run_calculation(hwnd,h,t,d,uc,allow_lower_accuracy);
                     }
                 },
                 _=>show_error(hwnd,"Invalid numeric input.\n\nAccepted formats: 3.5 or 3,5 (decimal comma supported)."),
@@ -3028,7 +3060,7 @@ fn main() {
         if vals[0]<=0.0||vals[1]<=0.0||vals[2]<=0.0 {
             eprintln!("H, T, d must be positive.");std::process::exit(2);
         }
-        let output=report::generate_output(vals[0],vals[1],vals[2],vals[3]);
+        let output=report::generate_output(vals[0],vals[1],vals[2],vals[3],false);
         let _=std::fs::write("output.txt",&output);
         print!("{output}");
     }
