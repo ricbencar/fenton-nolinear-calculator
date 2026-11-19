@@ -4,6 +4,12 @@
 
 This repository computes steady, two-dimensional, periodic finite-amplitude gravity waves in finite water depth, with optional collinear current. The reference calculation is a stream-function / Fourier collocation method in the Rienecker-Fenton and Fenton numerical-wave tradition: the Fourier basis satisfies the field equation and the bed condition, while Newton iteration solves the nonlinear free-surface boundary conditions and global wave-current constraints.
 
+The principal theoretical reference is the **U.S. Army Corps of Engineers Coastal Engineering Manual (CEM), EM 1110-2-1100**. In **Part II, page II-1-32, paragraph (d)**, the manual states:
+
+> "Fenton's theory is recommended for regular waves in all coastal applications."
+
+The suite adopts this recommended Fourier nonlinear numerical method. Its theoretical basis is presented in **CEM Part II, pages II-1-50 to II-1-55, item (7), "Fourier approximation-Fenton’s theory"**, supplemented by Fenton (1999), *Numerical methods for nonlinear waves*. The related guidance on nonlinear wave kinematics for force and moment estimates appears in **CEM Part VI, page VI-5-284**.
+
 **The main desktop application is `fenton_gui.rs`**, a complete single-file Rust 2021 implementation with a native 64-bit Windows GUI, nonlinear solver, numerical verification and text-report generator. The recommended production build uses the GNU/MinGW-w64 target in **MSYS2 UCRT64** on Windows 10/11, without Visual Studio, MSVC, third-party Rust crates or a Cargo manifest. **`fenton_gui.py` is the secondary desktop implementation**, retaining its Tkinter GUI, NumPy/optional Numba solver, validation workflow and PyInstaller build. The independent C++, browser, Android, API, VBA and standalone tools retain their individual interfaces as described below.
 
 The central engineering calculation is the nonlinear mapping
@@ -348,6 +354,8 @@ with the finite-depth hyperbolic functions replaced by their exponential limits.
 ***
 
 ## 5. Fourier representation and collocation
+
+This Fourier formulation implements the type of numerical wave theory recommended by **CEM, EM 1110-2-1100, Part II, page II-1-32**. The main theoretical description is **Part II, item (7), "Fourier approximation-Fenton’s theory", pages II-1-50 to II-1-55**. Compared with the simple linear approximation, a converged nonlinear Fourier solution can provide substantially more accurate free-surface profiles, velocities and pressures for finite-amplitude waves, while recovering the linear limit as wave height tends to zero.
 
 ### 5.1 Harmonic basis satisfying the field equation
 
@@ -1011,6 +1019,12 @@ The verification results in this section apply to the named implementations and 
 ***
 
 ## 8. Post-processing and engineering outputs
+
+Using Fenton's Fourier nonlinear solution for engineering wave kinematics is consistent with the CEM recommendation for regular waves (**Part II, page II-1-32**) and with **EM 1110-2-1100, Part VI, page VI-5-284, item (b), "Nonlinear wave theory"**, which states:
+
+> "For accurate force and moment estimates, an appropriate nonlinear wave theory should be used (...)".
+
+In that passage, the CEM calls for velocities and accelerations corresponding to the design wave height, period and water depth. The solved nonlinear wave field supplies the hydrodynamic basis for such calculations; structural forces and moments still require the appropriate loading formulation and structural geometry.
 
 After successful numerical acceptance, the GUI and browser report dimensional engineering quantities. The standalone solvers retain their documented nondimensional output scalings and separate diagnostics. The fundamental dimensional conversions are
 
@@ -1941,6 +1955,8 @@ The package uses Lean 4.34.0 and Mathlib. The audit checks the source identities
 | Current criterion | Do not mix Eulerian-current and Stokes/mass-transport current definitions. |
 | Surrogate use | Do not extrapolate outside the training/calibration range. Surrogates are wavelength-estimation tools, not replacements for the nonlinear kinematic solution. |
 | Units | GUI inputs use coherent SI units; standalone `data.dat` inputs are the dimensionless groups specified in §11.7. |
+
+The **CEM recommendation of Fenton's theory for regular waves in all coastal applications (Part II, page II-1-32)** supports its selection as the reference wave model in this suite. That recommendation is applied within the steady, non-breaking wave assumptions and numerical acceptance requirements described above.
 
 Fenton's theory comparisons give the following practical hierarchy. Fifth-order Stokes theory is useful for shorter waves, cnoidal theory for sufficiently long waves, with the Ursell number often used as a regime guide. The Fourier approximation method is the preferred reference method when high accuracy is required over a broad range of depths and heights, especially for velocities, pressures, integral quantities or waves close to the boundary of the perturbation theories.
 
