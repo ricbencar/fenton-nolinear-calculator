@@ -4,7 +4,7 @@
 
 This repository computes steady, two-dimensional, periodic finite-amplitude gravity waves in finite water depth, with optional collinear current. The reference calculation is a stream-function / Fourier collocation method in the Rienecker-Fenton and Fenton numerical-wave tradition: the Fourier basis satisfies the field equation and the bed condition, while Newton iteration solves the nonlinear free-surface boundary conditions and global wave-current constraints.
 
-The principal theoretical reference is the **U.S. Army Corps of Engineers Coastal Engineering Manual (CEM), EM 1110-2-1100**. In **Part II, page II-1-32, paragraph (d)**, the manual states:
+The **U.S. Army Corps of Engineers Coastal Engineering Manual (CEM), EM 1110-2-1100**, a principal reference manual in Coastal Engineering, in **Part II, page II-1-32, paragraph (d)** states the following:
 
 > "Development of the nonlinear wave theories has evolved for a better description of surface gravity waves. These include cnoidal, solitary, and Stokes theories. However, the development of a Fourier-series approximation by Fenton in recent years has superseded the previous historical developments. Since earlier theories are still frequently referenced, these will first be summarized in this section, but Fenton's theory is recommended for regular waves in all coastal applications."
 
