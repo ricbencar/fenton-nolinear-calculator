@@ -6,9 +6,9 @@ This repository computes steady, two-dimensional, periodic finite-amplitude grav
 
 The principal theoretical reference is the **U.S. Army Corps of Engineers Coastal Engineering Manual (CEM), EM 1110-2-1100**. In **Part II, page II-1-32, paragraph (d)**, the manual states:
 
-> "Fenton's theory is recommended for regular waves in all coastal applications."
+> "Development of the nonlinear wave theories has evolved for a better description of surface gravity waves. These include cnoidal, solitary, and Stokes theories. However, the development of a Fourier-series approximation by Fenton in recent years has superseded the previous historical developments. Since earlier theories are still frequently referenced, these will first be summarized in this section, but Fenton's theory is recommended for regular waves in all coastal applications."
 
-The suite adopts this recommended Fourier nonlinear numerical method. Its theoretical basis is presented in **CEM Part II, pages II-1-50 to II-1-55, item (7), "Fourier approximation-Fenton’s theory"**, supplemented by Fenton (1999), *Numerical methods for nonlinear waves*. The related guidance on nonlinear wave kinematics for force and moment estimates appears in **CEM Part VI, page VI-5-284**.
+The suite implements this recommended Fourier nonlinear numerical method. Its theoretical basis is presented in **CEM Part II, pages II-1-50 to II-1-55, item (7), "Fourier approximation-Fenton’s theory"**, supplemented by Fenton (1999), *Numerical methods for nonlinear waves*. The related guidance on nonlinear wave kinematics for force and moment estimates appears in **CEM Part VI, page VI-5-284**.
 
 **The main desktop application is `fenton_gui.rs`**, a complete single-file Rust 2021 implementation with a native 64-bit Windows GUI, nonlinear solver, numerical verification and text-report generator. The recommended production build uses the GNU/MinGW-w64 target in **MSYS2 UCRT64** on Windows 10/11, without Visual Studio, MSVC, third-party Rust crates or a Cargo manifest. **`fenton_gui.py` is the secondary desktop implementation**, retaining its Tkinter GUI, NumPy/optional Numba solver, validation workflow and PyInstaller build. The independent C++, browser, Android, API, VBA and standalone tools retain their individual interfaces as described below.
 
