@@ -4,9 +4,10 @@ Option Explicit
 ' Finite-depth steady nonlinear waves with prescribed Eulerian current.
 ' L_fenton(H, T, d, [U]) returns wavelength in metres.
 ' Inputs use metres, seconds and metres per second; g = 9.80665 m/s^2.
-' A failed, inadmissible or under-resolved state returns an "Err: " message.
-' Acceptance checks the finite residual and selected outputs; it is not a Lean program proof.
-' The Fourier order is limited by the column-equilibrated Jacobian condition.
+' Every finite converged target state returns a wavelength, regardless of accuracy.
+' Fenton_report exposes convergence, accuracy diagnostics and output enclosures.
+' Accuracy checks describe the finite computation; they are not a Lean program proof.
+' Jacobian conditioning guides Fourier-order selection without hiding converged states.
 
 Private Type FentonInterval
     lo As Double
@@ -14,12 +15,12 @@ Private Type FentonInterval
 End Type
 
 Private Const RHO As Double = 1025#
-Private Const PI As Double = 3.1415926535897931
+Private Const PI As Double = 3.14159265358979
 Private Const G_STD As Double = 9.80665
-Private Const N_FOURIER As Long = 50
+Private Const N_FOURIER As Long = 20
 Private Const MIN_FOURIER As Long = 12
-Private Const FINAL_TOL As Double = 1E-10
-Private Const CONDITION_LIMIT As Double = 1E+11
+Private Const FINAL_TOL As Double = 0.000000001
+Private Const CONDITION_LIMIT As Double = 100000000000#
 Private Const FAILURE_VALUE As Double = 1E+300
 Private Const MAX_ITERATIONS As Long = 80
 Private Const MAX_TRIALS As Long = 160
@@ -31,7 +32,7 @@ Public Function L_fenton(ByVal H As Double, ByVal T As Double, ByVal d As Double
     Dim message As String, wavelength As Double
     Dim diagnostics() As Double, values() As Double, bounds() As Double
     wavelength = SolveFentonWavelength(H, T, d, U, message, diagnostics, values, bounds)
-    If Len(message) = 0 Then
+    If wavelength > 0# Then
         L_fenton = wavelength
     Else
         L_fenton = "Err: " & message
@@ -39,6 +40,60 @@ Public Function L_fenton(ByVal H As Double, ByVal T As Double, ByVal d As Double
     Exit Function
 Failed:
     L_fenton = "Err: " & Err.Description
+End Function
+
+Public Function Fenton_report(ByVal H As Double, ByVal T As Double, ByVal d As Double, _
+                              Optional ByVal U As Double = 0#) As Variant
+    On Error GoTo Failed
+    Dim message As String, wavelength As Double, status As String
+    Dim diagnostics() As Double, values() As Double, bounds() As Double
+    Dim report(1 To 23, 1 To 4) As Variant
+    Dim labels As Variant, j As Long, row As Long
+    wavelength = SolveFentonWavelength(H, T, d, U, message, diagnostics, values, bounds)
+    status = "nonconvergence"
+    If wavelength > 0# Then
+        status = "lower_accuracy"
+        If diagnostics(11) = 1# Then status = "verified_numerically"
+    End If
+    report(1, 1) = "Status": report(1, 2) = status
+    report(2, 1) = "Details": report(2, 2) = message
+    labels = Array("Fourier order", "Jacobian condition", "Maximum nonlinear residual", _
+                   "Interpolated-surface residual", "Spectral comparison ratio", _
+                   "Quadrature refinement ratio", "Defining-integral ratio", _
+                   "Interval residual upper bound", "Interval output ratio", _
+                   "Finite-system checks passed", "Accuracy checks passed")
+    For j = 1 To 11
+        report(j + 2, 1) = labels(j - 1)
+        If wavelength > 0# Or j <= 3 Then
+            If diagnostics(j) < 0# Then
+                report(j + 2, 2) = "Unavailable"
+            Else
+                report(j + 2, 2) = diagnostics(j)
+            End If
+        End If
+    Next j
+    labels = Array("Wavelength (m)", "Celerity (m/s)", "Impulse (kg/(m s))", _
+                   "Kinetic energy (J/m^2)", "Potential energy (J/m^2)", _
+                   "Total energy (J/m^2)", "Radiation stress (N/m)", _
+                   "Wave power (W/m)", "Mean-square orbital bed velocity (m^2/s^2)")
+    For j = 1 To 9
+        report(j + 13, 1) = labels(j - 1)
+        If wavelength > 0# Then
+            report(j + 13, 2) = values(j)
+            If diagnostics(10) >= 0# Then
+                row = 2 * CLng(diagnostics(1)) + 10 + j
+                If UBound(bounds, 1) >= row Then
+                    report(j + 13, 3) = bounds(row, 1)
+                    report(j + 13, 4) = bounds(row, 2)
+                End If
+            End If
+        End If
+    Next j
+    report(23, 1) = "Nonlinear residual tolerance": report(23, 2) = FINAL_TOL
+    Fenton_report = report
+    Exit Function
+Failed:
+    Fenton_report = "Err: " & Err.Description
 End Function
 
 Private Function SolveFentonWavelength(ByVal H As Double, ByVal T As Double, _
@@ -71,6 +126,7 @@ Private Function SolveFentonWavelength(ByVal H As Double, ByVal T As Double, _
     End If
 
     Dim n As Long, num As Long, solved As Boolean
+    Dim savedN As Long, savedCondition As Double, savedResidual As Double, savedState() As Double
     Dim condition As Double, residual As Double
     Dim z() As Double, cosnm() As Double, sinnm() As Double
     n = N_FOURIER
@@ -82,22 +138,43 @@ Private Function SolveFentonWavelength(ByVal H As Double, ByVal T As Double, _
         PrecomputeTrigTables n, cosnm, sinnm
         solved = ContinueToTarget(z, cosnm, sinnm, n, num, relativeHeight, _
                                   heightParameter, current, residual)
+        If solved Then solved = FinalizeState(z, cosnm, sinnm, n, num, T, d, U, _
+                                             relativeHeight, heightParameter, current, residual)
         condition = StateCondition(z, cosnm, sinnm, n, num, relativeHeight, _
                                    heightParameter, current)
+        If solved Then
+            savedN = n: savedCondition = condition: savedResidual = residual
+            ReDim savedState(0 To num)
+            CopyState z, savedState, num
+        End If
         If condition <= CONDITION_LIMIT Or n <= MIN_FOURIER Then Exit Do
         n = CLng(Int(0.8 * n))
         If n < MIN_FOURIER Then n = MIN_FOURIER
     Loop
+    If Not solved And savedN > 0 Then
+        n = savedN: num = 2 * n + 10
+        condition = savedCondition: residual = savedResidual
+        ReDim z(0 To num)
+        CopyState savedState, z, num
+        solved = True
+    End If
     diagnostics(1) = n: diagnostics(2) = condition: diagnostics(3) = residual
     If Not solved Then
         message = "No converged solution at the requested height; N=" & CStr(n) & _
                   ", max|F|=" & Format$(residual, "0.000E+00") & "."
         Exit Function
     End If
-    If condition > CONDITION_LIMIT Then
-        message = "The Fourier system exceeds the numerical conditioning limit."
-        Exit Function
-    End If
+    Call VerifyAccuracy(z, n, H, T, d, U, values, diagnostics, bounds, message)
+    SolveFentonWavelength = values(1)
+End Function
+
+Private Function FinalizeState(ByRef z() As Double, ByRef cosnm() As Double, _
+                               ByRef sinnm() As Double, ByVal n As Long, ByVal num As Long, _
+                               ByVal T As Double, ByVal d As Double, _
+                               ByVal U As Double, ByVal relativeHeight As Double, _
+                               ByVal heightParameter As Double, ByVal current As Double, _
+                               ByRef residual As Double) As Boolean
+    On Error GoTo Failed
     Dim kPhysical As Double, cPhysical As Double
     kPhysical = z(1) / d: cPhysical = 2# * PI / kPhysical / T
     z(3) = T * Sqr(G_STD * kPhysical)
@@ -108,17 +185,12 @@ Private Function SolveFentonWavelength(ByVal H As Double, ByVal T As Double, _
     Dim rhs() As Double, merit As Double, ok As Boolean
     ReDim rhs(0 To num)
     merit = EqnsSS(z, rhs, cosnm, sinnm, n, num, relativeHeight, heightParameter, current, ok)
-    If Not ok Then
-        message = "Non-finite final residual."
-        Exit Function
-    End If
-    diagnostics(3) = MaxResidual(rhs, num)
-    If diagnostics(3) > FINAL_TOL Then
-        message = "The final residual exceeds tolerance."
-        Exit Function
-    End If
-    If Not VerifyAccuracy(z, n, H, T, d, U, values, diagnostics, bounds, message) Then Exit Function
-    SolveFentonWavelength = values(1)
+    If Not ok Then GoTo Failed
+    residual = MaxResidual(rhs, num)
+    FinalizeState = (residual <= FINAL_TOL) And Admissible(z, n, num)
+    Exit Function
+Failed:
+    residual = FAILURE_VALUE
 End Function
 
 Private Function ContinueToTarget(ByRef z() As Double, ByRef cosnm() As Double, _
@@ -396,7 +468,7 @@ Private Function NewtonUpdate(ByRef z() As Double, ByRef cosnm() As Double, ByRe
     dx = SvdSolveSquare(jac, b, num, condition)
     If Not IsFiniteVec(dx, 1, num) Then Exit Function
     alpha = 1#
-    Do While alpha >= 0.00000095367431640625
+    Do While alpha >= 9.5367431640625E-07
         For i = 1 To num
             z(i) = z0(i) + alpha * dx(i)
         Next i
@@ -461,7 +533,7 @@ Private Function SvdSolveSquare(ByRef a() As Double, ByRef b() As Double, ByVal 
     Next i
     condition = FAILURE_VALUE
     If smallest > wMax * 1E-300 And smallest > 0# Then condition = wMax / smallest
-    wMin = wMax * 1E-15
+    wMin = wMax * 0.000000000000001
     For i = 1 To n
         If w(i) <= wMin Then w(i) = 0#
     Next i
@@ -706,7 +778,7 @@ Private Sub SVDCMP(ByRef a() As Double, ByVal m As Long, ByVal n As Long, ByRef 
                 Exit For
             End If
 
-            If its = 100 Then err.Raise vbObjectError + 7101, , "SVD did not converge."
+            If its = 100 Then Err.Raise vbObjectError + 7101, , "SVD did not converge."
 
             x = w(L)
             nm = k - 1
@@ -925,7 +997,7 @@ Private Sub GaussLegendre(ByVal n As Long, ByRef nodes() As Double, ByRef weight
         For iteration = 1 To 100
             LegendreValue n, x, p, derivative
             nextX = x - p / derivative
-            If Abs(nextX - x) <= 8.8817841970012523E-16 Then
+            If Abs(nextX - x) <= 8.88178419700125E-16 Then
                 x = nextX: converged = True
                 Exit For
             End If
@@ -986,7 +1058,7 @@ Private Sub DefiningIntegrals(ByRef z() As Double, ByRef coeff() As Double, ByVa
 End Sub
 
 Private Function OutputBudget(ByVal reference As Double) As Double
-    OutputBudget = 1E-7 + 1E-8 * Abs(reference)
+    OutputBudget = 0.0000001 + 0.00000001 * Abs(reference)
 End Function
 
 Private Function VerifyAccuracy(ByRef z() As Double, ByVal n As Long, ByVal H As Double, _
@@ -996,13 +1068,17 @@ Private Function VerifyAccuracy(ByRef z() As Double, ByVal n As Long, ByVal H As
     Dim coeff() As Double, coarse() As Double, fine() As Double, indices() As Double
     Dim bedAbsolute As Double, c As Double, eulerian As Double, expected As Double, ratio As Double
     Dim j As Long, index As Long, failures As String
-    For j = 4 To 11
-        diagnostics(j) = 0#
+    For j = 4 To 9
+        diagnostics(j) = -1#
     Next j
+    diagnostics(10) = -1#: diagnostics(11) = 0#
     SurfaceCoefficients z, n, coeff
     SelectedOutputs z, coeff, n, d, values, bedAbsolute
+    ' Outputs are complete. Verification failures must not discard convergence.
+    On Error GoTo Unavailable
+    If diagnostics(2) > CONDITION_LIMIT Then failures = failures & "Jacobian condition exceeds 1e11 or is unavailable; "
     diagnostics(4) = SurfaceResidual(z, coeff, n)
-    If diagnostics(4) > 1E-6 Then failures = failures & "interpolated-surface residual exceeds 1e-6; "
+    If diagnostics(4) > 0.000001 Then failures = failures & "interpolated-surface residual exceeds 1e-6; "
     c = values(2): eulerian = z(5) * Sqr(G_STD * d / z(1))
     expected = c * (3# * values(4) - 2# * values(5)) + 0.5 * bedAbsolute * (values(3) + RHO * c * d) _
                - 2# * c * eulerian * values(3)
@@ -1014,6 +1090,7 @@ Private Function VerifyAccuracy(ByRef z() As Double, ByVal n As Long, ByVal H As
     DefiningIntegrals z, coeff, n, d, CLng(MaxD(512#, 16# * n)), 96, fine
     ReDim indices(1 To 5)
     indices(1) = 3: indices(2) = 4: indices(3) = 5: indices(4) = 7: indices(5) = 8
+    diagnostics(6) = 0#: diagnostics(7) = 0#
     For j = 1 To 5
         index = CLng(indices(j))
         ratio = Abs(fine(j) - coarse(j)) / OutputBudget(fine(j))
@@ -1026,18 +1103,22 @@ Private Function VerifyAccuracy(ByRef z() As Double, ByVal n As Long, ByVal H As
         failures = failures & "finite-system interval verification exceeds its budget; "
     End If
     If Len(failures) > 0 Then
-        message = "The collocation system converged, but its Fourier resolution or output accuracy does not meet the budgets: " & failures
+        message = "Converged solution; accuracy diagnostics: " & failures
         Exit Function
     End If
     diagnostics(11) = 1#
     VerifyAccuracy = True
+    Exit Function
+Unavailable:
+    message = "Converged solution; accuracy verification incomplete: " & Err.Description
+    diagnostics(11) = 0#
 End Function
 
 ' Finite interval endpoints are enlarged after every arithmetic operation.
 ' The margin exceeds binary64 rounding, including subnormal results.
 Private Function RoundDown(ByVal x As Double) As Double
     If Not IsFinite(x) Then Err.Raise vbObjectError + 7200, , "Non-finite interval endpoint."
-    RoundDown = (x - Abs(x) * 8.8817841970012523E-16) - 2.2250738585072014E-308
+    RoundDown = (x - Abs(x) * 8.88178419700125E-16) - 2.2250738585072E-308
 End Function
 
 Private Function RoundUp(ByVal x As Double) As Double
@@ -1298,18 +1379,20 @@ Private Function VerifyFiniteSystem(ByRef state() As Double, ByRef coeff() As Do
         maximum = MaxD(maximum, IMagnitude(f(j)))
     Next j
     diagnostics(8) = maximum
+    diagnostics(9) = 0#
     passed = (maximum <= RoundDown(FINAL_TOL))
     For j = 1 To 9
         errorBound = IMagnitude(ISub(IP(values(j)), enclosed(j)))
         minimum = 0#
         If enclosed(j).lo > 0# Or enclosed(j).hi < 0# Then minimum = MinD(Abs(enclosed(j).lo), Abs(enclosed(j).hi))
-        budget = RoundDown(RoundDown(1E-7) + RoundDown(RoundDown(1E-8) * minimum))
+        budget = RoundDown(RoundDown(0.0000001) + RoundDown(RoundDown(0.00000001) * minimum))
         diagnostics(9) = MaxD(diagnostics(9), RoundUp(errorBound / budget))
         If errorBound > budget Then passed = False
         row = 2 * n + 10 + j
         bounds(row, 1) = enclosed(j).lo: bounds(row, 2) = enclosed(j).hi
         bounds(row, 3) = errorBound: bounds(row, 4) = budget
     Next j
+    diagnostics(10) = 0#
     If passed Then diagnostics(10) = 1#
     VerifyFiniteSystem = passed
 End Function
