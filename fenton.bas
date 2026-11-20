@@ -15,12 +15,12 @@ Private Type FentonInterval
 End Type
 
 Private Const RHO As Double = 1025#
-Private Const PI As Double = 3.1415926535897931
+Private Const PI As Double = 3.14159265358979
 Private Const G_STD As Double = 9.80665
-Private Const N_FOURIER As Long = 50
+Private Const N_FOURIER As Long = 20
 Private Const MIN_FOURIER As Long = 12
-Private Const FINAL_TOL As Double = 1E-9
-Private Const CONDITION_LIMIT As Double = 1E+11
+Private Const FINAL_TOL As Double = 0.000000001
+Private Const CONDITION_LIMIT As Double = 100000000000#
 Private Const FAILURE_VALUE As Double = 1E+300
 Private Const MAX_ITERATIONS As Long = 80
 Private Const MAX_TRIALS As Long = 160
@@ -468,7 +468,7 @@ Private Function NewtonUpdate(ByRef z() As Double, ByRef cosnm() As Double, ByRe
     dx = SvdSolveSquare(jac, b, num, condition)
     If Not IsFiniteVec(dx, 1, num) Then Exit Function
     alpha = 1#
-    Do While alpha >= 0.00000095367431640625
+    Do While alpha >= 9.5367431640625E-07
         For i = 1 To num
             z(i) = z0(i) + alpha * dx(i)
         Next i
@@ -533,7 +533,7 @@ Private Function SvdSolveSquare(ByRef a() As Double, ByRef b() As Double, ByVal 
     Next i
     condition = FAILURE_VALUE
     If smallest > wMax * 1E-300 And smallest > 0# Then condition = wMax / smallest
-    wMin = wMax * 1E-15
+    wMin = wMax * 0.000000000000001
     For i = 1 To n
         If w(i) <= wMin Then w(i) = 0#
     Next i
@@ -778,7 +778,7 @@ Private Sub SVDCMP(ByRef a() As Double, ByVal m As Long, ByVal n As Long, ByRef 
                 Exit For
             End If
 
-            If its = 100 Then err.Raise vbObjectError + 7101, , "SVD did not converge."
+            If its = 100 Then Err.Raise vbObjectError + 7101, , "SVD did not converge."
 
             x = w(L)
             nm = k - 1
@@ -997,7 +997,7 @@ Private Sub GaussLegendre(ByVal n As Long, ByRef nodes() As Double, ByRef weight
         For iteration = 1 To 100
             LegendreValue n, x, p, derivative
             nextX = x - p / derivative
-            If Abs(nextX - x) <= 8.8817841970012523E-16 Then
+            If Abs(nextX - x) <= 8.88178419700125E-16 Then
                 x = nextX: converged = True
                 Exit For
             End If
@@ -1058,7 +1058,7 @@ Private Sub DefiningIntegrals(ByRef z() As Double, ByRef coeff() As Double, ByVa
 End Sub
 
 Private Function OutputBudget(ByVal reference As Double) As Double
-    OutputBudget = 1E-7 + 1E-8 * Abs(reference)
+    OutputBudget = 0.0000001 + 0.00000001 * Abs(reference)
 End Function
 
 Private Function VerifyAccuracy(ByRef z() As Double, ByVal n As Long, ByVal H As Double, _
@@ -1078,7 +1078,7 @@ Private Function VerifyAccuracy(ByRef z() As Double, ByVal n As Long, ByVal H As
     On Error GoTo Unavailable
     If diagnostics(2) > CONDITION_LIMIT Then failures = failures & "Jacobian condition exceeds 1e11 or is unavailable; "
     diagnostics(4) = SurfaceResidual(z, coeff, n)
-    If diagnostics(4) > 1E-6 Then failures = failures & "interpolated-surface residual exceeds 1e-6; "
+    If diagnostics(4) > 0.000001 Then failures = failures & "interpolated-surface residual exceeds 1e-6; "
     c = values(2): eulerian = z(5) * Sqr(G_STD * d / z(1))
     expected = c * (3# * values(4) - 2# * values(5)) + 0.5 * bedAbsolute * (values(3) + RHO * c * d) _
                - 2# * c * eulerian * values(3)
@@ -1118,7 +1118,7 @@ End Function
 ' The margin exceeds binary64 rounding, including subnormal results.
 Private Function RoundDown(ByVal x As Double) As Double
     If Not IsFinite(x) Then Err.Raise vbObjectError + 7200, , "Non-finite interval endpoint."
-    RoundDown = (x - Abs(x) * 8.8817841970012523E-16) - 2.2250738585072014E-308
+    RoundDown = (x - Abs(x) * 8.88178419700125E-16) - 2.2250738585072E-308
 End Function
 
 Private Function RoundUp(ByVal x As Double) As Double
@@ -1385,7 +1385,7 @@ Private Function VerifyFiniteSystem(ByRef state() As Double, ByRef coeff() As Do
         errorBound = IMagnitude(ISub(IP(values(j)), enclosed(j)))
         minimum = 0#
         If enclosed(j).lo > 0# Or enclosed(j).hi < 0# Then minimum = MinD(Abs(enclosed(j).lo), Abs(enclosed(j).hi))
-        budget = RoundDown(RoundDown(1E-7) + RoundDown(RoundDown(1E-8) * minimum))
+        budget = RoundDown(RoundDown(0.0000001) + RoundDown(RoundDown(0.00000001) * minimum))
         diagnostics(9) = MaxD(diagnostics(9), RoundUp(errorBound / budget))
         If errorBound > budget Then passed = False
         row = 2 * n + 10 + j
