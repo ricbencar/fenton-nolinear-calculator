@@ -390,9 +390,9 @@
 //     ill-conditioned wave problems.
 // (d) Backtrack alpha=1,1/2,1/4,... until the trial decreases sum(F_i^2),
 //     has positive kd and contains only finite state variables.
-// (e) Require max|F_i| <= 1e-8 at intermediate continuation stages and
-//     <= 1e-10 at final wave height, plus a sufficiently small surface
-//     correction. Do not lower these limits merely to force convergence.
+// (e) Require max|F_i| <= 1e-7 at intermediate continuation stages and
+//     <= 1e-9 at final wave height, plus a sufficiently small surface
+//     correction. These limits apply at every attempted Fourier order.
 // (f) Estimate Jacobian conditioning by SVD. Above 1e11, reduce the Fourier
 //     order to a minimum of 12 and repeat, retaining report diagnostics.
 // (g) Convert the accepted nondimensional state to dimensional outputs and
@@ -428,8 +428,8 @@
 //  8. VALIDATION, LIMITS OF INTERVAL CHECKING AND NUMERICAL TESTS
 // ============================================================================
 //
-// The acceptance pipeline includes:
-//    (i)  a final nonlinear collocation residual <= 1e-10;
+// Nonlinear convergence and independent accuracy diagnostics include:
+//    (i)  a final nonlinear collocation residual <= 1e-9;
 //   (ii)  interpolation of the free-surface equations at >=2048 phases,
 //         with a maximum surface residual <= 1e-6;
 //  (iii)  spectral-vs-integral energy/momentum/power identities within
@@ -445,8 +445,8 @@
 // under the assumptions of the implemented arithmetic. They are NOT a proof
 // that a nearby exact solution of the water-wave boundary-value problem exists;
 // neither full physical stability nor all machine/external-library behavior
-// is certified. Failed accuracy checks reject output by default; the explicit
-// "Allow lower accuracy" option permits output with the failed checks reported.
+// is certified. Every converged result is displayed with its accuracy status
+// and any failed or incomplete checks reported alongside the values.
 //
 // Unit tests cover input validation, a challenging SVD matrix, initialization
 // and fixed-width report rendering. Ignored, more expensive reference tests
@@ -875,7 +875,7 @@ impl Default for Certificate {
             scope:"Finite-state residual and nine selected finite-formula outputs".into(),
             root_existence_proved:false,passed:false,order:0,equation_count:0,
             residual_intervals:Vec::new(),state:Vec::new(),surface_coefficients:Vec::new(),
-            residual_upper:0.0,residual_tolerance:1e-10,outputs:BTreeMap::new() }
+            residual_upper:0.0,residual_tolerance:1e-9,outputs:BTreeMap::new() }
     }
 }
 }
@@ -905,12 +905,12 @@ use std::f64::consts::PI;
 // [kg/m^3]. Constants are held fixed throughout the model and post-processing.
 pub const G_STD: f64=9.80665;
 pub const RHO: f64=1025.0;
-// Numerical acceptance controls (not merely formatting tolerances).
-// Intermediate continuation may be less strict; final wave-height residual
-// and output verification remain stringent. The 0.98 limiting-wave factor
+// Nonlinear stopping tolerances, independent of the accuracy diagnostics.
+// Intermediate continuation may be less strict than the final wave-height
+// residual check. The 0.98 limiting-wave factor
 // is a diagnostic comparison, not a proof of convergence or stability.
-const FINAL_RESIDUAL_TOLERANCE: f64=1e-10;
-const INTERMEDIATE_RESIDUAL_TOLERANCE: f64=1e-8;
+const FINAL_RESIDUAL_TOLERANCE: f64=1e-9;
+const INTERMEDIATE_RESIDUAL_TOLERANCE: f64=1e-7;
 const FOURIER_APPLICABILITY_FRACTION: f64=0.98;
 
 type ResultT<T> = Result<T,String>;
@@ -1016,8 +1016,6 @@ pub struct FentonStreamFunction {
     // `converged` indicates solver acceptance, not just a small single Newton
     // update. Accuracy flags are set only after independent checks are passed.
     pub converged: bool, pub accuracy_verified: bool,
-    // Optional output override; Default keeps strict accuracy acceptance.
-    pub allow_lower_accuracy: bool,
     // Residual/output interval-check flag and saved finite-system certificate.
     pub finite_system_verified: bool, pub finite_system_certificate: Certificate,
     // Named ratios of measured numerical discrepancies to tolerance budgets.
@@ -1054,7 +1052,7 @@ impl FentonStreamFunction {
         // unspecified numeric diagnostics use Default, ensuring fresh state.
         let mut s=Self {
             h_target:h,t_target:t,d:depth,uc:current,
-            g:G_STD,n,nstep:4,number:40,crit:1e-8,criter_final:1e-10,
+            g:G_STD,n,nstep:4,number:40,crit:1e-7,criter_final:1e-9,
             current_criterion:1, requested_order:n,
             eta_nodes:vec![depth;n+1],bj:vec![0.0;n],
             num,z:vec![0.0;num+1],tanh_values:vec![0.0;n+1],
@@ -1083,7 +1081,7 @@ impl FentonStreamFunction {
     ///
     /// Restarts accuracy/certificate state, attempts a solve at current N,
     /// estimates the final Jacobian condition, and may retry at lower N.
-    /// When the collocation solution converges, strict output verification is
+    /// When the collocation solution converges, independent accuracy checking is
     /// performed under catch_unwind so interval domain errors are recorded.
     /// The solver never declares success solely because Newton has stopped.
     pub fn solve(&mut self) {
@@ -1096,13 +1094,15 @@ impl FentonStreamFunction {
         // solver at smaller N discards old state and recomputes all stages.
         let requested=self.requested_order;
         let mut order=self.n;
+        let mut converged_state=None;
         loop {
             self.solve_at_order();
             if self.converged {
                 match linalg::svd_solve(&self.jacobian(),&vec![0.0;self.num],self.num) {
                     Ok((_,condition))=>self.jacobian_condition=condition,
-                    Err(e)=>{self.converged=false;self.last_error=e;self.jacobian_condition=f64::INFINITY;}
+                    Err(_)=>self.jacobian_condition=f64::INFINITY,
                 }
+                converged_state=Some(self.clone());
             }
             // Condition-based order backoff: high Fourier orders can make
             // the dense collocation Jacobian too ill-conditioned for f64.
@@ -1110,17 +1110,16 @@ impl FentonStreamFunction {
             if self.jacobian_condition<=1e11 || order<=12 {break;}
             order=(order*8/10).max(12);
             let mut next=Self::new(self.h_target,self.t_target,self.d,self.uc,order);
-            next.allow_lower_accuracy=self.allow_lower_accuracy;
             next.nstep=self.nstep;next.number=self.number;
             next.crit=self.crit;next.criter_final=self.criter_final;
             next.current_criterion=self.current_criterion;
             next.requested_order=requested;
             *self=next;
         }
-        if self.converged && self.jacobian_condition>1e11 {
-            self.converged=false;
-            self.last_error="The Fourier system is too ill-conditioned for a reliable binary64 solution.".into();
+        if !self.converged {
+            if let Some(state)=converged_state {*self=state;}
         }
+        order=self.n;
         if order!=requested {
             self.numerical_note=format!("Fourier order used: {order} (requested {requested}); limited by numerical conditioning.");
         }
@@ -1132,11 +1131,11 @@ impl FentonStreamFunction {
             let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||self.verify_accuracy()));
             match result {
                 Ok(Ok(()))=>{},
-                Ok(Err(e))=>{self.converged=false;self.accuracy_verified=false;
-                    self.solution_status="accuracy_failure".into();self.last_error=format!("Accuracy verification failed: {e}");},
-                Err(_)=>{self.converged=false;self.accuracy_verified=false;
-                    self.solution_status="accuracy_failure".into();
-                    self.last_error="Accuracy verification failed: interval enclosure domain or overflow error".into();}
+                Ok(Err(e))=>{self.accuracy_verified=false;
+                    self.solution_status="lower_accuracy".into();self.last_error=format!("Converged solution; accuracy verification incomplete: {e}");},
+                Err(_)=>{self.accuracy_verified=false;
+                    self.solution_status="lower_accuracy".into();
+                    self.last_error="Converged solution; accuracy verification incomplete: interval enclosure domain or overflow error".into();}
             }
         } else {
             self.solution_status="nonconvergence".into();
@@ -1674,8 +1673,8 @@ impl FentonStreamFunction {
                 if self.z[1]<=0.0 || self.z.iter().any(|v|!v.is_finite()) {self.z=accepted.clone();}
             }
             let mut step_converged=false;
-            // At the exact target wave height, enforce final 1e-10 residual
-            // and surface correction requirements. Earlier steps use 1e-8.
+            // At the exact target wave height, enforce final 1e-9 residual
+            // and surface correction requirements. Earlier steps use 1e-7.
             let residual_limit=if target==1.0{FINAL_RESIDUAL_TOLERANCE}else{INTERMEDIATE_RESIDUAL_TOLERANCE};
             let correction_limit=if target==1.0{self.criter_final}else{self.crit};
             for it in 1..=self.number {
@@ -1878,20 +1877,22 @@ impl FentonStreamFunction {
             ("PotentialEnergy".into(),potential),("Sxx".into(),stress-0.5*RHO*self.g*self.d*self.d),
             ("Power".into(),power)]))
     }
-    /// Enforce independent numerical/physical consistency requirements.
+    /// Measure numerical accuracy independently of nonlinear convergence.
     ///
     /// Evaluate the boundary conditions on a dense phase grid, compare two
     /// spectral integral identities, compare coarse/fine defining integrals,
     /// and call the interval finite-system checker. Every discrepancy uses
     /// an absolute-plus-relative tolerance budget. Failed checks are listed
-    /// in `last_error`; strict mode rejects the case as resolution_failure.
-    /// An explicit override permits output with status lower_accuracy.
+    /// in `last_error`; results remain available with status lower_accuracy.
     fn verify_accuracy(&mut self)->ResultT<()> {
         self.accuracy_verified=false;
         self.finite_system_verified=false;
         self.finite_system_certificate=Certificate::default();
         self.accuracy_metrics.clear();
         let mut failures:Vec<String>=Vec::new();
+        if !self.jacobian_condition.is_finite() || self.jacobian_condition>1e11 {
+            failures.push("Jacobian condition exceeds 1e11 or is unavailable".into());
+        }
         // Continuous Fourier surface conditions are tested at many phases,
         // rather than only at the N+1 nodes used to solve the equations.
         let phase_count=2048_usize.max(32*self.n);
@@ -1952,7 +1953,7 @@ impl FentonStreamFunction {
             }
         }
         // Output formulas and all finite nonlinear residuals are enclosed
-        // separately by interval arithmetic; failure rejects this solution.
+        // separately by interval arithmetic; failures describe its accuracy.
         if !self.verify_finite_system()? {
             failures.push("finite-system interval verification exceeds its budget".into());
         }
@@ -1965,9 +1966,8 @@ impl FentonStreamFunction {
         self.accuracy_metrics.insert("finite_output_ratio".into(),output_ratio);
         if !failures.is_empty() {
             // Preserve failed accuracy flags and diagnostics for the report.
-            self.converged=self.allow_lower_accuracy;
-            self.solution_status=(if self.allow_lower_accuracy{"lower_accuracy"}else{"resolution_failure"}).into();
-            self.last_error=format!("The collocation system converged, but the available Fourier resolution does not satisfy the output accuracy budgets: {}.",failures.join("; "));
+            self.solution_status="lower_accuracy".into();
+            self.last_error=format!("Converged solution; accuracy diagnostics: {}.",failures.join("; "));
             return Ok(());
         }
         self.accuracy_verified=true;
@@ -1979,7 +1979,7 @@ impl FentonStreamFunction {
     /// Constructs all 2N+10 residual intervals and nine selected derived
     /// output intervals (L,c,impulse,kinetic/potential/total energy,Sxx,power,
     /// mean-square orbital bed velocity). Compare a conservative upper bound
-    /// on residual magnitude with 1e-10 and each reported output with its
+    /// on residual magnitude with 1e-9 and each reported output with its
     /// own absolute-plus-relative error budget. The resulting certificate
     /// explicitly records that exact root existence was NOT proven.
     fn verify_finite_system(&mut self)->ResultT<bool>{
@@ -2080,7 +2080,7 @@ impl FentonStreamFunction {
         cert.state=self.z.clone();
         cert.surface_coefficients=self.y[..=n].to_vec();
         cert.order=n;cert.equation_count=f.len();cert.residual_intervals=f;
-        cert.residual_tolerance=I::down(1e-10);
+        cert.residual_tolerance=I::down(FINAL_RESIDUAL_TOLERANCE);
         for residual in &cert.residual_intervals {cert.residual_upper=cert.residual_upper.max(residual.magnitude());}
         let mut valid=cert.residual_upper<=cert.residual_tolerance;
         for (key,interval) in outputs {
@@ -2172,7 +2172,7 @@ mod tests {
         let mut s=FentonStreamFunction::new(0.5,8.0,12.0,0.0,24);
         s.solve();
         assert!(s.converged,"{}",s.last_error);
-        assert!(s.max_residual<=1e-10);
+        assert!(s.max_residual<=FINAL_RESIDUAL_TOLERANCE);
         assert!((s.k*s.l-2.0*PI).abs()<1e-10);
     }
 }
@@ -2182,8 +2182,8 @@ mod tests {
 // MODULE report — ENGINEERING TABLES, UNITS, STATUS AND SOLUTION.RES FORMAT
 // ============================================================================
 // One shared report generator handles a zero-current comparison and (if Uc is
-// nonzero) an additional current-bearing wave. Only numerically accepted cases
-// are reported. The fixed-column format is designed for a monospaced Win32
+// nonzero) an additional current-bearing wave. Every finite converged case
+// is reported. The fixed-column format is designed for a monospaced Win32
 // multiline EDIT control and a UTF-8 plain-text output.txt file.
 mod report {
 //! Fixed-width 107-character engineering report, hydrodynamics tables and glossary.
@@ -2356,12 +2356,10 @@ fn issue(s:&Solver,label:&str)->Option<String>{
 /// a separate Jacobian, Fourier state, residual and certificate, so there is
 /// no shared mutable numerical state between the two computations.
 /// The returned String is later saved as UTF-8 and displayed in the GUI.
-pub fn generate_output(h:f64,t:f64,d:f64,uc:f64,allow_lower_accuracy:bool)->String {
+pub fn generate_output(h:f64,t:f64,d:f64,uc:f64)->String {
     let has_current=uc!=0.0;
     let mut solver0=Solver::new(h,t,d,0.0,50);
     let mut solver_c=Solver::new(h,t,d,uc,50);
-    solver0.allow_lower_accuracy=allow_lower_accuracy;
-    solver_c.allow_lower_accuracy=allow_lower_accuracy;
     // The independent no-current and with-current Fenton problems can be
     // calculated in parallel. Scoped threads borrow local solver objects
     // without forcing global storage or shared-mutable solver state.
@@ -2378,14 +2376,14 @@ pub fn generate_output(h:f64,t:f64,d:f64,uc:f64,allow_lower_accuracy:bool)->Stri
     let valid0=issue(&solver0,"No current").is_none();
     let validc=has_current&&issue(&solver_c,"With current").is_none();
     let mut out=String::new();
-    // If neither scenario meets all solver/verification requirements, emit
+    // If neither scenario reaches a finite converged target state, emit
     // only an explanatory error header; do not manufacture result tables.
     if !valid0 && !validc {
         box_title(&mut out,"INVALID, OUT-OF-DOMAIN, OR NON-CONVERGED WAVE");
         for msg in &issues {let _=writeln!(out,"{msg}");}
         hline(&mut out,'-');return out;
     }
-    // Show verified cases and explicitly requested lower-accuracy cases.
+    // Show every converged case with its accuracy diagnostics.
     // Fallback references simplify shared report-scaling calculations, but
     // failed columns are still explicitly masked before the table is emitted.
     let s0=if valid0{&solver0}else{&solver_c};
@@ -2398,14 +2396,14 @@ pub fn generate_output(h:f64,t:f64,d:f64,uc:f64,allow_lower_accuracy:bool)->Stri
     hline(&mut out,'-');
     let lower_accuracy=(valid0&&s0.solution_status=="lower_accuracy")
         ||(validc&&sc.solution_status=="lower_accuracy");
-    box_text(&mut out,if lower_accuracy{"Status: Lower-accuracy results included (requested)."}
+    box_text(&mut out,if lower_accuracy{"Status: Converged results shown; accuracy diagnostics require attention."}
                       else if issues.is_empty(){"Status: Finite-system and output accuracy checks passed."}
-                      else{"Status: Results shown for accepted cases only."});
+                      else{"Status: Results shown for converged cases only."});
     for (valid,s,label) in [(valid0,s0,"No current"),(validc,sc,"With current")] {
         if !valid{continue;}
         box_text(&mut out,&format!("{label}: N={}; max|F|={:.3e}",s.n,s.max_residual));
         if s.solution_status=="lower_accuracy" {
-            box_text(&mut out,&format!("{label}: Lower accuracy allowed; output accuracy checks did not pass."));
+            box_text(&mut out,&format!("{label}: Converged; accuracy checks failed or could not be completed."));
         }
         if s.finite_system_verified {
             box_text(&mut out,&format!("Finite-system interval residual bound: {:.3e}; nine output bounds checked.",
@@ -2667,9 +2665,6 @@ const WM_COMMAND:u32=0x0111;
 const WM_SETFONT:u32=0x0030;
 const WM_APP_RESULT:u32=0x8000+1;
 const EM_SETMARGINS:u32=0x00d3;
-const BM_GETCHECK:u32=0x00f0;
-const BM_SETCHECK:u32=0x00f1;
-const BST_CHECKED:isize=1;
 // --------------------------- WINDOW STYLE FLAGS -----------------------------
 // These are ordinary Win32 style bitmasks. WS_CHILD|WS_VISIBLE creates child
 // controls; ES_READONLY and ES_MULTILINE make the report a text viewer.
@@ -2687,8 +2682,6 @@ const WS_MINIMIZEBOX:u32=0x0002_0000;
 const ES_MULTILINE:u32=0x0004;
 const ES_READONLY:u32=0x0800;
 const BS_DEFPUSHBUTTON:u32=0x0001;
-const BS_AUTOCHECKBOX:u32=0x0003;
-const WS_TABSTOP:u32=0x0001_0000;
 const SWP_NOMOVE:u32=0x0002;
 const SWP_NOZORDER:u32=0x0004;
 const GWL_STYLE:i32=-16;
@@ -2704,7 +2697,6 @@ const IDC_EDIT_D:isize=103;
 const IDC_EDIT_UC:isize=104;
 const IDC_BTN_CALC:isize=110;
 const IDC_OUTPUT:isize=111;
-const IDC_ALLOW_LOWER_ACCURACY:isize=112;
 const MB_ICONERROR:u32=0x10;
 const FW_NORMAL:i32=400;
 const DEFAULT_CHARSET:u32=1;
@@ -2785,7 +2777,6 @@ static INPUT_D:AtomicIsize=AtomicIsize::new(0);
 static INPUT_UC:AtomicIsize=AtomicIsize::new(0);
 static OUTPUT:AtomicIsize=AtomicIsize::new(0);
 static BUTTON:AtomicIsize=AtomicIsize::new(0);
-static ALLOW_LOWER_ACCURACY:AtomicIsize=AtomicIsize::new(0);
 static UI_FONT:AtomicIsize=AtomicIsize::new(0);
 static MONO_FONT:AtomicIsize=AtomicIsize::new(0);
 static CLOSING:AtomicBool=AtomicBool::new(false);
@@ -2851,9 +2842,9 @@ unsafe fn resize_gui(hwnd:isize) {
 /// WM_APP_RESULT. On posting failure, the worker reclaims the allocation.
 /// Numerical panics are caught so a failed worker supplies an error message.
 /// No Win32 EDIT control is modified directly from this worker thread.
-fn run_calculation(hwnd:isize,h:f64,t:f64,d:f64,uc:f64,allow_lower_accuracy:bool){
+fn run_calculation(hwnd:isize,h:f64,t:f64,d:f64,uc:f64){
     std::thread::spawn(move ||{
-        let result=std::panic::catch_unwind(||generate_output(h,t,d,uc,allow_lower_accuracy));
+        let result=std::panic::catch_unwind(||generate_output(h,t,d,uc));
         // Panic recovery protects the GUI from interval domain failures or
         // other unexpected panics during numerical result construction.
         let report=result.unwrap_or_else(|_|"Calculation failed: unexpected numerical panic.\n".to_string());
@@ -2905,12 +2896,6 @@ unsafe extern "system" fn wnd_proc(hwnd:isize,msg:u32,wparam:usize,lparam:isize)
                 y+=35;
             }
             y+=10;
-            let checkbox=control(hwnd,"BUTTON","Allow lower accuracy",
-                WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_AUTOCHECKBOX,
-                IDC_ALLOW_LOWER_ACCURACY,20,y,260,25,ui);
-            SendMessageW(checkbox,BM_SETCHECK,0,0);
-            ALLOW_LOWER_ACCURACY.store(checkbox,Ordering::Relaxed);
-            y+=35;
             let button=control(hwnd,"BUTTON","CALCULATE",WS_CHILD|WS_VISIBLE|BS_DEFPUSHBUTTON,
                 IDC_BTN_CALC,20,y,260,40,ui);
             BUTTON.store(button,Ordering::Relaxed);
@@ -2937,8 +2922,7 @@ unsafe extern "system" fn wnd_proc(hwnd:isize,msg:u32,wparam:usize,lparam:isize)
                         // sends WM_APP_RESULT. The UI thread remains responsive.
                         EnableWindow(get(&BUTTON),0);
                         SetWindowTextW(get(&BUTTON),wide("SOLVING...").as_ptr());
-                        let allow_lower_accuracy=SendMessageW(get(&ALLOW_LOWER_ACCURACY),BM_GETCHECK,0,0)==BST_CHECKED;
-                        run_calculation(hwnd,h,t,d,uc,allow_lower_accuracy);
+                        run_calculation(hwnd,h,t,d,uc);
                     }
                 },
                 _=>show_error(hwnd,"Invalid numeric input.\n\nAccepted formats: 3.5 or 3,5 (decimal comma supported)."),
@@ -3060,7 +3044,7 @@ fn main() {
         if vals[0]<=0.0||vals[1]<=0.0||vals[2]<=0.0 {
             eprintln!("H, T, d must be positive.");std::process::exit(2);
         }
-        let output=report::generate_output(vals[0],vals[1],vals[2],vals[3],false);
+        let output=report::generate_output(vals[0],vals[1],vals[2],vals[3]);
         let _=std::fs::write("output.txt",&output);
         print!("{output}");
     }

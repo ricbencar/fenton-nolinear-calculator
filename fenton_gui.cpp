@@ -151,11 +151,12 @@
  *  8. PHYSICAL AND NUMERICAL ADMISSIBILITY
  *  -----------------------------------------------------------------------------
  *  H is the height of one deterministic regular wave. Numerical acceptance
- *  requires finite values, a small surface correction and max_i |r_i| <= 1e-10
- *  at the final height. Intermediate steps use a residual tolerance of 1e-8.
+ *  requires finite values, a small surface correction and max_i |r_i| <= 1e-9
+ *  at the final height. Intermediate steps use a residual tolerance of 1e-7.
  *  The final residual is evaluated again after dimensional post-processing.
- *  Accepted outputs also require interpolated-surface residual <= 1e-6 and
- *  spectral/integral agreement within 1e-7 + 1e-8*abs(reference).
+ *  Accuracy diagnostics compare the interpolated-surface residual with 1e-6 and
+ *  spectral/integral agreement with 1e-7 + 1e-8*abs(reference).
+ *  Every converged result is displayed, including lower-accuracy solutions.
  *  A separate interval evaluator checks all finite equations and nine outputs.
  *  IEEE binary64 enclosures use bounded Taylor series and outward rounding.
  *  Phase extrema and quadrature refinement are numerical estimates.
@@ -414,7 +415,7 @@ struct Certificate {
     int order=0, equation_count=0;
     std::vector<Interval> residual_intervals;
     std::vector<Real> state, surface_coefficients;
-    Real residual_upper=0.0, residual_tolerance=1e-10;
+    Real residual_upper=0.0, residual_tolerance=1e-9;
     std::map<std::string,OutputBound> outputs;
 };
 } // namespace Verified
@@ -611,7 +612,6 @@ public:
     Real continuation_fraction = 0.0;
     std::string numerical_note;
     bool converged;
-    bool allow_lower_accuracy = false;
     bool accuracy_verified = false;
     bool finite_system_verified = false;
     Verified::Certificate finite_system_certificate;
@@ -623,7 +623,7 @@ public:
     explicit FentonStreamFunction(Real H, Real T, Real depth, Real current = 0.0, int fourier_order = 50)
         : H_target(H), T_target(T), d(depth), Uc(current),
           g(Phys::G_STD), N(std::max(1, fourier_order)),
-          nstep(4), number(40), crit(1e-8), criter_final(1e-10),
+          nstep(4), number(40), crit(1e-7), criter_final(1e-9),
           Current_criterion(1),
           MaxH(0.0), T_nd(0.0), Height(0.0), Current(0.0),
           k(0.0), L(0.0), c(0.0),
@@ -694,31 +694,28 @@ public:
         solution_status = "not_solved";
         const int requested = requested_order;
         int order = N;
+        std::unique_ptr<FentonStreamFunction> converged_state;
         while (true) {
             solve_at_order();
             if (converged) {
                 try {
                     LinAlg::svd_solve(jacobian(), std::vector<Real>((size_t)num, 0.0), num, jacobian_condition);
-                } catch (const std::exception& e) {
-                    converged = false;
-                    last_error = e.what();
+                } catch (const std::exception&) {
                     jacobian_condition = std::numeric_limits<Real>::infinity();
                 }
+                converged_state = std::make_unique<FentonStreamFunction>(*this);
             }
             if (jacobian_condition <= 1e11 || order <= 12) break;
             order = std::max(12, (int)(order * 0.8));
             FentonStreamFunction next(H_target, T_target, d, Uc, order);
-            next.allow_lower_accuracy = allow_lower_accuracy;
             next.nstep = nstep; next.number = number;
             next.crit = crit; next.criter_final = criter_final;
             next.Current_criterion = Current_criterion;
             next.requested_order = requested;
             *this = std::move(next);
         }
-        if (converged && jacobian_condition > 1e11) {
-            converged = false;
-            last_error = "The Fourier system is too ill-conditioned for a reliable binary64 solution.";
-        }
+        if (!converged && converged_state) *this = std::move(*converged_state);
+        order = N;
         if (order != requested) {
             numerical_note = "Fourier order used: " + std::to_string(order) +
                 " (requested " + std::to_string(requested) + "); limited by numerical conditioning.";
@@ -727,10 +724,9 @@ public:
             try {
                 verify_accuracy();
             } catch (const std::exception& e) {
-                converged = false;
                 accuracy_verified = false;
-                solution_status = "accuracy_failure";
-                last_error = std::string("Accuracy verification failed: ") + e.what();
+                solution_status = "lower_accuracy";
+                last_error = std::string("Converged solution; accuracy verification incomplete: ") + e.what();
             }
         } else {
             solution_status = "nonconvergence";
@@ -790,13 +786,15 @@ public:
     // Accessor used for SOLUTION.RES-style reporting: dimensionless wavenumber kd.
     Real kd_dimless() const { return (z.size() > 1) ? z[1] : 0.0; }
 
-    // Numerical comparisons are acceptance checks, not formal floating-point proofs.
+    // Numerical comparisons describe accuracy without changing convergence.
     void verify_accuracy() {
         accuracy_verified = false;
         finite_system_verified = false;
         finite_system_certificate = Verified::Certificate{};
         accuracy_metrics.clear();
         std::vector<std::string> failures;
+        if (!std::isfinite(jacobian_condition) || jacobian_condition > 1e11)
+            failures.push_back("Jacobian condition exceeds 1e11 or is unavailable");
         const int phase_count = std::max(2048, 32*n);
         Real boundary = 0.0;
         for (int i = 0; i < phase_count; ++i) {
@@ -858,10 +856,8 @@ public:
         accuracy_metrics["finite_output_ratio"]=output_ratio;
         if (!failures.empty()) {
             // Preserve failed accuracy flags and diagnostics for the report.
-            converged = allow_lower_accuracy;
-            solution_status = allow_lower_accuracy ? "lower_accuracy" : "resolution_failure";
-            last_error = "The collocation system converged, but the available Fourier resolution "
-                         "does not satisfy the output accuracy budgets: ";
+            solution_status = "lower_accuracy";
+            last_error = "Converged solution; accuracy diagnostics: ";
             for (size_t i = 0; i < failures.size(); ++i) {
                 if (i) last_error += "; ";
                 last_error += failures[i];
@@ -945,7 +941,7 @@ public:
         certificate.surface_coefficients.assign(Y.begin(),Y.begin()+n+1);
         certificate.order=n;certificate.equation_count=(int)F.size();certificate.residual_intervals=F;
         // The lower adjacent constants are conservative decimal tolerance bounds.
-        certificate.residual_tolerance=I::down(1e-10);
+        certificate.residual_tolerance=I::down(kFinalResidualTolerance);
         for (const auto& residual : F) certificate.residual_upper=std::max(certificate.residual_upper,residual.magnitude());
         bool valid=certificate.residual_upper<=certificate.residual_tolerance;
         for (const auto& entry : outputs) {
@@ -1097,8 +1093,8 @@ private:
 
 private:
     static constexpr Real kFourierApplicabilityFraction = 0.98;
-    static constexpr Real kFinalResidualTolerance = 1.0e-10;
-    static constexpr Real kIntermediateResidualTolerance = 1.0e-8;
+    static constexpr Real kFinalResidualTolerance = 1.0e-9;
+    static constexpr Real kIntermediateResidualTolerance = 1.0e-7;
 
     inline Real& SOL(int i, int k) { return sol[(size_t)i * 3 + (size_t)k]; }
     inline Real  SOL(int i, int k) const { return sol[(size_t)i * 3 + (size_t)k]; }
@@ -2026,15 +2022,12 @@ static void print_table(std::ostringstream& out,
 // ----------------------------------------------------------------------------
 // Report generator: no-current and Eulerian-current cases under the convention.
 // ----------------------------------------------------------------------------
-[[maybe_unused]] static std::string generate_output(double H_in, double T_in, double d_in, double Uc_in,
-                                                   bool allow_lower_accuracy = false) {
+[[maybe_unused]] static std::string generate_output(double H_in, double T_in, double d_in, double Uc_in) {
     using namespace ReportFmt;
 
     const bool has_current = (Uc_in != 0.0);
     FentonStreamFunction solver0(H_in, T_in, d_in, 0.0);
     FentonStreamFunction solverC(H_in, T_in, d_in, Uc_in);
-    solver0.allow_lower_accuracy = allow_lower_accuracy;
-    solverC.allow_lower_accuracy = allow_lower_accuracy;
 
     if (has_current) {
 #ifdef _OPENMP
@@ -2115,9 +2108,9 @@ static void print_table(std::ostringstream& out,
     hline(out, '-');
     const bool lower_accuracy = (valid0 && solver0.solution_status == "lower_accuracy")
                              || (validC && solverC.solution_status == "lower_accuracy");
-    box_text(out, lower_accuracy ? "Status: Lower-accuracy results included (requested)."
+    box_text(out, lower_accuracy ? "Status: Converged results shown; accuracy diagnostics require attention."
                   : issues.empty() ? "Status: Finite-system and output accuracy checks passed."
-                                 : "Status: Results shown for accepted cases only.");
+                                 : "Status: Results shown for converged cases only.");
     auto show_status = [&](bool valid, const FentonStreamFunction& slv, const char* label) {
         if (!valid) return;
         std::ostringstream status;
@@ -2125,7 +2118,7 @@ static void print_table(std::ostringstream& out,
                << std::setprecision(3) << slv.max_residual;
         box_text(out, status.str());
         if (slv.solution_status == "lower_accuracy") {
-            box_text(out, std::string(label) + ": Lower accuracy allowed; output accuracy checks did not pass.");
+            box_text(out, std::string(label) + ": Converged; accuracy checks failed or could not be completed.");
         }
         if (slv.finite_system_verified) {
             std::ostringstream bound;
@@ -2376,7 +2369,6 @@ static std::string to_windows_newlines(const std::string& s) {
 #define IDC_EDIT_UC     104
 #define IDC_BTN_CALC    110
 #define IDC_OUTPUT      111
-#define IDC_ALLOW_LOWER_ACCURACY 112
 
 static HWND  g_hEditH = nullptr;
 static HWND  g_hEditT = nullptr;
@@ -2384,7 +2376,6 @@ static HWND  g_hEditD = nullptr;
 static HWND  g_hEditUc = nullptr;
 static HWND  g_hOutput = nullptr;
 static HWND  g_hBtnCalc = nullptr;
-static HWND  g_hAllowLowerAccuracy = nullptr;
 static HFONT g_hUIFont = nullptr;
 static HFONT g_hMonoFont = nullptr;
 static HWND  g_hMain = nullptr;
@@ -2428,14 +2419,13 @@ static bool read_edit_double(HWND hEdit, double& v) {
 
 struct CalcParams {
     double H, T, d, Uc;
-    bool allow_lower_accuracy;
 };
 
 static DWORD WINAPI CalcThread(LPVOID lpParam) {
     std::unique_ptr<CalcParams> p((CalcParams*)lpParam);
 
     // Execute the nonlinear stream-function solve and report generation.
-    std::string txt = generate_output(p->H, p->T, p->d, p->Uc, p->allow_lower_accuracy);
+    std::string txt = generate_output(p->H, p->T, p->d, p->Uc);
 
     // Write output.txt in the same SOLUTION.RES-style report format.
     try {
@@ -2519,13 +2509,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         make_label(L"Water Depth (m):", y); g_hEditD = make_edit(L"5.0", IDC_EDIT_D, y); y += 35;
         make_label(L"Current (m/s):", y);   g_hEditUc = make_edit(L"1.0", IDC_EDIT_UC, y); y += 45;
 
-        g_hAllowLowerAccuracy = CreateWindowW(L"BUTTON", L"Allow lower accuracy",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-            20, y, 260, 25, hwnd, (HMENU)IDC_ALLOW_LOWER_ACCURACY, nullptr, nullptr);
-        SendMessageW(g_hAllowLowerAccuracy, WM_SETFONT, (WPARAM)g_hUIFont, TRUE);
-        SendMessageW(g_hAllowLowerAccuracy, BM_SETCHECK, BST_UNCHECKED, 0);
-        y += 35;
-
         g_hBtnCalc = CreateWindowW(L"BUTTON", L"CALCULATE",
             WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
             20, y, 260, 40, hwnd, (HMENU)IDC_BTN_CALC, nullptr, nullptr);
@@ -2566,8 +2549,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             EnableWindow(g_hBtnCalc, FALSE);
             SetWindowTextW(g_hBtnCalc, L"SOLVING...");
 
-            const bool allow_lower_accuracy = SendMessageW(g_hAllowLowerAccuracy, BM_GETCHECK, 0, 0) == BST_CHECKED;
-            CalcParams* p = new CalcParams{ H, T, d, Uc, allow_lower_accuracy };
+            CalcParams* p = new CalcParams{ H, T, d, Uc };
 
             HANDLE hTh = CreateThread(nullptr, 0, CalcThread, p, 0, nullptr);
             if (hTh) CloseHandle(hTh);

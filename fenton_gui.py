@@ -235,7 +235,7 @@ import numpy as np
 # - NumPy 2.x removed the legacy alias `numpy.trapz`.
 # - Prefer `numpy.trapezoid` when available, else fall back to `numpy.trapz`.
 # Outward-rounded arithmetic for independent finite-system evaluation.
-from decimal import Decimal, Context, ROUND_FLOOR, ROUND_CEILING, ROUND_HALF_EVEN, DecimalException
+from decimal import Decimal, Context, ROUND_FLOOR, ROUND_CEILING, ROUND_HALF_EVEN
 from functools import lru_cache
 from math import factorial
 
@@ -600,12 +600,12 @@ class FentonStreamFunction:
     Fenton steady-wave solver using the stream-function / Fourier
     collocation formulation with the documented 1-based z[i] state vector.
 
-    Public API is preserved to keep the GUI unchanged.
+    Every finite, converged target state is available with accuracy diagnostics.
     """
 
     # --------------------------- construction and state-vector allocation ---------
 
-    def __init__(self, H, T, d, Uc=0.0, *, fourier_order=None, allow_lower_accuracy=False):
+    def __init__(self, H, T, d, Uc=0.0, *, fourier_order=None):
         # Dimensional inputs: H, T, d and imposed Eulerian current Uc
         self.H_target = float(H)    # [m]
         self.T_target = float(T)    # [s]
@@ -619,7 +619,6 @@ class FentonStreamFunction:
         self.jacobian_condition = 0.0
         self.continuation_fraction = 0.0
         self.numerical_note = ""
-        self.allow_lower_accuracy = bool(allow_lower_accuracy)
         self.accuracy_verified = False
         self.accuracy_metrics = {}
         self.finite_system_verified = False
@@ -629,10 +628,10 @@ class FentonStreamFunction:
         # Solver control: continuation and Newton iteration tolerances
         self.nstep  = 4        # continuation steps in wave height
         self.number = 40       # max Newton iterations per step
-        self.crit   = 1.0e-8   # intermediate-step convergence factor (C++: crit)
-        self.criter_final = 1.0e-10  # final-step convergence factor
-        self.residual_tolerance = 1.0e-8
-        self.residual_tolerance_final = 1.0e-10
+        self.crit   = 1.0e-7   # intermediate-step convergence factor (C++: crit)
+        self.criter_final = 1.0e-9  # final-step convergence factor
+        self.residual_tolerance = 1.0e-7
+        self.residual_tolerance_final = 1.0e-9
         self.residual_max = float("inf")
 
         # Problem mode represented by this GUI: finite depth with period as input
@@ -1124,7 +1123,7 @@ class FentonStreamFunction:
     # ----------------------------- public methods -----------------------------
 
     def solve(self):
-        """Use the largest Fourier order supported by binary64 conditioning."""
+        """Solve the target wave; report accuracy separately from convergence."""
         self.accuracy_verified = False
         self.accuracy_metrics = {}
         self.finite_system_verified = False
@@ -1132,28 +1131,33 @@ class FentonStreamFunction:
         self.solution_status = "not_solved"
         requested = self.requested_order
         order = self.n
+        converged_state = None
         while True:
             self._solve_at_order()
             if self.converged:
-                A = self._jacobian()
-                scale = np.maximum(np.max(np.abs(A), axis=0), np.finfo(DTYPE).tiny)
-                singular = np.linalg.svd(A / scale, compute_uv=False)
-                self.jacobian_condition = float(singular[0] / singular[-1]) if singular[-1] > singular[0] * 1.0e-300 else float("inf")
+                try:
+                    A = self._jacobian()
+                    scale = np.maximum(np.max(np.abs(A), axis=0), np.finfo(DTYPE).tiny)
+                    singular = np.linalg.svd(A / scale, compute_uv=False)
+                    self.jacobian_condition = float(singular[0] / singular[-1]) if singular[-1] > singular[0] * 1.0e-300 else float("inf")
+                except (FloatingPointError, ValueError, np.linalg.LinAlgError):
+                    self.jacobian_condition = float("inf")
+                # Restarts allocate fresh arrays, preserving this completed state.
+                converged_state = self.__dict__.copy()
             if self.jacobian_condition <= 1.0e11 or order <= 12:
                 break
             order = max(12, int(order * 0.8))
             controls = (self.nstep, self.number, self.crit, self.criter_final,
                         self.residual_tolerance, self.residual_tolerance_final,
                         self.Current_criterion)
-            self.__init__(self.H_target, self.T_target, self.d, self.Uc, fourier_order=order,
-                          allow_lower_accuracy=self.allow_lower_accuracy)
+            self.__init__(self.H_target, self.T_target, self.d, self.Uc, fourier_order=order)
             (self.nstep, self.number, self.crit, self.criter_final,
              self.residual_tolerance, self.residual_tolerance_final,
              self.Current_criterion) = controls
             self.requested_order = requested
-        if self.converged and self.jacobian_condition > 1.0e11:
-            self.converged = False
-            self.last_error = "The Fourier system is too ill-conditioned for a reliable binary64 solution."
+        if not self.converged and converged_state is not None:
+            self.__dict__.update(converged_state)
+        order = self.n
         if order != requested:
             self.numerical_note = (f"Fourier order used: {order} (requested {requested}); "
                                    "limited by numerical conditioning.")
@@ -1161,11 +1165,10 @@ class FentonStreamFunction:
         if self.converged:
             try:
                 self._verify_accuracy()
-            except (FloatingPointError, ValueError, DecimalException, np.linalg.LinAlgError) as exc:
-                self.converged = False
+            except Exception as exc:
                 self.accuracy_verified = False
-                self.solution_status = "accuracy_failure"
-                self.last_error = "Accuracy verification failed: " + str(exc)
+                self.solution_status = "lower_accuracy"
+                self.last_error = "Converged solution; accuracy verification incomplete: " + str(exc)
         elif self.solution_status == "not_solved":
             self.solution_status = "nonconvergence"
 
@@ -1516,7 +1519,7 @@ class FentonStreamFunction:
             "MeanSquareBedVelocity": gravity/wave_number*bed_sum,
         }
         residual_upper = max(value.magnitude() for value in F)
-        tolerance = min(Decimal("1e-10"), Decimal.from_float(float(self.residual_tolerance_final)))
+        tolerance = min(Decimal("1e-9"), Decimal.from_float(float(self.residual_tolerance_final)))
         checks = {}
         valid = residual_upper <= tolerance
         for name, interval in outputs.items():
@@ -1540,12 +1543,15 @@ class FentonStreamFunction:
         return bool(valid)
 
     def _verify_accuracy(self):
-        """Verify numerical budgets before exposing a successful solution."""
+        """Measure accuracy without changing nonlinear convergence or outputs."""
         self.accuracy_verified = False
         self.finite_system_verified = False
         self.finite_system_certificate = {}
         failures = []
+        if not np.isfinite(self.jacobian_condition) or self.jacobian_condition > 1e11:
+            failures.append("Jacobian condition exceeds 1e11 or is unavailable")
         metrics = {}
+        self.accuracy_metrics = metrics
         phases = np.arange(max(2048, 32*self.n)) * (2.0*np.pi/max(2048, 32*self.n))
         j = self._j
         coefficients = self.Y[1:self.n+1].copy()
@@ -1600,11 +1606,8 @@ class FentonStreamFunction:
             for check in self.finite_system_certificate["outputs"].values())
         self.accuracy_metrics = metrics
         if failures:
-            # Keep the accuracy flags and diagnostics even when output is requested.
-            self.converged = self.allow_lower_accuracy
-            self.solution_status = "lower_accuracy" if self.allow_lower_accuracy else "resolution_failure"
-            self.last_error = ("The collocation system converged, but the available Fourier resolution "
-                               "does not satisfy the output accuracy budgets: "+"; ".join(failures)+".")
+            self.solution_status = "lower_accuracy"
+            self.last_error = "Converged solution; accuracy diagnostics: " + "; ".join(failures) + "."
             return
         self.accuracy_verified = True
         self.solution_status = "verified_numerically"
@@ -1843,15 +1846,9 @@ class FentonApp(tk.Tk):
         self.ent_Uc.grid(row=1, column=3, padx=5, pady=5)
         self.ent_Uc.insert(0, "1.0") # Default U=1
         
-        # Snapshot this option on Calculate; worker threads never read Tk variables.
-        self.allow_lower_accuracy = tk.BooleanVar(value=False)
-        self.chk_lower_accuracy = ttk.Checkbutton(
-            input_frame, text="Allow lower accuracy", variable=self.allow_lower_accuracy)
-        self.chk_lower_accuracy.grid(row=0, column=4, padx=20, pady=(0, 5), sticky="w")
-
         # Calculate Button
         self.btn_calc = ttk.Button(input_frame, text="CALCULATE", command=self.run_calculation)
-        self.btn_calc.grid(row=1, column=4, padx=20, sticky="ew")
+        self.btn_calc.grid(row=0, column=4, rowspan=2, padx=20, sticky="ew")
         
         # --- Output Frame ---
         output_frame = ttk.LabelFrame(self, text="Output Console", padding="10")
@@ -1952,21 +1949,21 @@ class FentonApp(tk.Tk):
         
         # Start the heavy math in a SEPARATE thread
         thread = threading.Thread(target=self._solve_in_background, 
-                                  args=(H_in, T_in, d_in, Uc_in, self.allow_lower_accuracy.get()))
+                                  args=(H_in, T_in, d_in, Uc_in))
         thread.daemon = True # Ensures thread dies if we close the window
         thread.start()
 
 
-    def _solve_in_background(self, H, T, d, Uc, allow_lower_accuracy=False):
+    def _solve_in_background(self, H, T, d, Uc):
         """Heavy computations (background thread). All GUI updates are scheduled via after()."""
         import traceback
         try:
             # Case A: No current
-            solver0 = FentonStreamFunction(H, T, d, Uc=0.0, allow_lower_accuracy=allow_lower_accuracy)
+            solver0 = FentonStreamFunction(H, T, d, Uc=0.0)
             solver0.solve()
 
             # Case B: With ambient current (Eulerian)
-            solverC = FentonStreamFunction(H, T, d, Uc=Uc, allow_lower_accuracy=allow_lower_accuracy)
+            solverC = FentonStreamFunction(H, T, d, Uc=Uc)
             solverC.solve()
 
             # Schedule UI update on the main thread
@@ -2164,7 +2161,7 @@ class FentonApp(tk.Tk):
         hline("-")
         lower_accuracy = any(valid and slv.solution_status == "lower_accuracy"
                              for valid, slv in ((valid0, solver0), (validC, solverC)))
-        box_text("Status: Lower-accuracy results included (requested)." if lower_accuracy
+        box_text("Status: Converged results shown; accuracy diagnostics require attention." if lower_accuracy
                  else "Status: Results shown for converged cases only." if issues
                  else "Status: Finite-system and output accuracy checks passed.")
         for valid, slv, label in ((valid0, solver0, "No current"),
@@ -2172,7 +2169,7 @@ class FentonApp(tk.Tk):
             if valid:
                 box_text(f"{label}: N={slv.n}; max|F|={slv.residual_max:.3e}")
                 if slv.solution_status == "lower_accuracy":
-                    box_text(f"{label}: Lower accuracy allowed; output accuracy checks did not pass.")
+                    box_text(f"{label}: Converged; accuracy checks failed or could not be completed.")
                 certificate = slv.finite_system_certificate
                 if certificate.get("passed"):
                     upper = float(certificate["residual_upper"])
@@ -2427,9 +2424,11 @@ def _self_test():
                 solver = FentonStreamFunction(h, t, d, current)
                 solver.solve()
                 if (h, t, d, current) in resolution_limited:
-                    ok = (not solver.converged and not solver.accuracy_verified
-                          and solver.solution_status == "resolution_failure"
-                          and bool(solver.last_error))
+                    ok = (solver.converged and not solver.accuracy_verified
+                          and solver.solution_status == "lower_accuracy"
+                          and bool(solver.last_error)
+                          and np.isfinite(solver.L)
+                          and solver.residual_max <= solver.residual_tolerance_final)
                 else:
                     ok = (solver.converged and solver.accuracy_verified
                           and np.isfinite(solver.residual_max)

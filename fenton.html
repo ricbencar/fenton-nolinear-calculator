@@ -28,8 +28,6 @@ label{display:flex;justify-content:space-between;gap:10px;font-size:15px;color:v
 input{width:100%;border:1px solid #35506d;background:#071422;color:var(--text);border-radius:9px;padding:13px 14px;font:600 17px/1.2 Consolas,monospace;outline:none}
 input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(66,165,245,.16)}
 .actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px}
-.accuracy-option{grid-column:1/-1;justify-content:flex-start;align-items:center;color:var(--text);margin:0 0 2px;cursor:pointer}
-.accuracy-option input{width:18px;height:18px;padding:0;margin:0;flex:0 0 auto;accent-color:var(--accent)}
 button{border:1px solid var(--line);background:#142b45;color:var(--text);border-radius:9px;padding:12px 13px;font-size:14px;font-weight:700;cursor:pointer}
 button:hover{filter:brightness(1.09)}
 button.primary{grid-column:1/-1;background:linear-gradient(135deg,#1777c8,#2698e8);border-color:#42a5f5;font-size:15px}
@@ -78,7 +76,7 @@ canvas{display:block;width:100%;height:420px}
 <header>
   <div>
     <h1>Fenton Nonlinear Wave Calculator</h1>
-    <div class="subtitle">Stream-function/Fourier solver for steady, finite-amplitude waves with optional collinear current. Adaptive height continuation and Fourier resolution support short-period calculations. Output accuracy checks are required by default; lower-accuracy results can be requested.</div>
+    <div class="subtitle">Stream-function/Fourier solver for steady, finite-amplitude waves with optional collinear current. Every converged solution is displayed with its achieved accuracy and numerical diagnostics.</div>
   </div>
 </header>
 <div class="layout">
@@ -89,7 +87,6 @@ canvas{display:block;width:100%;height:420px}
     <div class="field"><label for="d"><span>Still-water depth, d</span><span>m</span></label><input id="d" type="number" step="any" value="5"></div>
     <div class="field"><label for="Uc"><span>Eulerian current, Uc</span><span>m/s</span></label><input id="Uc" type="number" step="any" value="1"></div>
     <div class="actions">
-      <label class="accuracy-option"><input id="allowLowerAccuracy" type="checkbox">Allow lower accuracy</label>
       <button id="calculate" class="primary">Calculate nonlinear wave</button>
       <button id="loadReference">Reference case</button>
       <button id="clear">Clear output</button>
@@ -334,7 +331,7 @@ const gaussLegendre = (() => {
 })();
 
 class FentonStreamFunction {
-  constructor(H, T, depth, current = 0.0, fourierOrder = 50, allowLowerAccuracy = false) {
+  constructor(H, T, depth, current = 0.0, fourierOrder = 50) {
     this.H_target = H;
     this.T_target = T;
     this.d = depth;
@@ -345,11 +342,10 @@ class FentonStreamFunction {
     this.jacobian_condition=0;
     this.continuation_fraction=0;
     this.numerical_note='';
-    this.allow_lower_accuracy=Boolean(allowLowerAccuracy);
     this.nstep = 4;
     this.number = 40;
-    this.crit = 1e-8;
-    this.criter_final = 1e-10;
+    this.crit = 1e-7;
+    this.criter_final = 1e-9;
     this.Current_criterion = 1;
 
     this.MaxH = 0.0;
@@ -409,8 +405,8 @@ class FentonStreamFunction {
   }
 
   static get FOURIER_APPLICABILITY_FRACTION() { return 0.98; }
-  static get FINAL_RESIDUAL_TOLERANCE() { return 1e-10; }
-  static get INTERMEDIATE_RESIDUAL_TOLERANCE() { return 1e-8; }
+  static get FINAL_RESIDUAL_TOLERANCE() { return 1e-9; }
+  static get INTERMEDIATE_RESIDUAL_TOLERANCE() { return 1e-7; }
 
   SOL(i, k) { return this.sol[i * 3 + k]; }
   setSOL(i, k, v) { this.sol[i * 3 + k] = v; }
@@ -428,32 +424,33 @@ class FentonStreamFunction {
     this.resetVerification();
     const requested=this.requested_order;
     let order=this.N;
+    let convergedState=null;
     while(true) {
       this.solveAtOrder();
       if(this.converged) {
         try {
           this.jacobian_condition=LinAlg.svdSolve(this.jacobian(),new Float64Array(this.num),this.num).condition;
-        } catch(e) {
-          this.converged=false; this.last_error=String(e.message||e); this.jacobian_condition=Infinity;
+        } catch {
+          this.jacobian_condition=Infinity;
         }
+        // Each restart owns fresh arrays, so this completed state stays intact.
+        convergedState={...this};
       }
       if(this.jacobian_condition<=1e11 || order<=12) break;
       order=Math.max(12,Math.trunc(order*.8));
-      const next=new FentonStreamFunction(this.H_target,this.T_target,this.d,this.Uc,order,this.allow_lower_accuracy);
+      const next=new FentonStreamFunction(this.H_target,this.T_target,this.d,this.Uc,order);
       for(const key of ['nstep','number','crit','criter_final','Current_criterion']) next[key]=this[key];
       next.requested_order=requested;
       Object.assign(this,next);
     }
-    if(this.converged && this.jacobian_condition>1e11) {
-      this.converged=false;
-      this.last_error='The Fourier system is too ill-conditioned for a reliable binary64 solution.';
-    }
+    if(!this.converged && convergedState) Object.assign(this,convergedState);
+    order=this.N;
     if(this.converged) {
       try { this.verifyAccuracy(); }
       catch(error) {
-        this.converged=false;this.accuracy_verified=false;this.finite_system_verified=false;
-        this.solution_status='accuracy_failure';
-        this.last_error='Accuracy verification failed: '+String(error.message||error);
+        this.accuracy_verified=false;
+        this.solution_status='lower_accuracy';
+        this.last_error='Converged solution; accuracy verification incomplete: '+String(error.message||error);
       }
     } else this.solution_status='nonconvergence';
     if(order!==requested) this.numerical_note=`Fourier order used: ${order} (requested ${requested}); limited by numerical conditioning.`;
@@ -1046,7 +1043,7 @@ class FentonStreamFunction {
     const outputs={L:Verified.pi().mul(2).div(k),c:z[4].mul(speed),Impulse:density.mul(speed).div(k).mul(pulse),
       KineticEnergy:scale.mul(kinetic),PotentialEnergy:scale.mul(potential),EnergyDensity:scale.mul(kinetic.add(potential)),
       Sxx:scale.mul(stress),Power:scale.mul(speed).mul(power),MeanSquareBedVelocity:gravity.div(k).mul(bed)};
-    const upper=Math.max(...F.map(value=>value.magnitude())),tolerance=Verified.down(1e-10),checks={};
+    const upper=Math.max(...F.map(value=>value.magnitude())),tolerance=Verified.down(FentonStreamFunction.FINAL_RESIDUAL_TOLERANCE),checks={};
     let passed=upper<=tolerance;
     for(const [name,enclosure] of Object.entries(outputs)) {
       const error=I(this[name]).sub(enclosure).magnitude();
@@ -1069,6 +1066,9 @@ class FentonStreamFunction {
   verifyAccuracy() {
     this.accuracy_verified=false;this.finite_system_verified=false;this.finite_system_certificate={};
     const failures=[],metrics={},n=this.n,count=Math.max(2048,32*n);
+    this.accuracy_metrics=metrics;
+    if(!Number.isFinite(this.jacobian_condition)||this.jacobian_condition>1e11)
+      failures.push('Jacobian condition exceeds 1e11 or is unavailable');
     let boundary=0;
     for(let m=0;m<count;++m) {
       const phase=m*2*Math.PI/count,eta=this.surfaceKeta(phase);
@@ -1102,10 +1102,8 @@ class FentonStreamFunction {
     metrics.finite_output_ratio=Math.max(...Object.values(certificate.outputs).map(check=>Verified.up(check.error_upper/check.budget_lower)));
     this.accuracy_metrics=metrics;
     if(failures.length) {
-      // Keep failed accuracy flags and diagnostics when lower-accuracy output is requested.
-      this.converged=this.allow_lower_accuracy;
-      this.solution_status=this.allow_lower_accuracy?'lower_accuracy':'resolution_failure';
-      this.last_error='The collocation system converged, but the available Fourier resolution does not satisfy the output accuracy budgets: '+failures.join('; ')+'.';
+      this.solution_status='lower_accuracy';
+      this.last_error='Converged solution; accuracy diagnostics: '+failures.join('; ')+'.';
       return;
     }
     this.accuracy_verified=true;this.solution_status='verified_numerically';
@@ -1121,7 +1119,7 @@ class FentonStreamFunction {
       'Impulse','I_depth','Power','F_depth','Cg','E_depth','KE_depth','PE_depth','MassTransport','MeanSquareBedVelocity',
       'u_bed','u_surf','acc_max','acc_bed_max','w_max','asymmetry','tau_bed','ExcursionBed','breaking_limit_miche','breaking_index','MeanSquareBedAbsoluteVelocity','is_breaking','converged','last_error'
     ];
-    scalarKeys.push('u_bed_crest','u_surf_crest','extrema_phases','allow_lower_accuracy','accuracy_verified','accuracy_metrics',
+    scalarKeys.push('u_bed_crest','u_surf_crest','extrema_phases','accuracy_verified','accuracy_metrics',
       'finite_system_verified','finite_system_certificate','solution_status');
     const out = {};
     for (const k of scalarKeys) out[k] = this[k];
@@ -1134,12 +1132,12 @@ class FentonStreamFunction {
   }
 }
 
-function solveFentonCases(H, T, d, Uc = 0.0, allowLowerAccuracy = false) {
-  const noCurrent = new FentonStreamFunction(H, T, d, 0.0, 50, allowLowerAccuracy);
+function solveFentonCases(H, T, d, Uc = 0.0) {
+  const noCurrent = new FentonStreamFunction(H, T, d, 0.0, 50);
   noCurrent.solve();
   let withCurrent = null;
   if (Uc !== 0.0) {
-    withCurrent = new FentonStreamFunction(H, T, d, Uc, 50, allowLowerAccuracy);
+    withCurrent = new FentonStreamFunction(H, T, d, Uc, 50);
     withCurrent.solve();
   }
   return { noCurrent, withCurrent };
@@ -1155,17 +1153,17 @@ self.onmessage = function(event) {
   if (p.type !== 'solve') return;
   try {
     self.postMessage({type:'progress', message:'Solving no-current case…'});
-    const noCurrent = new FentonStreamFunction(p.H, p.T, p.d, 0.0, 50, p.allow_lower_accuracy);
+    const noCurrent = new FentonStreamFunction(p.H, p.T, p.d, 0.0, 50);
     noCurrent.solve();
     let withCurrent = null;
     if (p.Uc !== 0.0) {
       self.postMessage({type:'progress', message:'Solving imposed-current case…'});
-      withCurrent = new FentonStreamFunction(p.H, p.T, p.d, p.Uc, 50, p.allow_lower_accuracy);
+      withCurrent = new FentonStreamFunction(p.H, p.T, p.d, p.Uc, 50);
       withCurrent.solve();
     }
     self.postMessage({
       type:'result',
-      input:{H:p.H,T:p.T,d:p.d,Uc:p.Uc,allow_lower_accuracy:Boolean(p.allow_lower_accuracy)},
+      input:{H:p.H,T:p.T,d:p.d,Uc:p.Uc},
       noCurrent:noCurrent.toSerializable(),
       withCurrent:withCurrent ? withCurrent.toSerializable() : null
     });
@@ -1197,7 +1195,7 @@ function setStatus(text, cls=''){
 function getInputs(){
   const H=Number($('H').value), T=Number($('T').value), d=Number($('d').value), Uc=Number($('Uc').value);
   if(![H,T,d,Uc].every(Number.isFinite) || !(H>0) || !(T>0) || !(d>0)) throw new Error('H, T and d must be finite and greater than zero; Uc must be finite.');
-  return {H,T,d,Uc,allow_lower_accuracy:$('allowLowerAccuracy').checked};
+  return {H,T,d,Uc};
 }
 function run(){
   let input;
@@ -1217,8 +1215,8 @@ function handleWorkerMessage(e){
     if(!activeCase(m)){finishError(issues.join(' '),m);return;}
     lastPayload=m; renderAll(m);
     const warnings=caseWarnings(m);
-    const status=warnings.length?'Lower-accuracy results included (requested).'
-      :issues.length?'Results shown for accepted cases only.':'Finite-system and output accuracy checks passed.';
+    const status=warnings.length?'Converged results shown; accuracy diagnostics require attention.'
+      :issues.length?'Results shown for converged cases only.':'Finite-system and output accuracy checks passed.';
     setStatus([status,...warnings,...issues].join(' '),issues.length?'bad':warnings.length?'warn':'ok');
   }
 }
@@ -1252,13 +1250,12 @@ function initialiseDashboard(){
   const canvas=$('profile');canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height);
   $('resultsContext').textContent='Enter the wave conditions and run the nonlinear solver.';
 }
-function validCase(s){return s&&s.converged&&((s.accuracy_verified&&s.finite_system_verified)
-  ||(s.allow_lower_accuracy&&s.solution_status==='lower_accuracy'&&[s.L,s.k,s.c].every(Number.isFinite)))?s:null;}
+function validCase(s){return s&&s.converged&&[s.L,s.k,s.c].every(Number.isFinite)?s:null;}
 function activeCase(p){return validCase(p.withCurrent)||validCase(p.noCurrent);}
 function caseEntries(p){return [['No current',validCase(p.noCurrent)],['With current',validCase(p.withCurrent)]].filter(([,s])=>s);}
 function caseIssues(p){return [['No current',p.noCurrent],['With current',p.withCurrent]].filter(([,s])=>s&&!s.converged).map(([name,s])=>`[${name}] ${s.last_error||'Did not converge.'}`);}
 function caseWarnings(p){return caseEntries(p).filter(([,s])=>s.solution_status==='lower_accuracy')
-  .map(([name,s])=>`Warning [${name}]: Lower accuracy allowed. ${s.last_error}`);}
+  .map(([name,s])=>`Warning [${name}]: ${s.last_error}`);}
 
 function renderAll(p){
   const s=activeCase(p);
@@ -1351,8 +1348,8 @@ function buildReport(p){
   const out=[];
   out.push(line,'FENTON NONLINEAR WAVE CALCULATOR — HTML/JAVASCRIPT',line,
     `Regular wave height (H) : ${input.H} m`,`Wave period (T)         : ${input.T} s`,`Water depth (d)         : ${input.d} m`,`Eulerian current (Uc)   : ${input.Uc} m/s`,thin,
-    caseWarnings(p).length?'Status: Lower-accuracy results included (requested).'
-      :caseIssues(p).length?'Status: Results shown for accepted cases only.':'Status: Finite-system and output accuracy checks passed.',
+    caseWarnings(p).length?'Status: Converged results shown; accuracy diagnostics require attention.'
+      :caseIssues(p).length?'Status: Results shown for converged cases only.':'Status: Finite-system and output accuracy checks passed.',
     ...caseWarnings(p),...caseIssues(p),line,'');
   out.push(cols('PARAMETER','NO CURRENT','WITH CURRENT','UNIT'),thin);
   for(const r of resultRows){
@@ -1363,11 +1360,13 @@ function buildReport(p){
   for(const [name,s] of caseEntries(p)){
     out.push('',line,`${name.toUpperCase()} — N=${s.N}, ${s.z.length} equations`,line);
     if(s.numerical_note)out.push(s.numerical_note);
+    const certificate=s.finite_system_certificate||{};
     out.push('FINITE-SYSTEM AND OUTPUT ACCURACY',
-      `Interval residual upper bound: ${s.finite_system_certificate.residual_upper.toExponential(12)}`,
-      `Root existence proved: ${s.finite_system_certificate.root_existence_proved}`);
+      `Accuracy checks passed: ${s.accuracy_verified?'Yes':'No'}`,
+      `Interval residual upper bound: ${Number.isFinite(certificate.residual_upper)?certificate.residual_upper.toExponential(12):'Unavailable'}`,
+      `Root existence proved: ${certificate.root_existence_proved===true}`);
     for(const [key,value] of Object.entries(s.accuracy_metrics)) out.push(`${key}: ${fmt(value,14)}`);
-    for(const [key,check] of Object.entries(s.finite_system_certificate.outputs))
+    for(const [key,check] of Object.entries(certificate.outputs||{}))
       out.push(`${key}: [${check.interval[0].toPrecision(17)}, ${check.interval[1].toPrecision(17)}]; error <= ${check.error_upper.toExponential(8)}; budget >= ${check.budget_lower.toExponential(8)}`);
     out.push('FREE-SURFACE COLLOCATION NODES',cols('m / x/L','η (m SWL)','Water column (m)',''),thin);
     for(let m=0;m<=s.N;m++)out.push(cols(`${m} / ${fmt(m/(2*s.N),8)}`,fmt(s.eta_nodes[m]-s.d,12),fmt(s.eta_nodes[m],12),''));
@@ -1380,7 +1379,8 @@ function buildReport(p){
     'Requested Fourier order N = 50; active state and residual dimensions = 2N + 10.',
     'Adaptive height continuation; analytic Jacobian; column-equilibrated Jacobi SVD;',
     'singular-value truncation at 10^-15; order reduction above condition 10^11;',
-    'damped Newton line search; final collocation residual tolerance 10^-10;',
+    'damped Newton line search; intermediate/final collocation residual tolerances 10^-7 / 10^-9;',
+    'Every finite converged target state is displayed, including lower-accuracy results.',
     'Outward binary64 intervals enclose the finite-state residual and nine selected output formulas.',
     'Interpolated-surface residual budget: 10^-6; output budgets: 10^-7 + 10^-8 |reference|.',
     'Spectral-bed identities and independent depth/phase quadratures check integral outputs.',

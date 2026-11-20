@@ -4,17 +4,15 @@
 
 Fenton Nonlinear Wave Suite is a repository of code that computes steady, two-dimensional, periodic finite-amplitude gravity waves in finite water depth, with optional collinear current. The reference calculation is a stream-function / Fourier collocation method in the Rienecker-Fenton and Fenton numerical-wave tradition: the Fourier basis satisfies the field equation and the bed condition, while Newton iteration solves the nonlinear free-surface boundary conditions and global wave-current constraints.
 
-Regarding Fenton's method, the **U.S. Army Corps of Engineers Coastal Engineering Manual (CEM), EM 1110-2-1100**, which is an accepted main theoretical reference in the field of Coastal Engineering, in **Part II-Water Wave Mechanics, chapter c. Linear wave theory, item (10) Summary of linear wave theory, page II-1-32, paragraphs (c) and (d)**, states the following:
+Regarding Fenton's method, the **U.S. Army Corps of Engineers Coastal Engineering Manual (CEM), EM 1110-2-1100**, which is an accepted main theoretical reference in the field of Coastal Engineering, in **Part II-Water Wave Mechanics, Chapter c. Linear wave theory, item (10) Summary of linear wave theory, page II-1-32, paragraphs (c) and (d)**, states the following:
 
-> "(c) The linear or small-amplitude wave theory described in the preceding sections provides a useful first approximation to the wave motion. Ocean waves are generally not small in amplitude. In fact, from an engineering point of view it is usually the large waves that are of interest since they result in the largest forces and greatest sediment movement. In order to approach the complete solution of ocean waves more closely, a perturbation solution using successive approximations may be developed to improve the linear theory solution of the hydrodynamic equations for gravity waves. Each order wave theory in the perturbation expansion serves as a correction and the net result is often a better agreement between theoretical and observed waves. The extended theories can also describe phenomena such as mass transport where there is a small net forward movement of the water during the passage of a wave. These higher-order or extended solutions for gravity waves are often called nonlinear wave theories.
+> (c) The linear or small-amplitude wave theory described in the preceding sections provides a useful first approximation to the wave motion. Ocean waves are generally not small in amplitude. In fact, from an engineering point of view it is usually the large waves that are of interest since they result in the largest forces and greatest sediment movement. In order to approach the complete solution of ocean waves more closely, a perturbation solution using successive approximations may be developed to improve the linear theory solution of the hydrodynamic equations for gravity waves. Each order wave theory in the perturbation expansion serves as a correction and the net result is often a better agreement between theoretical and observed waves. The extended theories can also describe phenomena such as mass transport where there is a small net forward movement of the water during the passage of a wave. These higher-order or extended solutions for gravity waves are often called nonlinear wave theories.
 
-(d) Development of the nonlinear wave theories has evolved for a better description of surface gravity waves. These include cnoidal, solitary, and Stokes theories. However, the development of a Fourier-series approximation by Fenton in recent years has superseded the previous historical developments. Since earlier theories are still frequently referenced, these will first be summarized in this section, **but Fenton's theory is recommended for regular waves in all coastal applications.**"
+(d) Development of the nonlinear wave theories has evolved for a better description of surface gravity waves. These include cnoidal, solitary, and Stokes theories. However, the development of a Fourier-series approximation by Fenton in recent years has superseded the previous historical developments. Since earlier theories are still frequently referenced, these will first be summarized in this section, **but Fenton's theory is recommended for regular waves in all coastal applications.**
 
-The suite implements this recommended Fourier nonlinear numerical method. Its theoretical basis is presented in **CEM Part II, chapter e. Other wave theories, item (7), "Fourier approximation-Fenton’s theory"**, pages II-1-50 to II-1-55, supplemented by Fenton (1999), *Numerical methods for nonlinear waves*. The related guidance on nonlinear wave kinematics for force and moment estimates appears in **CEM Part VI, page VI-5-284**.
+The suite implements this recommended Fourier nonlinear numerical method. Its theoretical basis is presented in **CEM Part II, Chapter e. Other wave theories, item (7) Fourier approximation-Fenton’s theory**, pages II-1-50 to II-1-55, supplemented by Fenton (1999), *Numerical methods for nonlinear waves*. The related guidance on nonlinear wave kinematics for force and moment estimates appears in **CEM Part VI, page VI-5-284**.
 
 Namelly, the refferred CEM's **Part II, chapter (e), item (7), pages II-1-50 and 51, paragraphs (a) to (e)** explain that:
-
-"(7) Fourier approximation — Fenton’s theory.
 
 (a) Fenton's Fourier series theory, another theory developed in recent years (Fenton 1988), is somewhat similar to Dean's stream function theory, but it appears to describe oceanic waves at all water depths better than all previous similar theories.
 
@@ -27,6 +25,8 @@ Namelly, the refferred CEM's **Part II, chapter (e), item (7), pages II-1-50 and
 (e) Fenton’s Fourier approximation wave theory satisfies field equations and boundary conditions to a specified level of accuracy. The hydrodynamic equations governing the problem are identical to those used in Stokes’ theory (Table II-1-2). Various approximations introduced in earlier developments are indicated in the table. Like other theories, Fenton’s theory adopts the same field equation and boundary conditions. There are three major differences between Fenton’s theory and the others. First, Fenton’s theory is valid for deep- and shallow-water depths, and any of the two quantities’ wave height, period or energy flux can be specified to obtain a solution. Second, the Fourier coefficients are computed numerically with efficient algorithms. Third, the expansion parameter for the Fourier coefficients is E=kH/2 rather than E=ka,which is used in Stokes theories. The coefficients are found numerically from simultaneous algebraic equations by satisfying two nonlinear free-surface boundary conditions and the dispersion relationship. Finding the coefficients requires that wave height, wave period, water depth, and either the Eulerian current or the depth averaged mass transport velocity be specified."
 
 In Fenton Nonlinear Wave Suite, **the main desktop application is `fenton_gui.rs`**, a complete single-file Rust 2021 implementation with a native 64-bit Windows GUI, nonlinear solver, numerical verification and text-report generator. The recommended production build uses the GNU/MinGW-w64 target in **MSYS2 UCRT64** on Windows 10/11, without Visual Studio, MSVC, third-party Rust crates or a Cargo manifest. **`fenton_gui.py` is the secondary desktop implementation**, retaining its Tkinter GUI, NumPy/optional Numba solver, validation workflow and PyInstaller build. The independent C++, browser, Android, API, VBA and standalone tools retain their individual interfaces as described below.
+
+The Rust, Python, C++, HTML and Excel/VBA solvers display every finite solution that converges at the requested wave height. Accuracy checks run automatically and describe the achieved accuracy; failed or incomplete accuracy checks do not suppress converged results. The no-current and imposed-current cases are assessed independently.
 
 The central engineering calculation is the nonlinear mapping of
 
@@ -898,7 +898,7 @@ $$
 s_j=\max_i|J_{ij}|,\qquad \widetilde{J}_{ij}=\frac{J_{ij}}{s_j},\qquad \kappa_2(\widetilde{\mathbf{J}})=\frac{\sigma_{\max}}{\sigma_{\min}}.
 $$
 
-A zero column or singular system is treated as ill-conditioned. If the condition exceeds $10^{11}$, the calculation restarts at a lower Fourier order. Starting from 50 modes, the available sequence is
+A zero column or singular system is treated as ill-conditioned. If the condition exceeds $10^{11}$, the calculation retries at a lower Fourier order. The GUI, HTML and VBA solvers retain a completed converged state if subsequent attempts fail; conditioning is reported as an accuracy diagnostic and does not by itself hide that result. Starting from 50 modes, the available sequence is
 
 $$
 50\to40\to32\to25\to20\to16\to12.
@@ -920,11 +920,11 @@ $$
 | --- | --- | --- |
 | `fourier_precision.cpp` | $F_{\mathrm{RMS}}\le10^{-10}$ | $F_{\mathrm{RMS}}\le10^{-12}$ |
 | `fourier_carvalho.cpp` | $F_{\max}\le10^{-10}$ | $F_{\max}\le10^{-10}$ |
-| **Rust GUI/CLI (`fenton_gui.rs`)** | $F_{\max}\le10^{-8}$, together with the mean free-surface correction check | $F_{\max}\le10^{-10}$, rechecked after dimensional normalization, with independent numerical and binary64 interval checks |
-| Python/C++ GUI and HTML solvers | $F_{\max}\le10^{-8}$, together with their step checks | $F_{\max}\le10^{-10}$, rechecked after post-processing and enclosed independently |
-| `fenton.bas` | $F_{\max}\le10^{-10}$ | $F_{\max}\le10^{-10}$ after dimensional normalization, plus independent interval checks |
+| **Rust GUI/CLI (`fenton_gui.rs`)** | $F_{\max}\le10^{-7}$, with mean free-surface correction below $10^{-7}|kd|$ | $F_{\max}\le10^{-9}$, with mean free-surface correction below $10^{-9}|kd|$, rechecked after dimensional normalization |
+| Python/C++ GUI and HTML solvers | $F_{\max}\le10^{-7}$, with mean free-surface correction below $10^{-7}|kd|$ | $F_{\max}\le10^{-9}$, with mean free-surface correction below $10^{-9}|kd|$, rechecked after post-processing |
+| `fenton.bas` | $F_{\max}\le10^{-9}$ | $F_{\max}\le10^{-9}$ after dimensional normalization |
 
-The accepted state must also satisfy the finite-value and admissibility checks and the $10^{11}$ Jacobian-conditioning limit. These are numerical acceptance criteria for a finite Fourier system, not a proof of exact agreement with the continuous free-boundary problem.
+The converged state must also satisfy finite-value and admissibility checks at the requested height. A small Newton correction alone is insufficient: the residual limit must also be met. The $10^{11}$ Jacobian condition threshold guides order selection and accuracy reporting. Accuracy diagnostics do not override nonlinear convergence, and their budgets are separate from the stopping tolerances. These criteria concern a finite Fourier system; they do not establish exact agreement with the continuous free-boundary problem.
 
 The precision driver writes independent diagnostics to `solver.res`:
 
@@ -941,13 +941,13 @@ For the precision driver's spectral check, the cosine surface supplies the initi
 
 For the standalone drivers described above, a spectral `FAIL` is a separate resolution warning: nonlinear convergence may still be `PASS`. Both statuses must be considered when assessing a result. A failed nonlinear or conditioning check prevents the standalone solvers from writing a new result set; existing files from an earlier run may remain on disk.
 
-### 7.7 Acceptance of the finite Fourier system and selected outputs
+### 7.7 Accuracy diagnostics for the finite Fourier system and selected outputs
 
-`fenton_gui.rs`, `fenton_gui.py`, `fenton_gui.cpp`, `fenton.html` and `fenton.bas` apply an output-accuracy gate after the nonlinear solve. A result is accepted only when the requested target state satisfies the conditioning, finite-value, residual, spatial-resolution and output checks. These requirements supplement the nonlinear residual limits in §7.6.
+`fenton_gui.rs`, `fenton_gui.py`, `fenton_gui.cpp`, `fenton.html` and `fenton.bas` run independent accuracy checks after the nonlinear solve. Every finite converged target state is reported. Exceeding a diagnostic budget, or being unable to complete an accuracy check, produces a lower-accuracy status with the available results and diagnostic details. No accuracy option or additional confirmation is required.
 
-| Check | Evaluation | Acceptance requirement |
+| Check | Evaluation | Accuracy benchmark |
 | --- | --- | --- |
-| Finite-system residual | Independent interval evaluation of all $2N+10$ equations at the stored state, reconstructing the dimensionless groups from the physical inputs. | Every residual interval lies inside $[-10^{-10},10^{-10}]$. |
+| Finite-system residual | Independent interval evaluation of all $2N+10$ equations at the stored state, reconstructing the dimensionless groups from the physical inputs. | Every residual interval lies inside $[-10^{-9},10^{-9}]$. |
 | Interpolated free surface | Both boundary residuals evaluated on the cosine surface at $\max(2048,32N)$ uniformly spaced phases over one wavelength. | Maximum sampled nondimensional residual no greater than $10^{-6}$. |
 | Spectral bed-velocity identities | Compare power and radiation stress with expressions using the independently evaluated absolute mean-square bed velocity. | Each difference fits the output budget below. |
 | Defining integrals | Integrate dimensional velocity and Bernoulli pressure to obtain impulse, kinetic energy, potential energy, radiation stress and power. | Each reported quantity agrees with the finer quadrature within its output budget. |
@@ -960,7 +960,7 @@ $$
 \varepsilon(q)=10^{-7}+10^{-8}|q|.
 $$
 
-The absolute term is expressed in the SI units of the quantity being compared. The residual limits are nondimensional. These values are explicit implementation acceptance choices, rather than tolerances prescribed by Fenton for every application.
+The absolute term is expressed in the SI units of the quantity being compared. The residual limits are nondimensional. These values are diagnostic accuracy benchmarks chosen for the implementation. They are not display filters or tolerances prescribed by Fenton for every application.
 
 If the reference is enclosed in $[q_-,q_+]$, the interval check uses
 
@@ -982,55 +982,31 @@ The nine enclosed outputs are **wavelength, celerity, impulse, kinetic energy, p
 
 The interval evaluators use bounded trigonometric series independently of the ordinary collocation sine/cosine evaluations. The C++, JavaScript and VBA exponential enclosures use Taylor bounds and range reduction; their square-root endpoint checks validate the initial root estimates.
 
-In the Rust, Python, C++ and JavaScript solver objects, successful acceptance sets `converged`, `accuracy_verified` and `finite_system_verified`. The `accuracy_metrics` object records the sampled surface residual and comparison ratios; a ratio at or below one satisfies its budget. `finite_system_certificate` records the residual and output enclosures, budgets and their scope.
+In the Rust, Python, C++ and JavaScript solver objects, `converged` records completion of the nonlinear target solve and finite output generation. `accuracy_verified` and `finite_system_verified` describe separate checks and may be false while `converged` is true. The `accuracy_metrics` object records the sampled surface residual and comparison ratios; a ratio at or below one satisfies its budget. `finite_system_certificate` records the residual and output enclosures, budgets and scope when available. Unavailable diagnostics must not be interpreted as zero error.
 
-| `solution_status` | Meaning |
-| --- | --- |
-| `not_solved` | No completed calculation is available. |
-| `verified_numerically` | The nonlinear solution and all implemented acceptance checks passed. |
-| `nonconvergence` | The requested target was not obtained within the solver's admissibility, convergence or conditioning requirements. |
-| `resolution_failure` | The collocation solve completed, but one or more resolution or output-accuracy budgets were exceeded. |
-| `accuracy_failure` | The verification calculation could not be completed, for example because of a numerical exception. |
-
-`finite_system_verified` alone does not imply overall acceptance. A finite state can have very small collocation residuals while failing the between-node or integral checks. The Rust, Python and C++ GUIs and browser display engineering values only for accepted cases, assessing the no-current and imposed-current solutions separately. VBA returns an `Err: ` message instead of a wavelength when a check fails; `Fenton_report` exposes the reason and available diagnostics.
-
-### 7.8 Verification evidence and Lean scope
-
-**The Python solver computes accurately for most configurations in the benchmark matrix:** 19 of 21 physical cases satisfy all acceptance requirements on both NumPy and Numba. These cases include the default wave, several small period waves, opposing current and both current conventions in the solver core. This is evidence for the tested configurations, not a statistical success rate for arbitrary inputs.
-
-| Implementation tested | Benchmark coverage | Result |
+| `solution_status` | Meaning | Results available |
 | --- | --- | --- |
-| Python, NumPy and Numba | 21 physical cases on each backend; 42 runs. | 38 accepted runs covering 19 cases; four accuracy rejections covering two cases. |
-| Native C++ solver core | The same 21 physical cases. | Acceptance decisions and active orders match Python; 21 compared outputs meet the comparison budget for all 19 accepted cases. |
-| JavaScript solver under Node.js | The same 21 physical cases. | Acceptance decisions and active orders match Python; 21 compared outputs meet the comparison budget for all 19 accepted cases. |
-| VBA through a mechanical C++ translation | 18 Eulerian-current cases. | Acceptance decisions and active orders match Python; nine compared outputs meet the comparison budget for all 16 accepted cases. Native Excel/VBA execution remains untested. |
+| `not_solved` | No completed calculation is available. | No |
+| `verified_numerically` | The target solution converged and all implemented accuracy checks passed. | Yes |
+| `lower_accuracy` | The target solution converged; one or more accuracy checks failed or could not be completed, or conditioning exceeds its diagnostic threshold. | Yes |
+| `nonconvergence` | No finite admissible state at the requested target satisfied the nonlinear stopping criteria. | No |
 
-Independent 80-digit calculations confirm the recorded finite-residual and nine selected-output enclosures for each implementation's tested states. The C++, JavaScript and translated VBA interval arithmetic also pass 911 arithmetic checks. Solver-core verification is distinct from testing every native GUI, spreadsheet host or browser environment.
+Reports identify lower-accuracy cases and give the available diagnostic details. The no-current and imposed-current columns are independent: a failed solve does not hide a converged comparison case. Intermediate continuation states are never substituted for the requested wave height. Excel/VBA returns a numerical wavelength for every finite converged target state; `Fenton_report` supplies the status and diagnostics.
 
-Two steep-wave configurations are deliberately rejected by the accuracy gate:
+### 7.8 Numerical verification and formal scope
 
-| $H$ (m) | $T$ (s) | $d$ (m) | Eulerian $U_c$ (m/s) | Active $N$ | Sampled surface residual, approximately |
-| --- | --- | --- | --- | --- | --- |
-| 2 | 3 | 5 | 0 | 32 | $1.18\times10^{-5}$ |
-| 3 | 4 | 5 | 1 | 40 | $7.82\times10^{-5}$ |
+Numerical verification covers ordinary waves, short periods, signed currents, lower-accuracy converged waves, invalid inputs and unsuccessful target solves. In particular, these steep-wave cases exercise convergence with failed surface-resolution checks:
 
-Their collocation residuals are small, but the reconstructed surface and integral comparisons exceed the accuracy budgets. Rejection identifies insufficient numerical accuracy at the available resolution; it does not by itself establish that the physical wave cannot exist.
+| $H$ (m) | $T$ (s) | $d$ (m) | Eulerian $U_c$ (m/s) | Expected behavior |
+| --- | --- | --- | --- | --- |
+| 2 | 3 | 5 | 0 | Display the converged solution and lower-accuracy diagnostics. |
+| 3 | 4 | 5 | 1 | Display the converged solution and lower-accuracy diagnostics. |
 
-The companion Python verification package contains five Lean modules:
+A low collocation residual measures satisfaction of the finite equations at their nodes. It does not guarantee the same accuracy between nodes, in derived integrals, or near a sharp crest. Reports therefore preserve the accuracy flags and diagnostic ratios alongside the computed quantities.
 
-| Module | Formal scope | Theorems |
-| --- | --- | ---: |
-| `FentonProduction.lean` | Governing formula, differential and scaling identities. | 62 |
-| `ProductionAcceptance.lean` | Acceptance rules and contracts for evaluated maxima. | 13 |
-| `FiniteSystem.lean` | Enclosure arithmetic, pi bounds and finite residual/output-budget implications. | 29 |
-| `NumericalCertificates.lean` | Exact rational checks on recorded numerical observations. | 314 |
-| `FiniteCertificates.lean` | Exact integer checks of recorded residual-enclosure and output-budget inequalities. | 420 |
-| **Total** | **All modules compiled successfully.** | **838** |
+Interval checks bound evaluation of the finite algebraic expressions at the stored coefficients. They do not prove existence or uniqueness of an exact nonlinear root, a global truncation-error bound for the continuous water-wave problem, or correctness of every executable instruction. Formal mathematical proofs of identities must be distinguished from runtime checks of compiled applications.
 
-The Lean evidence is tied to the source snapshots and recorded states identified by the verification package. Lean checks the mathematical statements, enclosure implications and recorded inequalities. The source-to-model correspondence and runtime interval construction are reviewed and numerically tested; the complete Python, C++, JavaScript and VBA programs are not extracted from Lean or certified as executable programs. The evidence also does not prove existence or uniqueness of an exact nonlinear root, or a continuous water-wave truncation-error bound. This scope is compatible with the demonstrated accuracy of the accepted benchmark calculations.
-
-The verification results in this section apply to the named implementations and their recorded tests. They do not certify the Android binary, separate standalone drivers, wavelength API or surrogate models. The Rust source includes its own unit and ignored numerical reference tests (see §11.1), but the preceding Python/C++/JavaScript/VBA benchmark counts and Lean certificates must not be interpreted as an independently executed validation of a particular Rust binary or compiler configuration.
-
+Solver-core tests and GUI or spreadsheet-host tests have different scopes. Native Windows and Excel/VBA builds require validation in their respective target environments. The Rust source includes unit and optional numerical reference tests (§11.1); the Python source includes a command-line numerical check (§11.11).
 
 ***
 
@@ -1042,7 +1018,7 @@ Using Fenton's Fourier nonlinear solution for engineering wave kinematics is con
 
 In that passage, the CEM calls for velocities and accelerations corresponding to the design wave height, period and water depth. The solved nonlinear wave field supplies the hydrodynamic basis for such calculations; structural forces and moments still require the appropriate loading formulation and structural geometry.
 
-After successful numerical acceptance, the GUI and browser report dimensional engineering quantities. The standalone solvers retain their documented nondimensional output scalings and separate diagnostics. The fundamental dimensional conversions are
+After nonlinear convergence, the GUI and browser report dimensional engineering quantities with their accuracy diagnostics. The standalone solvers retain their documented nondimensional output scalings and separate diagnostics. The fundamental dimensional conversions are
 
 $$
 k=\frac{2\pi}{L}, \qquad c=\frac{L}{T}.
@@ -1137,7 +1113,7 @@ $$
 V_p=\frac{\rho g}{k^2}\left(\frac14\sum_{j=1}^{N-1}Y_j^2+ \frac{Y_N^2}{16}\right).
 $$
 
-Acceptance in the Rust/Python/C++ GUI, HTML and VBA solvers requires the residual limits in §7.6 and the resolution and output-accuracy checks in §7.7. A small Newton correction alone is insufficient. The complete target state is checked before accepted engineering outputs are exposed.
+Convergence in the Rust/Python/C++ GUI, HTML and VBA solvers requires the residual limits in §7.6 and finite admissible outputs at the requested target. A small Newton correction alone is insufficient. The resolution and output checks in §7.7 describe accuracy without suppressing a converged result.
 
 The point kernel evaluates the hyperbolic ratios with scaled exponentials to
 avoid cancellation and overflow at the bed:
@@ -1519,10 +1495,10 @@ $$
 | Numerical verification | Rust, Python/C++ GUIs, HTML and VBA: finite-state interval enclosures, surface-resolution checks and independent output comparisons. Standalone drivers: their documented residual and spectral diagnostics. |
 | Lean evidence | Mathematical identities, finite-system implications and recorded inequalities; scope and benchmark coverage in §7.8. |
 | Short-period calculations | Stable vertical basis and adaptive continuation/order control support tested 3 s and 4 s cases without guaranteeing every height/current combination. |
-| GUI output | Rust and Python report accepted geometry, estimated phase extrema, integrals, accuracy diagnostics and breaking-screening quantities; Rust uses a fixed-width 107-character text report. |
+| GUI output | Rust and Python report converged geometry, estimated phase extrema, integrals, accuracy diagnostics and breaking-screening quantities; Rust uses a fixed-width 107-character text report. |
 | Wavelength API | Provides callable `L(H,T,d,Uc)` for scripts and tables. |
 | Surrogates | Provides Pade, neural, symbolic-regression and effective-variable approximations. |
-| Excel/VBA support | `L_fenton` returns an accepted nonlinear wavelength; `Fenton_report` exposes checks and enclosures. Separate modules provide their respective approximations. |
+| Excel/VBA support | `L_fenton` returns every finite converged nonlinear wavelength; `Fenton_report` exposes checks and enclosures. Separate modules provide their respective approximations. |
 | Android availability | Fenton App is also available as the installable package `fenton.apk`. |
 | Nomograms | Generates design charts for rapid engineering use. |
 
@@ -1891,9 +1867,9 @@ Successful runs write `solution.res`, `surface.res` and `flowfield.res`. Numeric
 
 ### 11.9 Browser interface
 
-Open the self-contained `fenton.html` file in a browser and enter $H$, $T$, $d$ and Eulerian current $U_c$ in SI units. Calculation runs in a Web Worker. The interface shows accepted engineering values, the active Fourier order, residual bounds and output-accuracy diagnostics. The no-current and imposed-current cases are accepted separately; a rejected column is suppressed without hiding an accepted comparison case.
+Open the self-contained `fenton.html` file in a browser and enter $H$, $T$, $d$ and Eulerian current $U_c$ in SI units. Calculation runs in a Web Worker. The interface shows all converged engineering values, the active Fourier order, residual bounds when available and output-accuracy diagnostics. The no-current and imposed-current cases are assessed separately; a non-converged column is suppressed without hiding a converged comparison case. Lower-accuracy results remain visible in the summary, tables, profile and reports.
 
-Use **Full report** for the numerical method, diagnostic ratios and selected-output enclosures. **Download TXT** exports the readable report; **Download JSON** exports the input, solver statuses, Fourier state and verification data. JSON may contain diagnostic states for rejected cases; use the acceptance flags before treating any values as engineering results. **Clear output** cancels a pending calculation and clears the displayed results.
+Use **Full report** for the numerical method, diagnostic ratios and selected-output enclosures. **Download TXT** exports the readable report; **Download JSON** exports the input, solver statuses, Fourier state and verification data. JSON may contain diagnostic states for failed solves; use `converged` to identify completed target solutions, and the separate accuracy flags to assess their accuracy. **Clear output** cancels a pending calculation and clears the displayed results.
 
 JavaScript uses binary64 arithmetic, so final machine-level digits can vary between engines. The recorded numerical comparison in §7.8 executes the solver under Node.js; it does not assert identical execution in every browser.
 
@@ -1907,7 +1883,7 @@ The wavelength function retains this interface:
 L_fenton(H, T, d, [U])
 ```
 
-`U` defaults to zero. Adaptive height continuation is always applied. A successful call returns wavelength in metres. A failed nonlinear solve, inadmissible state or failed accuracy check returns an `Err: ` text message, rather than a partial or unverified wavelength.
+`U` defaults to zero. Adaptive height continuation is always applied. Every finite converged target solution returns wavelength in metres, including solutions with lower accuracy or incomplete accuracy checks. Invalid inputs, an inadmissible state or a failed nonlinear target solve return an `Err: ` text message.
 
 ```excel
 =L_fenton(3,9,5)
@@ -1923,32 +1899,17 @@ For the default wave $H=3$ m, $T=9$ s and $d=5$ m, calculated wavelengths are:
 | 0 | 68.706761529 |
 | 1 | 78.827222116 |
 
-The VBA numerical comparison uses a mechanical C++ translation of the module, with independent high-precision enclosure checks. Native Excel compilation and execution have not been run in that verification environment.
+Use `=Fenton_report(H,T,d,U)` to obtain a 23-row, four-column diagnostic array. The first two columns contain labels and values; the last two contain the available lower and upper interval bounds for the nine selected outputs. The report includes nonlinear convergence status, accuracy flags, the active Fourier order, residuals and comparison ratios. An unavailable diagnostic is identified explicitly. In Excel versions without dynamic arrays, select a 23 × 4 range and enter the formula as an array formula. Native Excel/VBA execution should be checked in the target workbook.
 
-### 11.11 Python and Lean verification
+### 11.11 Python numerical verification
 
-Run the Python solver's built-in acceptance/rejection checks with:
+Run the Python solver's numerical checks without opening a window:
 
 ```bash
 python fenton_gui.py --self-test
 ```
 
-The companion verification package contains its own source snapshots, dependency requirements, manifests, numerical audit and Lean build configuration. From that package directory, its reproduction sequence is:
-
-```bash
-python -m pip install -r requirements.txt
-python audit.py
-python check_intervals.py
-python check_report.py
-python inputs/fenton_gui.py --self-test
-python build_certificates.py
-python build_finite_certificates.py
-lake update
-lake exe cache get
-lake build
-```
-
-The package uses Lean 4.34.0 and Mathlib. The audit checks the source identities before generating recorded certificates. Successful reproduction requires both the numerical tests and all five Lean modules to pass. Deliberate rejection of an under-resolved case is a passing acceptance test when that rejection is the expected outcome.
+The check exercises default and short-period waves, with and without current. It verifies that converged lower-accuracy waves remain available with diagnostic flags, and that the final nonlinear residual satisfies the declared tolerance. When Numba is installed, both NumPy and Numba paths are exercised. Accuracy benchmarks remain independent of the convergence stopping criteria.
 
 
 ***
@@ -1963,7 +1924,7 @@ The package uses Lean 4.34.0 and Mathlib. The audit checks the source identities
 | Very long waves | Fourier coefficients become broad-banded near the solitary-wave limit. Inspect coefficient decay and between-node defects; a larger requested $N$ is useful only while the system remains well-conditioned. |
 | Near highest waves | Sharp crests degrade convergence and conditioning; inspect the achieved height, active Fourier order, residuals and free-surface shape. |
 | Short periods | For fixed height and depth, a shorter period can produce a much steeper wave. Automatic order reduction addresses conditioning, but cannot establish the existence of a steady solution. |
-| Resolution and acceptance | Small collocation residuals alone do not establish between-node accuracy. GUI/HTML/VBA results are rejected when their accuracy budgets fail. Standalone spectral `FAIL` and nonlinear `PASS` remain separate diagnostics under their documented contracts. |
+| Resolution and acceptance | Small collocation residuals alone do not establish between-node accuracy. GUI/HTML/VBA solvers display all finite converged target results and report failed or incomplete accuracy checks separately. Standalone spectral `FAIL` and nonlinear `PASS` remain separate diagnostics under their documented contracts. |
 | Finite-system verification | Enclosures concern equation and output evaluation at the stored coefficients; they do not include physical-input uncertainty, an exact-root error bound or continuous Fourier-truncation error. |
 | Estimated extrema | Refined phase searches estimate maxima. Bed shear and excursion are engineering estimates with the definitions in §8.2. |
 | Comparing implementations | Match height, depth, period or wavelength, current definition, current value, gravity, active order and tolerances. Differences in quadrature and floating-point linear algebra can prevent exact numerical equality. |
